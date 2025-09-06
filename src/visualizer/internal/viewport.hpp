@@ -24,6 +24,8 @@ class Viewport {
         float maxWasdSpeed = 1000.0f;
         float wasdSpeedChangePercentage = 10.0f;
 
+        glm::vec3 rotationOrigin = glm::vec3(0.0f, 0.0f, 0.0f);
+
         // REMOVED: Orbit velocity and inertia - we don't want spinning to continue
         // glm::vec2 orbitVelocity = glm::vec2(0.0f);
         // float preTime = 0.0f;
@@ -141,7 +143,8 @@ class Viewport {
         void applyRotationAroundCenter(float yaw, float pitch) {
             // Use world Y-axis for yaw rotation to maintain height
             // and camera's local right axis for pitch
-            glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+            
+            glm::vec3 worldUp(rotationOrigin.x, 1.0f, rotationOrigin.y);
 
             // Yaw rotation around world Y-axis
             glm::mat3 Ry = glm::mat3(glm::rotate(glm::mat4(1.0f), yaw, worldUp));

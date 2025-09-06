@@ -46,6 +46,7 @@ namespace gs::rendering {
         VBO vbo_;
 
         // Axes properties
+        glm::vec3 origin_;
         float size_;
         float line_width_;
         bool initialized_;

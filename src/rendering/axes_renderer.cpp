@@ -15,7 +15,8 @@ namespace gs::rendering {
     const glm::vec3 RenderCoordinateAxes::Y_AXIS_COLOR = glm::vec3(0.0f, 1.0f, 0.0f); // Green
     const glm::vec3 RenderCoordinateAxes::Z_AXIS_COLOR = glm::vec3(0.0f, 0.0f, 1.0f); // Blue
 
-    RenderCoordinateAxes::RenderCoordinateAxes() : size_(2.0f),
+    RenderCoordinateAxes::RenderCoordinateAxes() : origin_(0.0f, 0.0f, 0.0f),
+                                                   size_(2.0f),
                                                    line_width_(3.0f),
                                                    initialized_(false) {
         // All axes visible by default
@@ -111,6 +112,7 @@ namespace gs::rendering {
 
         vao_ = builder.build();
 
+        origin_ = glm::vec3(0.0f, 0.0f, 0.0f);
         initialized_ = true;
 
         // Initialize axes geometry
@@ -135,21 +137,21 @@ namespace gs::rendering {
 
         // X-axis (Red)
         if (axis_visible_[0]) {
-            vertices_.push_back({glm::vec3(0.0f, 0.0f, 0.0f), X_AXIS_COLOR});  // Origin
+            vertices_.push_back({origin_, X_AXIS_COLOR});  // Origin
             vertices_.push_back({glm::vec3(size_, 0.0f, 0.0f), X_AXIS_COLOR}); // X endpoint
             visible_count++;
         }
 
         // Y-axis (Green)
         if (axis_visible_[1]) {
-            vertices_.push_back({glm::vec3(0.0f, 0.0f, 0.0f), Y_AXIS_COLOR});  // Origin
+            vertices_.push_back({origin_, Y_AXIS_COLOR});                      // Origin
             vertices_.push_back({glm::vec3(0.0f, size_, 0.0f), Y_AXIS_COLOR}); // Y endpoint
             visible_count++;
         }
 
         // Z-axis (Blue)
         if (axis_visible_[2]) {
-            vertices_.push_back({glm::vec3(0.0f, 0.0f, 0.0f), Z_AXIS_COLOR});  // Origin
+            vertices_.push_back({origin_, Z_AXIS_COLOR});                      // Origin
             vertices_.push_back({glm::vec3(0.0f, 0.0f, size_), Z_AXIS_COLOR}); // Z endpoint
             visible_count++;
         }
