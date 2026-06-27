@@ -224,6 +224,7 @@ class _GizmoToolbarController:
 
     def reset(self):
         self._was_hidden = False
+        self._was_empty = False
 
     def _active_selection_submode(self):
         import lichtfeld as lf
@@ -272,6 +273,16 @@ class _GizmoToolbarController:
             }
 
         self._was_hidden = False
+
+        # When the scene is empty (New Project), clear any lingering active
+        # tool so the toolbar doesn't show a tool as selected that can't
+        # actually be used on an empty scene.
+        if lf.ui.get_content_type() == "empty":
+            if not self._was_empty:
+                ToolRegistry.clear_active()
+            self._was_empty = True
+        else:
+            self._was_empty = False
 
         context = get_context()
         active_tool_id = _native_store_value("active_tool", _MISSING)
