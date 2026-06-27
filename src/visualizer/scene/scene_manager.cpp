@@ -2816,6 +2816,12 @@ namespace lfs::vis {
         auto splat_data = std::move(model_node->model);
         const size_t num_gaussians = splat_data->size();
 
+        // Preserve the model's world transform so the trained model
+        // appears at the same position/orientation in edit mode as it
+        // did during training (rendering uses getWorldTransform).
+        const glm::mat4 old_model_world =
+            scene_.getWorldTransform(model_node->id);
+
         if (trainer_mgr) {
             trainer_mgr->clearTrainer();
         }
@@ -2825,6 +2831,9 @@ namespace lfs::vis {
         constexpr const char* MODEL_NAME = "Trained Model";
         scene_.addSplat(MODEL_NAME, std::move(splat_data));
         selectNode(MODEL_NAME);
+
+        // Restore the world transform
+        scene_.setNodeTransform(MODEL_NAME, old_model_world);
 
         if (ppisp) {
             setAppearanceModel(std::move(ppisp), std::move(controller_pool));

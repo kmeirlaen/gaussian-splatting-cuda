@@ -92,7 +92,7 @@ def _poll_can_align(_context) -> bool:
 
 
 def _poll_can_cropbox(context) -> bool:
-    return _poll_can_transform(context)
+    return _poll_has_scene(context) and _selection_has_cropbox_target()
 
 
 BUILTIN_TOOLS: tuple[ToolDef, ...] = (
