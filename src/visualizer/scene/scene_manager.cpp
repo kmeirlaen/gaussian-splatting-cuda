@@ -1642,7 +1642,7 @@ namespace lfs::vis {
         std::string closest_name;
 
         for (const auto* node : scene_.getNodes()) {
-            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
+            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH && node->type != core::NodeType::POINTCLOUD)
                 continue;
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
@@ -1733,7 +1733,7 @@ namespace lfs::vis {
         }();
 
         for (const auto* node : scene_.getNodes()) {
-            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
+            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH && node->type != core::NodeType::POINTCLOUD)
                 continue;
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
