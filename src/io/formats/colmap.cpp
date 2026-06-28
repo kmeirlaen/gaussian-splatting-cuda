@@ -39,6 +39,7 @@ namespace lfs::io {
 
     namespace {
         constexpr size_t CANCEL_POLL_INTERVAL = 64;
+        constexpr size_t IMAGE_METADATA_PROBE_LIMIT = 8192;
 
         [[nodiscard]] bool should_poll_cancel(const size_t index) {
             return (index % CANCEL_POLL_INTERVAL) == 0;
@@ -886,6 +887,54 @@ namespace lfs::io {
         return std::isalpha(static_cast<unsigned char>(img.name[dot_pos + 1]));
     }
 
+    bool looks_like_image_metadata_line(const std::string& line) {
+        if (line.size() > IMAGE_METADATA_PROBE_LIMIT) {
+            return false;
+        }
+
+        ImageData img;
+        return parse_image_metadata_line(line, img);
+    }
+
+    bool read_next_short_metadata_line_or_skip(std::ifstream& file,
+                                               std::string& pending_line,
+                                               size_t& file_lines) {
+        pending_line.clear();
+
+        std::string probe;
+        probe.reserve(256);
+
+        char ch = '\0';
+        bool read_any = false;
+        while (file.get(ch)) {
+            read_any = true;
+            if (ch == '\n') {
+                break;
+            }
+            if (probe.size() >= IMAGE_METADATA_PROBE_LIMIT) {
+                file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                break;
+            }
+            probe.push_back(ch);
+        }
+
+        if (!read_any) {
+            return false;
+        }
+
+        ++file_lines;
+        if (!probe.empty() && probe.back() == '\r') {
+            probe.pop_back();
+        }
+
+        if (probe.empty() || probe.starts_with("#") || !looks_like_image_metadata_line(probe)) {
+            return false;
+        }
+
+        pending_line = std::move(probe);
+        return true;
+    }
+
     uint64_t parse_point3D_id_token(const std::string& token) {
         if (token == "-1") {
             return INVALID_POINT3D_ID;
@@ -936,7 +985,9 @@ namespace lfs::io {
 
             if (line_idx + 1 < lines.size()) {
                 if (!parse_points2d) {
-                    ++line_idx;
+                    if (!looks_like_image_metadata_line(lines[line_idx + 1])) {
+                        ++line_idx;
+                    }
                 } else {
                     ImageData maybe_next_image;
                     if (!parse_image_metadata_line(lines[line_idx + 1], maybe_next_image)) {
@@ -980,12 +1031,30 @@ namespace lfs::io {
 
         std::vector<ImageData> images;
         std::string line;
+        std::string pending_line;
+        bool has_pending_line = false;
         size_t file_lines = 0;
-        while (std::getline(file, line)) {
+
+        auto read_next_line = [&]() {
+            if (has_pending_line) {
+                line = std::move(pending_line);
+                pending_line.clear();
+                has_pending_line = false;
+                return true;
+            }
+
+            if (!std::getline(file, line)) {
+                return false;
+            }
+
+            ++file_lines;
+            return true;
+        };
+
+        while (read_next_line()) {
             if (should_poll_cancel(file_lines)) {
                 throw_if_load_cancel_requested(options, "COLMAP image metadata parse cancelled");
             }
-            ++file_lines;
 
             if (line.starts_with("#")) {
                 continue;
@@ -1003,8 +1072,7 @@ namespace lfs::io {
             }
 
             images.push_back(std::move(img));
-            file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            ++file_lines;
+            has_pending_line = read_next_short_metadata_line_or_skip(file, pending_line, file_lines);
         }
 
         if (images.empty()) {
