@@ -510,6 +510,7 @@ namespace lfs::io {
                         void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                         cudaMemcpyAsync(dst_ptr, gpu_rgb_buffer, frame_size,
                                         cudaMemcpyDeviceToDevice, nullptr);
+                        cudaStreamSynchronize(nullptr);
 
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
