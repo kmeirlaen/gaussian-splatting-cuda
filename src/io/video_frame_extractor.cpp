@@ -14,6 +14,7 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -129,6 +130,23 @@ namespace lfs::io {
                     return *p;
             }
             return AV_PIX_FMT_NONE;
+        }
+
+        [[nodiscard]] AVPixelFormat hardwareFrameSoftwareFormat(const AVFrame* const frame) {
+            if (!frame || !frame->hw_frames_ctx)
+                return AV_PIX_FMT_NONE;
+
+            const auto* const frames_ctx =
+                reinterpret_cast<const AVHWFramesContext*>(frame->hw_frames_ctx->data);
+            if (!frames_ctx)
+                return AV_PIX_FMT_NONE;
+
+            return static_cast<AVPixelFormat>(frames_ctx->sw_format);
+        }
+
+        [[nodiscard]] const char* pixelFormatName(const AVPixelFormat format) {
+            const char* const name = av_get_pix_fmt_name(format);
+            return name ? name : "unknown";
         }
 
     } // namespace
@@ -425,14 +443,15 @@ namespace lfs::io {
                 }
 
                 const bool gpu_encoding_enabled = use_gpu_jpeg && gpu_batch_buffer != nullptr;
-                const bool full_gpu_pipeline = using_hw_decode && gpu_encoding_enabled && gpu_rgb_buffer && !needs_scale;
+                const bool full_gpu_pipeline_available =
+                    using_hw_decode && gpu_encoding_enabled && gpu_rgb_buffer && !needs_scale;
                 const auto throw_if_cancelled = [&]() {
                     if (params.cancel_requested && params.cancel_requested())
                         throw ExtractionCancelled{};
                 };
 
-                if (full_gpu_pipeline) {
-                    LOG_INFO("Full GPU pipeline: NVDEC decode → GPU color convert → GPU JPEG encode");
+                if (full_gpu_pipeline_available) {
+                    LOG_INFO("Full GPU pipeline available for NV12 frames: NVDEC decode → GPU color convert → GPU JPEG encode");
                 } else if (using_hw_decode) {
                     LOG_INFO("Hybrid pipeline: NVDEC decode → CPU transfer → {}",
                              gpu_encoding_enabled ? "GPU encode" : "CPU encode");
@@ -451,6 +470,8 @@ namespace lfs::io {
                 std::vector<void*> batch_gpu_ptrs;
                 std::vector<std::filesystem::path> batch_filenames;
                 int batch_idx = 0;
+                bool logged_hw_format_fallback = false;
+                bool used_full_gpu_pipeline = false;
 
                 auto flush_jpeg_batch = [&]() {
                     if (batch_gpu_ptrs.empty())
@@ -497,7 +518,18 @@ namespace lfs::io {
                     throw_if_cancelled();
                     std::filesystem::path filename = generate_filename(saved_count + 1);
 
-                    if (full_gpu_pipeline) {
+                    const AVPixelFormat hw_sw_format = hardwareFrameSoftwareFormat(hw_frame);
+                    const bool use_full_gpu_pipeline =
+                        full_gpu_pipeline_available && hw_sw_format == AV_PIX_FMT_NV12;
+
+                    if (full_gpu_pipeline_available && !use_full_gpu_pipeline &&
+                        !logged_hw_format_fallback) {
+                        LOG_INFO("Hardware frame format is {}; using CPU transfer/color conversion",
+                                 pixelFormatName(hw_sw_format));
+                        logged_hw_format_fallback = true;
+                    }
+
+                    if (use_full_gpu_pipeline) {
                         // Full GPU path: NV12 on GPU → RGB on GPU → encode on GPU
                         const uint8_t* y_plane = hw_frame->data[0];
                         const uint8_t* uv_plane = hw_frame->data[1];
@@ -514,6 +546,7 @@ namespace lfs::io {
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
                         batch_idx++;
+                        used_full_gpu_pipeline = true;
 
                         if (batch_idx >= JPEG_BATCH_SIZE) {
                             cudaStreamSynchronize(nullptr);
@@ -527,22 +560,22 @@ namespace lfs::io {
                             return;
                         }
 
-                        // NV12→RGB with optional scaling
-                        SwsContext* nv12_sws = sws_getContext(
+                        // Hardware frame transfer output -> RGB with optional scaling.
+                        SwsContext* hw_sws = sws_getContext(
                             src_width, src_height, static_cast<AVPixelFormat>(sw_frame->format),
                             out_width, out_height, AV_PIX_FMT_RGB24, SWS_BILINEAR,
                             nullptr, nullptr, nullptr);
 
-                        if (!nv12_sws) {
-                            LOG_WARN("Failed to create NV12 scaling context");
+                        if (!hw_sws) {
+                            LOG_WARN("Failed to create hardware frame scaling context");
                             return;
                         }
 
                         uint8_t* dst_data[1] = {cpu_contiguous_buffer};
                         int dst_linesize[1] = {out_width * 3};
-                        sws_scale(nv12_sws, sw_frame->data, sw_frame->linesize, 0, src_height,
+                        sws_scale(hw_sws, sw_frame->data, sw_frame->linesize, 0, src_height,
                                   dst_data, dst_linesize);
-                        sws_freeContext(nv12_sws);
+                        sws_freeContext(hw_sws);
 
                         if (gpu_encoding_enabled) {
                             void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
@@ -660,7 +693,7 @@ namespace lfs::io {
                 }
 
                 if (gpu_encoding_enabled) {
-                    if (full_gpu_pipeline) {
+                    if (used_full_gpu_pipeline) {
                         cudaStreamSynchronize(nullptr);
                     }
                     flush_jpeg_batch();
