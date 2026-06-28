@@ -508,9 +508,20 @@ namespace lfs::io {
                                              src_width, src_height, y_pitch, uv_pitch, nullptr);
 
                         void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
-                        cudaMemcpyAsync(dst_ptr, gpu_rgb_buffer, frame_size,
-                                        cudaMemcpyDeviceToDevice, nullptr);
-                        cudaStreamSynchronize(nullptr);
+                        cudaError_t cuda_err = cudaMemcpyAsync(dst_ptr, gpu_rgb_buffer, frame_size,
+                                                               cudaMemcpyDeviceToDevice, nullptr);
+                        if (cuda_err != cudaSuccess) {
+                            LOG_WARN("Failed to copy GPU RGB frame into JPEG batch buffer: {}",
+                                     cudaGetErrorString(cuda_err));
+                            return;
+                        }
+
+                        cuda_err = cudaStreamSynchronize(nullptr);
+                        if (cuda_err != cudaSuccess) {
+                            LOG_WARN("Failed to synchronize GPU RGB batch copy: {}",
+                                     cudaGetErrorString(cuda_err));
+                            return;
+                        }
 
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
