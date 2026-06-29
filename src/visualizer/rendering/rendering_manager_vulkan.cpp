@@ -1092,6 +1092,23 @@ namespace lfs::vis {
             bool flip_y = false;
         };
 
+        const auto ensure_cuda_viewport_image =
+            [](std::shared_ptr<lfs::core::Tensor> image,
+               const std::string_view label) -> std::shared_ptr<lfs::core::Tensor> {
+            if (!image || !image->is_valid()) {
+                return {};
+            }
+            if (image->device() == lfs::core::Device::CUDA) {
+                return image;
+            }
+            auto cuda_image = image->cuda();
+            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::CUDA) {
+                LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
+                return {};
+            }
+            return std::make_shared<lfs::core::Tensor>(std::move(cuda_image));
+        };
+
         VkSemaphore latest_vksplat_completion_semaphore = VK_NULL_HANDLE;
         std::uint64_t latest_vksplat_completion_value = 0;
         bool vksplat_inputs_forced_this_frame = false;
@@ -1479,6 +1496,9 @@ namespace lfs::vis {
                                             scene_manager,
                                             settings_,
                                             camera->uid());
+                                        compare_panel.image = ensure_cuda_viewport_image(
+                                            std::move(compare_panel.image),
+                                            "VkSplat GT comparison PPISP correction");
                                         if (compare_panel.image && compare_panel.image->is_valid()) {
                                             compare_panel.external_image_view = VK_NULL_HANDLE;
                                             compare_panel.external_image_generation = 0;
@@ -2123,6 +2143,9 @@ namespace lfs::vis {
                                     scene_manager,
                                     settings_,
                                     frame_ctx.current_camera_id);
+                                corrected_image = ensure_cuda_viewport_image(
+                                    std::move(corrected_image),
+                                    "VkSplat viewport PPISP correction");
                                 if (corrected_image && corrected_image->is_valid()) {
                                     vulkan_viewport_image_ = corrected_image;
                                     ++vulkan_viewport_image_generation_;
