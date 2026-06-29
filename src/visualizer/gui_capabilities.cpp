@@ -578,7 +578,7 @@ namespace lfs::vis::cap {
                               node->type != core::NodeType::POINTCLOUD))
                     continue;
                 const auto* parent = scene.getNodeById(node->parent_id);
-                if (parent && parent->type == core::NodeType::DATASET) {
+                if (parent && parent->type == core::NodeType::DATASET && !parent->locked) {
                     const bool already_present = std::find(
                         filtered->editable_names.begin(),
                         filtered->editable_names.end(),

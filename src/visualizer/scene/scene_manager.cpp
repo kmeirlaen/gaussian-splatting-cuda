@@ -3258,7 +3258,6 @@ namespace lfs::vis {
     }
 
     void SceneManager::handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, const bool inverse) {
-        LOG_INFO("=== handleCropByEllipsoid called ===");
         std::vector<std::string> splat_node_names;
         std::vector<std::string> pointcloud_node_names;
         bool had_selection = false;
@@ -3296,11 +3295,7 @@ namespace lfs::vis {
             }
         }
 
-        LOG_INFO("handleCropByEllipsoid: {} splat nodes, {} pointcloud nodes, had_selection={}",
-                 splat_node_names.size(), pointcloud_node_names.size(), had_selection);
-
         if (splat_node_names.empty() && pointcloud_node_names.empty() && !had_selection) {
-            LOG_INFO("handleCropByEllipsoid: no selection, using visible nodes");
             for (const auto* node : scene_.getVisibleNodes()) {
                 if (node->type == core::NodeType::SPLAT) {
                     splat_node_names.push_back(node->name);
@@ -3309,8 +3304,6 @@ namespace lfs::vis {
                 }
             }
         }
-        LOG_INFO("handleCropByEllipsoid: after fallback: {} splat, {} pointcloud",
-                 splat_node_names.size(), pointcloud_node_names.size());
 
         const glm::mat4 inv_world = glm::inverse(world_transform);
 
@@ -3325,12 +3318,16 @@ namespace lfs::vis {
             const size_t num_points = node->point_cloud->size();
             const auto device = means.device();
 
+            // Compose with node's world transform
+            const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
+            const glm::mat4 combined_transform = inv_world * node_world_transform;
+
             // Transform to ellipsoid local space
             const auto transform = lfs::core::Tensor::from_vector(
-                {inv_world[0][0], inv_world[1][0], inv_world[2][0], inv_world[3][0],
-                 inv_world[0][1], inv_world[1][1], inv_world[2][1], inv_world[3][1],
-                 inv_world[0][2], inv_world[1][2], inv_world[2][2], inv_world[3][2],
-                 inv_world[0][3], inv_world[1][3], inv_world[2][3], inv_world[3][3]},
+                {combined_transform[0][0], combined_transform[1][0], combined_transform[2][0], combined_transform[3][0],
+                 combined_transform[0][1], combined_transform[1][1], combined_transform[2][1], combined_transform[3][1],
+                 combined_transform[0][2], combined_transform[1][2], combined_transform[2][2], combined_transform[3][2],
+                 combined_transform[0][3], combined_transform[1][3], combined_transform[2][3], combined_transform[3][3]},
                 {4, 4}, device);
 
             const auto ones = lfs::core::Tensor::ones({num_points, 1}, device);
@@ -3379,26 +3376,18 @@ namespace lfs::vis {
             try {
                 const size_t original_visible = node->model->visible_count();
 
-                LOG_INFO("Ellipsoid crop: transforming '{}' with {} original visible", node_name, original_visible);
-
                 // Transform means to ellipsoid local space and apply mask
                 const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
                 const glm::mat4 combined_transform = inv_world * node_world_transform;
 
-                LOG_INFO("Ellipsoid crop: calling soft_crop_by_ellipsoid for '{}'", node_name);
                 const auto applied_mask = lfs::core::soft_crop_by_ellipsoid(*node->model, combined_transform, radii, inverse);
-                if (!applied_mask.is_valid()) {
-                    LOG_INFO("Ellipsoid crop: mask is invalid for '{}' (no points to delete)", node_name);
+                if (!applied_mask.is_valid())
                     continue;
-                }
-                LOG_INFO("Ellipsoid crop: mask valid for '{}'", node_name);
 
                 const size_t new_visible = node->model->visible_count();
                 LOG_INFO("Ellipsoid cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
-                if (new_visible == original_visible) {
-                    LOG_INFO("Ellipsoid crop: no change in visible count for '{}', skipping", node_name);
+                if (new_visible == original_visible)
                     continue;
-                }
 
                 state::PLYAdded{
                     .name = node_name,
@@ -3407,12 +3396,12 @@ namespace lfs::vis {
                     .is_visible = true,
                     .parent_name = "",
                     .is_group = false,
-                    .node_type = 0 // SPLAT
+                    .node_type = static_cast<int>(core::NodeType::SPLAT)
                 }
                     .emit();
 
             } catch (const std::exception& e) {
-                LOG_ERROR("Failed to ellipsoid crop '{}': {}\n", node_name, e.what());
+                LOG_ERROR("Failed to ellipsoid crop '{}': {}", node_name, e.what());
             }
         }
 
