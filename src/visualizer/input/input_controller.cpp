@@ -640,6 +640,17 @@ namespace lfs::vis {
             return;
         }
 
+        const bool wants_text_input = input_router_
+                                          ? input_router_->isTextInputActive()
+                                          : gui::guiFocusState().want_text_input;
+        if (action == input::ACTION_PRESS &&
+            wants_text_input &&
+            !over_gui &&
+            isInViewport(x, y)) {
+            text_input_viewport_click_button_ = button;
+            return;
+        }
+
         if (action == input::ACTION_PRESS) {
             const auto mouse_btn = static_cast<input::MouseButton>(button);
             const auto tool_mode = getCurrentToolMode();
@@ -654,17 +665,6 @@ namespace lfs::vis {
 
         // Dispatch to modal operators first - if consumed, don't continue
         if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
-            return;
-        }
-
-        const bool wants_text_input = input_router_
-                                          ? input_router_->isTextInputActive()
-                                          : gui::guiFocusState().want_text_input;
-        if (action == input::ACTION_PRESS &&
-            wants_text_input &&
-            !over_gui &&
-            isInViewport(x, y)) {
-            text_input_viewport_click_button_ = button;
             return;
         }
 
