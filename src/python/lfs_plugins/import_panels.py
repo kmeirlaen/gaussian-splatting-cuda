@@ -888,8 +888,8 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._centralize_dataset = "off"
         self._max_width = self.DEFAULT_MAX_WIDTH
         self._max_width_str = str(self.DEFAULT_MAX_WIDTH)
-        self._min_colmap_track_length = 0
-        self._min_colmap_track_length_str = "0"
+        self._min_track_length = 0
+        self._min_track_length_str = "0"
         self._apply_auto_crop = False
         self._clear_scene_on_load = False
         self._last_lang = ""
@@ -907,7 +907,8 @@ class DatasetImportPanel(_ImportDialogPanel):
         model.bind_func("images_count_text", self._images_count_text)
         model.bind_func("mask_count_text", self._mask_count_text)
         model.bind_func("show_masks", lambda: bool(self._dataset_info and getattr(self._dataset_info, "has_masks", False)))
-        model.bind_func("show_min_colmap_track_length", self._show_min_colmap_track_length)
+        model.bind_func("show_min_track_length", self._show_min_track_length)
+        model.bind_func("show_min_track_length_warning", self._show_min_track_length_warning)
         model.bind_func("can_load", lambda: bool(self._dataset_valid and self._output_path.strip()))
 
         model.bind("dataset_path", lambda: self._dataset_path, self._set_dataset_path)
@@ -917,14 +918,14 @@ class DatasetImportPanel(_ImportDialogPanel):
         model.bind("centralize_dataset", lambda: self._centralize_dataset, self._set_centralize_dataset)
         model.bind("max_width_str", lambda: self._max_width_str, self._set_max_width_str)
         model.bind("max_width_disabled", lambda: self._max_width == 0, self._set_max_width_disabled)
-        model.bind("min_colmap_track_length_str", lambda: self._min_colmap_track_length_str, self._set_min_colmap_track_length_str)
+        model.bind("min_track_length_str", lambda: self._min_track_length_str, self._set_min_track_length_str)
         model.bind("apply_auto_crop", lambda: self._apply_auto_crop, self._set_apply_auto_crop)
 
         model.bind_event("browse_dataset", self._on_browse_dataset)
         model.bind_event("browse_output", self._on_browse_output)
         model.bind_event("browse_init", self._on_browse_init)
         model.bind_event("browse_ppisp_sidecar", self._on_browse_ppisp_sidecar)
-        model.bind_event("min_colmap_track_length_step", self._on_min_colmap_track_length_step)
+        model.bind_event("min_track_length_step", self._on_min_track_length_step)
         model.bind_event("do_load", self._on_do_load)
         model.bind_event("do_cancel", self._on_do_cancel)
 
@@ -949,8 +950,8 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._centralize_dataset = "off"
         self._max_width = self.DEFAULT_MAX_WIDTH
         self._max_width_str = str(self.DEFAULT_MAX_WIDTH)
-        self._min_colmap_track_length = 0
-        self._min_colmap_track_length_str = "0"
+        self._min_track_length = 0
+        self._min_track_length_str = "0"
         self._apply_auto_crop = False
         params = lf.optimization_params()
         self._ppisp_sidecar_path = (
@@ -1000,12 +1001,13 @@ class DatasetImportPanel(_ImportDialogPanel):
             "images_count_text",
             "mask_count_text",
             "show_masks",
-            "show_min_colmap_track_length",
+            "show_min_track_length",
+            "show_min_track_length_warning",
             "output_path",
             "init_path",
             "ppisp_sidecar_path",
             "can_load",
-            "min_colmap_track_length_str",
+            "min_track_length_str",
         )
         return self._dataset_valid
 
@@ -1034,13 +1036,20 @@ class DatasetImportPanel(_ImportDialogPanel):
             return ""
         return f"({int(getattr(self._dataset_info, 'mask_count', 0))} masks)"
 
-    def _show_min_colmap_track_length(self) -> bool:
+    def _show_min_track_length(self) -> bool:
         if self._dataset_info is None:
             return False
         sparse_path = getattr(self._dataset_info, "sparse_path", "")
         if not sparse_path:
             return False
         return _directory_has_colmap_file(str(sparse_path))
+
+    def _show_min_track_length_warning(self) -> bool:
+        return (
+            self._show_min_track_length()
+            and bool(self._init_path.strip())
+            and self._min_track_length > 0
+        )
 
     def _set_output_path(self, value):
         next_value = str(value)
@@ -1060,7 +1069,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         if next_value == self._init_path:
             return
         self._init_path = next_value
-        self._dirty_model("init_path")
+        self._dirty_model("init_path", "show_min_track_length_warning")
 
     def _set_ppisp_sidecar_path(self, value):
         next_value = str(value)
@@ -1103,31 +1112,31 @@ class DatasetImportPanel(_ImportDialogPanel):
             self._max_width_str = str(self.DEFAULT_MAX_WIDTH)
         self._dirty_model("max_width_str", "max_width_disabled")
 
-    def _set_min_colmap_track_length_str(self, value):
+    def _set_min_track_length_str(self, value):
         text = str(value).strip().replace(",", "")
         try:
             parsed = int(text) if text else 0
         except ValueError:
-            self._dirty_model("min_colmap_track_length_str")
+            self._dirty_model("min_track_length_str")
             return
-        self._set_min_colmap_track_length(parsed)
+        self._set_min_track_length(parsed)
 
-    def _set_min_colmap_track_length(self, value):
+    def _set_min_track_length(self, value):
         parsed = max(0, min(99, int(value)))
-        if parsed == self._min_colmap_track_length and self._min_colmap_track_length_str == str(parsed):
+        if parsed == self._min_track_length and self._min_track_length_str == str(parsed):
             return
-        self._min_colmap_track_length = parsed
-        self._min_colmap_track_length_str = str(parsed)
-        self._dirty_model("min_colmap_track_length_str")
+        self._min_track_length = parsed
+        self._min_track_length_str = str(parsed)
+        self._dirty_model("min_track_length_str", "show_min_track_length_warning")
 
-    def _on_min_colmap_track_length_step(self, _handle=None, _ev=None, args=None):
+    def _on_min_track_length_step(self, _handle=None, _ev=None, args=None):
         delta = 0
         if args:
             try:
                 delta = int(args[0])
             except (TypeError, ValueError, IndexError):
                 delta = 0
-        self._set_min_colmap_track_length(self._min_colmap_track_length + delta)
+        self._set_min_track_length(self._min_track_length + delta)
 
     def _set_apply_auto_crop(self, value):
         enabled = bool(value)
@@ -1191,7 +1200,7 @@ class DatasetImportPanel(_ImportDialogPanel):
             centralize_dataset=centralize_dataset,
             max_width=self._max_width,
             apply_auto_crop=self._apply_auto_crop,
-            min_colmap_track_length=self._min_colmap_track_length,
+            min_track_length=self._min_track_length,
         )
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):

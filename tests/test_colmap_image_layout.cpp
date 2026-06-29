@@ -205,7 +205,7 @@ TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
 
     const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
         dataset_dir,
-        lfs::io::LoadOptions{.min_colmap_track_length = 3});
+        lfs::io::LoadOptions{.min_track_length = 3});
 
     EXPECT_TRUE(result.track_filter_applied);
     EXPECT_EQ(result.total_points, 3u);

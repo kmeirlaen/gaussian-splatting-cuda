@@ -249,7 +249,7 @@ namespace lfs::io {
             // Track filtering requires COLMAP sparse records, so prefer .bin/.txt when enabled.
             std::shared_ptr<PointCloud> point_cloud;
             std::vector<std::string> warnings;
-            const bool use_colmap_track_filter = options.min_colmap_track_length > 0;
+            const bool use_colmap_track_filter = options.min_track_length > 0;
             if (has_points_ply && !use_colmap_track_filter) {
                 LOG_INFO("Loading custom point cloud from points3D.ply");
                 LOG_TIMER_DEBUG("COLMAP load points3D.ply");
@@ -289,7 +289,7 @@ namespace lfs::io {
                     point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc.point_cloud));
                     const std::string message = std::format(
                         "COLMAP min track length filter: min track length {}, total points {}, after filtering {}",
-                        options.min_colmap_track_length,
+                        options.min_track_length,
                         loaded_pc.total_points,
                         loaded_pc.points_after_filtering);
                     LOG_INFO("{}", message);
@@ -307,7 +307,7 @@ namespace lfs::io {
                     point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc.point_cloud));
                     const std::string message = std::format(
                         "COLMAP min track length filter: min track length {}, total points {}, after filtering {}",
-                        options.min_colmap_track_length,
+                        options.min_track_length,
                         loaded_pc.total_points,
                         loaded_pc.points_after_filtering);
                     LOG_INFO("{}", message);

@@ -810,10 +810,10 @@ namespace lfs::io {
         ColmapPointCloudLoadStats result{
             .total_points = points.size(),
             .points_after_filtering = points.size(),
-            .track_filter_applied = options.min_colmap_track_length > 0,
+            .track_filter_applied = options.min_track_length > 0,
         };
 
-        const int min_track_length = options.min_colmap_track_length;
+        const int min_track_length = options.min_track_length;
         if (min_track_length > 0) {
             const auto min_track = static_cast<size_t>(min_track_length);
             std::erase_if(points, [min_track](const Point3DData& point) {

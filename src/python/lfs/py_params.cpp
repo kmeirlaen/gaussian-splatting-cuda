@@ -415,10 +415,10 @@ namespace lfs::python {
             [](DatasetConfig& c, int v) { c.max_width = v; });
 
         add_int(
-            "min_colmap_track_length", "Min COLMAP Track Length", 0, 0, 65535,
+            "min_track_length", "Minimum Track Length", 0, 0, 65535,
             "Minimum COLMAP sparse point track length; 0 disables filtering", false,
-            [](const DatasetConfig& c) { return c.min_colmap_track_length; },
-            [](DatasetConfig& c, int v) { c.min_colmap_track_length = v; });
+            [](const DatasetConfig& c) { return c.min_track_length; },
+            [](DatasetConfig& c, int v) { c.min_track_length = v; });
 
         add_bool(
             "use_cpu_cache", "CPU Cache", true, "Cache images in CPU memory", false,
@@ -1396,14 +1396,14 @@ namespace lfs::python {
                 },
                 "Maximum image width in pixels; 0 disables the cap")
             .def_prop_rw(
-                "min_colmap_track_length",
-                [](const PyDatasetConfig& self) { return self.params().min_colmap_track_length; },
+                "min_track_length",
+                [](const PyDatasetConfig& self) { return self.params().min_track_length; },
                 [](PyDatasetConfig& self, int v) {
                     if (!self.can_edit())
                         throw std::runtime_error("Cannot edit dataset params during training");
                     if (v < 0)
-                        throw std::invalid_argument("min_colmap_track_length must be non-negative; 0 disables filtering");
-                    self.params().min_colmap_track_length = v;
+                        throw std::invalid_argument("min_track_length must be non-negative; 0 disables filtering");
+                    self.params().min_track_length = v;
                 },
                 "Minimum COLMAP sparse point track length; 0 disables filtering")
             .def_prop_rw(
