@@ -651,9 +651,12 @@ namespace lfs::vis::gui {
                                rml_my >= 0 && rml_my < static_cast<int>(vp_size_.y);
         const bool mouse_moved =
             !mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_;
+        const bool mouse_clicked =
+            input.mouse_clicked[0] || input.mouse_clicked[1] || input.mouse_clicked[2];
         const bool pointer_event =
             input.mouse_clicked[0] || input.mouse_released[0] ||
             input.mouse_clicked[1] || input.mouse_released[1] ||
+            input.mouse_clicked[2] || input.mouse_released[2] ||
             input.mouse_wheel != 0.0f;
         const bool pointer_drag =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
@@ -691,7 +694,7 @@ namespace lfs::vis::gui {
         const bool point_interactive = viewportOverlayHoverRoot(point_element) != nullptr;
         const bool hover_target_changed = point_element != last_hover_element_;
         if (focused_text_target &&
-            (input.mouse_clicked[0] || input.mouse_clicked[1]) &&
+            mouse_clicked &&
             is_inside &&
             !isElementOrDescendantOf(point_element, focused_before)) {
             focused_before->Blur();
@@ -723,7 +726,8 @@ namespace lfs::vis::gui {
                 if (input.mouse_wheel != 0.0f)
                     markRenderNeeded(RenderReason::PointerWheel);
                 if (input.mouse_clicked[0] || input.mouse_released[0] ||
-                    input.mouse_clicked[1] || input.mouse_released[1])
+                    input.mouse_clicked[1] || input.mouse_released[1] ||
+                    input.mouse_clicked[2] || input.mouse_released[2])
                     markRenderNeeded(RenderReason::PointerButton);
                 if (pointer_drag || vram_drag_capture)
                     markRenderNeeded(RenderReason::PointerDrag);
