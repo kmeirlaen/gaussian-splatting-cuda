@@ -1464,7 +1464,32 @@ namespace lfs::vis {
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
-                                if (compare_panel.image) {
+                                bool compare_panel_ppisp_applied = false;
+                                if (!compare_panel.image &&
+                                    compare_panel.external_image_view != VK_NULL_HANDLE &&
+                                    settings_.apply_appearance_correction &&
+                                    vksplat_viewport_renderer_ &&
+                                    context.vulkan_context) {
+                                    auto image = vksplat_viewport_renderer_->readOutputImage(
+                                        *context.vulkan_context,
+                                        VksplatViewportRenderer::OutputSlot::SplitRight);
+                                    if (image && *image) {
+                                        compare_panel.image = applyViewportAppearanceCorrection(
+                                            std::move(*image),
+                                            scene_manager,
+                                            settings_,
+                                            camera->uid());
+                                        if (compare_panel.image && compare_panel.image->is_valid()) {
+                                            compare_panel.external_image_view = VK_NULL_HANDLE;
+                                            compare_panel.external_image_generation = 0;
+                                            compare_panel_ppisp_applied = true;
+                                        }
+                                    } else {
+                                        LOG_WARN("VkSplat GT comparison PPISP readback failed: {}",
+                                                 image ? "missing image payload" : image.error());
+                                    }
+                                }
+                                if (compare_panel.image && !compare_panel_ppisp_applied) {
                                     compare_panel.image = applyViewportAppearanceCorrection(
                                         std::move(compare_panel.image),
                                         scene_manager,
@@ -2396,8 +2421,14 @@ namespace lfs::vis {
             if (result.image_generation == 0) {
                 result.image_generation = ++split_view_image_generation_;
             }
-            result.completion_semaphore = latest_vksplat_completion_semaphore;
-            result.completion_value = latest_vksplat_completion_value;
+            const bool split_uses_external_image =
+                pending_split_view.enabled &&
+                (pending_split_view.left.external_image_view != VK_NULL_HANDLE ||
+                 pending_split_view.right.external_image_view != VK_NULL_HANDLE);
+            if (split_uses_external_image) {
+                result.completion_semaphore = latest_vksplat_completion_semaphore;
+                result.completion_value = latest_vksplat_completion_value;
+            }
             result.size = vulkan_viewport_image_size_;
             result.flip_y = vulkan_viewport_image_flip_y_;
 
