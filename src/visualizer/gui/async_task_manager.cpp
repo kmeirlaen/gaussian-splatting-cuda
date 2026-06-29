@@ -656,6 +656,8 @@ namespace lfs::vis::gui {
                 params.dataset.centralize_dataset = cmd.centralize_dataset;
             if (cmd.max_width.has_value() && *cmd.max_width >= 0)
                 params.dataset.max_width = *cmd.max_width;
+            if (cmd.min_colmap_track_length.has_value() && *cmd.min_colmap_track_length >= 0)
+                params.dataset.min_colmap_track_length = *cmd.min_colmap_track_length;
             import_state_.apply_auto_crop.store(cmd.apply_auto_crop);
             startAsyncImport(cmd.path, params);
         });
@@ -1432,6 +1434,7 @@ namespace lfs::vis::gui {
                     .resize_factor = local_params.dataset.resize_factor,
                     .max_width = local_params.dataset.max_width,
                     .images_folder = local_params.dataset.images,
+                    .min_colmap_track_length = local_params.dataset.min_colmap_track_length,
                     .validate_only = false,
                     .centralize = parse_centralize(local_params.dataset.centralize_dataset),
                     .progress = [this, &stop_token](const float pct, const std::string& msg) {

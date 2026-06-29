@@ -383,6 +383,7 @@ namespace lfs::training {
             .resize_factor = params.dataset.resize_factor,
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
+            .min_colmap_track_length = params.dataset.min_colmap_track_length,
             .validate_only = false,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
@@ -766,6 +767,7 @@ namespace lfs::training {
             .resize_factor = params.dataset.resize_factor,
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
+            .min_colmap_track_length = params.dataset.min_colmap_track_length,
             .validate_only = true};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);

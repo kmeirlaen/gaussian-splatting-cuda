@@ -1068,6 +1068,8 @@
     "max_width": "Largeur max. (px)",
     "max_width_disable": "Désactiver la réduction",
     "max_width_hint": "Les images plus larges sont réduites. 0 désactive la limite.",
+    "min_colmap_track_length": "Min COLMAP Track Length",
+    "min_colmap_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
     "apply_auto_crop": "Appliquer le recadrage automatique"
   },
   "notification": {
