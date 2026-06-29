@@ -1500,6 +1500,7 @@ namespace lfs::vis {
                                             std::move(compare_panel.image),
                                             "VkSplat GT comparison PPISP correction");
                                         if (compare_panel.image && compare_panel.image->is_valid()) {
+                                            compare_panel.flip_y = compare_panel.metadata.flip_y;
                                             compare_panel.external_image_view = VK_NULL_HANDLE;
                                             compare_panel.external_image_generation = 0;
                                             compare_panel_ppisp_applied = true;
