@@ -61,6 +61,15 @@ namespace lfs::vis::gui {
             return isInteractiveViewportOverlayElement(element) ? element : nullptr;
         }
 
+        [[nodiscard]] bool isElementOrDescendantOf(const Rml::Element* element,
+                                                   const Rml::Element* ancestor) {
+            for (auto* node = element; node; node = node->GetParentNode()) {
+                if (node == ancestor)
+                    return true;
+            }
+            return false;
+        }
+
     } // namespace
 
     RmlViewportOverlay::RmlViewportOverlay()
@@ -681,6 +690,13 @@ namespace lfs::vis::gui {
                                         : nullptr;
         const bool point_interactive = viewportOverlayHoverRoot(point_element) != nullptr;
         const bool hover_target_changed = point_element != last_hover_element_;
+        if (focused_text_target &&
+            (input.mouse_clicked[0] || input.mouse_clicked[1]) &&
+            is_inside &&
+            !isElementOrDescendantOf(point_element, focused_before)) {
+            focused_before->Blur();
+            markRenderNeeded(RenderReason::Keyboard);
+        }
         if (external_mouse_capture && !point_interactive && !hovered_interactive_ &&
             !vram_drag_capture) {
             tooltip_.setHover({}, nullptr);
