@@ -3093,6 +3093,13 @@ namespace lfs::vis {
                         } else if (parent && parent->type == core::NodeType::POINTCLOUD) {
                             pointcloud_node_names.push_back(parent->name);
                         }
+                    } else if (selected->type == core::NodeType::ELLIPSOID) {
+                        const auto* parent = scene_.getNodeById(selected->parent_id);
+                        if (parent && parent->type == core::NodeType::SPLAT) {
+                            splat_node_names.push_back(parent->name);
+                        } else if (parent && parent->type == core::NodeType::POINTCLOUD) {
+                            pointcloud_node_names.push_back(parent->name);
+                        }
                     }
                 }
             }
@@ -3201,6 +3208,10 @@ namespace lfs::vis {
         // Only change content type when cropping SPLAT nodes
         changeContentType(ContentType::SplatFiles);
 
+        // Capture scene state for undo/redo before modifying splat data
+        auto snapshot = std::make_unique<op::SceneSnapshot>(*this, "Crop Box");
+        snapshot->captureTopology();
+
         for (const auto& node_name : splat_node_names) {
             auto* node = scene_.getMutableNode(node_name);
             if (!node || !node->model) {
@@ -3240,10 +3251,14 @@ namespace lfs::vis {
             }
         }
 
+        snapshot->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(snapshot));
+
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }
 
     void SceneManager::handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, const bool inverse) {
+        LOG_INFO("=== handleCropByEllipsoid called ===");
         std::vector<std::string> splat_node_names;
         std::vector<std::string> pointcloud_node_names;
         bool had_selection = false;
@@ -3269,12 +3284,23 @@ namespace lfs::vis {
                         } else if (parent && parent->type == core::NodeType::POINTCLOUD) {
                             pointcloud_node_names.push_back(parent->name);
                         }
+                    } else if (selected->type == core::NodeType::CROPBOX) {
+                        const auto* parent = scene_.getNodeById(selected->parent_id);
+                        if (parent && parent->type == core::NodeType::SPLAT) {
+                            splat_node_names.push_back(parent->name);
+                        } else if (parent && parent->type == core::NodeType::POINTCLOUD) {
+                            pointcloud_node_names.push_back(parent->name);
+                        }
                     }
                 }
             }
         }
 
+        LOG_INFO("handleCropByEllipsoid: {} splat nodes, {} pointcloud nodes, had_selection={}",
+                 splat_node_names.size(), pointcloud_node_names.size(), had_selection);
+
         if (splat_node_names.empty() && pointcloud_node_names.empty() && !had_selection) {
+            LOG_INFO("handleCropByEllipsoid: no selection, using visible nodes");
             for (const auto* node : scene_.getVisibleNodes()) {
                 if (node->type == core::NodeType::SPLAT) {
                     splat_node_names.push_back(node->name);
@@ -3283,6 +3309,8 @@ namespace lfs::vis {
                 }
             }
         }
+        LOG_INFO("handleCropByEllipsoid: after fallback: {} splat, {} pointcloud",
+                 splat_node_names.size(), pointcloud_node_names.size());
 
         const glm::mat4 inv_world = glm::inverse(world_transform);
 
@@ -3339,6 +3367,10 @@ namespace lfs::vis {
 
         changeContentType(ContentType::SplatFiles);
 
+        // Capture scene state for undo/redo before modifying splat data
+        auto snapshot = std::make_unique<op::SceneSnapshot>(*this, "Crop Ellipsoid");
+        snapshot->captureTopology();
+
         for (const auto& node_name : splat_node_names) {
             auto* node = scene_.getMutableNode(node_name);
             if (!node || !node->model)
@@ -3347,24 +3379,45 @@ namespace lfs::vis {
             try {
                 const size_t original_visible = node->model->visible_count();
 
+                LOG_INFO("Ellipsoid crop: transforming '{}' with {} original visible", node_name, original_visible);
+
                 // Transform means to ellipsoid local space and apply mask
                 const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
                 const glm::mat4 combined_transform = inv_world * node_world_transform;
 
+                LOG_INFO("Ellipsoid crop: calling soft_crop_by_ellipsoid for '{}'", node_name);
                 const auto applied_mask = lfs::core::soft_crop_by_ellipsoid(*node->model, combined_transform, radii, inverse);
-                if (!applied_mask.is_valid())
+                if (!applied_mask.is_valid()) {
+                    LOG_INFO("Ellipsoid crop: mask is invalid for '{}' (no points to delete)", node_name);
                     continue;
+                }
+                LOG_INFO("Ellipsoid crop: mask valid for '{}'", node_name);
 
                 const size_t new_visible = node->model->visible_count();
-                if (new_visible == original_visible)
-                    continue;
-
                 LOG_INFO("Ellipsoid cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
+                if (new_visible == original_visible) {
+                    LOG_INFO("Ellipsoid crop: no change in visible count for '{}', skipping", node_name);
+                    continue;
+                }
+
+                state::PLYAdded{
+                    .name = node_name,
+                    .node_gaussians = new_visible,
+                    .total_gaussians = scene_.getTotalGaussianCount(),
+                    .is_visible = true,
+                    .parent_name = "",
+                    .is_group = false,
+                    .node_type = 0 // SPLAT
+                }
+                    .emit();
 
             } catch (const std::exception& e) {
-                LOG_ERROR("Failed to ellipsoid crop '{}': {}", node_name, e.what());
+                LOG_ERROR("Failed to ellipsoid crop '{}': {}\n", node_name, e.what());
             }
         }
+
+        snapshot->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(snapshot));
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }

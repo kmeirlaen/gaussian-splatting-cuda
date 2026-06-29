@@ -374,6 +374,17 @@ namespace lfs::vis::gui {
                 continue;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
+            if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID) {
+                const auto* parent = scene.getNodeById(node->parent_id);
+                if (parent && (parent->type == core::NodeType::SPLAT || parent->type == core::NodeType::POINTCLOUD))
+                    return parent->id;
+                if (parent && parent->type == core::NodeType::DATASET) {
+                    if (const core::NodeId child_target = find_child_target(*parent, find_child_target);
+                        child_target != core::NULL_NODE) {
+                        return child_target;
+                    }
+                }
+            }
             if (node->type == core::NodeType::DATASET) {
                 if (const core::NodeId child_target = find_child_target(*node, find_child_target);
                     child_target != core::NULL_NODE) {
@@ -472,6 +483,14 @@ namespace lfs::vis::gui {
         if (auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             rm->setCropboxGizmoActive(false);
             rm->setEllipsoidGizmoActive(false);
+
+            auto settings = rm->getSettings();
+            if (settings.show_crop_box || settings.use_crop_box || settings.show_ellipsoid) {
+                settings.show_crop_box = false;
+                settings.use_crop_box = false;
+                settings.show_ellipsoid = false;
+                rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            }
         }
     }
 
@@ -570,6 +589,17 @@ namespace lfs::vis::gui {
         if (!rm || !crop_tool_initialized_ || !isVolumeGizmoToolActive()) {
             clearCropToolOverlayState();
             return;
+        }
+
+        // Reset rendering settings for the inactive shape
+        {
+            auto settings = rm->getSettings();
+            if (settings.show_crop_box || settings.use_crop_box || settings.show_ellipsoid) {
+                settings.show_crop_box = false;
+                settings.use_crop_box = false;
+                settings.show_ellipsoid = false;
+                rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            }
         }
 
         const bool affects_render = !isSelectionVolumeMode();
@@ -697,7 +727,20 @@ namespace lfs::vis::gui {
                 settings.desaturate_cropping = true;
                 rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
             }
+
+            // Actually apply the box crop to the gaussians
+            {
+                lfs::geometry::BoundingBox crop_box;
+                crop_box.setBounds(data.min, data.max);
+                crop_box.setworld2BBox(glm::inverse(data_world_transform));
+                cmd::CropPLY{.crop_box = crop_box, .inverse = false}.emit();
+            }
         } else {
+            if (rm) {
+                auto settings = rm->getSettings();
+                settings.show_ellipsoid = true;
+                rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            }
             cmd::CropPLYEllipsoid{
                 .world_transform = data_world_transform,
                 .radii = crop_tool_ellipsoid_radii_,
@@ -814,8 +857,7 @@ namespace lfs::vis::gui {
 
         cmd::ApplyCropBox::when([this](const auto&) {
             auto* const sm = viewer_->getSceneManager();
-            if (isCropToolActive() &&
-                (!sm || sm->getSelectedNodeType() != core::NodeType::CROPBOX)) {
+            if (isCropToolActive()) {
                 applyActiveCropTool();
                 return;
             }

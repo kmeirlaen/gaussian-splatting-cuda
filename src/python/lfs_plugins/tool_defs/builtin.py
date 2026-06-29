@@ -22,7 +22,11 @@ def _poll_builtin_tool_available(tool_id: str) -> bool:
 
 
 def _node_type_name(node) -> str:
-    return getattr(getattr(node, "type", None), "name", "")
+    try:
+        # nanobind enums: str() returns "NodeType.SPLAT", extract the suffix
+        return str(node.type).split(".")[-1]
+    except Exception:
+        return ""
 
 
 def _node_contains_cropbox_target(scene, node) -> bool:
@@ -92,7 +96,10 @@ def _poll_can_align(_context) -> bool:
 
 
 def _poll_can_cropbox(context) -> bool:
-    return _poll_has_scene(context) and _selection_has_cropbox_target()
+    import lichtfeld as lf
+    return (lf.ui.get_content_type() == "splat_files" and
+            _poll_has_scene(context) and
+            lf.can_transform_selection())
 
 
 BUILTIN_TOOLS: tuple[ToolDef, ...] = (
