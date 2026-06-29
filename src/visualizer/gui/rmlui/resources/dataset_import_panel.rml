@@ -109,7 +109,7 @@
       </div>
     </div>
 
-    <div class="impdlg-control-group">
+    <div class="impdlg-control-group" data-if="show_min_colmap_track_length">
       <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.min_colmap_track_length</span>
       <div class="impdlg-control-main">
         <div class="impdlg-control-row">

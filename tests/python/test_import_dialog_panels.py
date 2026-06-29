@@ -296,6 +296,30 @@ def test_dataset_import_panel_steps_min_colmap_track_length(import_dialog_module
     assert panel._min_colmap_track_length_str == "0"
 
 
+def test_dataset_import_panel_shows_track_length_for_colmap(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    sparse_zero = Path(state.dataset_info.sparse_path) / "0"
+    sparse_zero.mkdir(parents=True)
+    (sparse_zero / "points3D.txt").write_text("", encoding="utf-8")
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    assert panel._show_min_colmap_track_length() is True
+
+
+def test_dataset_import_panel_hides_track_length_for_non_colmap(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    assert panel._show_min_colmap_track_length() is False
+
+
 def test_dataset_import_panel_preserves_unicode_paths(import_dialog_module):
     module, state = import_dialog_module
     panel = module.DatasetImportPanel()

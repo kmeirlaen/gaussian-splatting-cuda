@@ -907,6 +907,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         model.bind_func("images_count_text", self._images_count_text)
         model.bind_func("mask_count_text", self._mask_count_text)
         model.bind_func("show_masks", lambda: bool(self._dataset_info and getattr(self._dataset_info, "has_masks", False)))
+        model.bind_func("show_min_colmap_track_length", self._show_min_colmap_track_length)
         model.bind_func("can_load", lambda: bool(self._dataset_valid and self._output_path.strip()))
 
         model.bind("dataset_path", lambda: self._dataset_path, self._set_dataset_path)
@@ -999,6 +1000,7 @@ class DatasetImportPanel(_ImportDialogPanel):
             "images_count_text",
             "mask_count_text",
             "show_masks",
+            "show_min_colmap_track_length",
             "output_path",
             "init_path",
             "ppisp_sidecar_path",
@@ -1031,6 +1033,14 @@ class DatasetImportPanel(_ImportDialogPanel):
         if self._dataset_info is None or not getattr(self._dataset_info, "has_masks", False):
             return ""
         return f"({int(getattr(self._dataset_info, 'mask_count', 0))} masks)"
+
+    def _show_min_colmap_track_length(self) -> bool:
+        if self._dataset_info is None:
+            return False
+        sparse_path = getattr(self._dataset_info, "sparse_path", "")
+        if not sparse_path:
+            return False
+        return _directory_has_colmap_file(str(sparse_path))
 
     def _set_output_path(self, value):
         next_value = str(value)
