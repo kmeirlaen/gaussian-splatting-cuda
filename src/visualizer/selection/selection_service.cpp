@@ -2422,8 +2422,8 @@ namespace lfs::vis {
         switch (session.shape) {
         case SelectionShape::Brush:
             success = buildInteractiveBrushPreviewIncremental();
-            success = success && session.working_selection.is_valid() &&
-                      session.working_selection.numel() == total;
+            success = success && session.preview_brush_point_count == session.points.size() &&
+                      session.working_selection.is_valid() && session.working_selection.numel() == total;
             if (success) {
                 selection_out = session.working_selection;
             }
