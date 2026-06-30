@@ -6017,6 +6017,15 @@ namespace lfs::vis {
                                                    selection_query_timeline_.cuda_semaphore.lastError()));
             }
         }
+        {
+            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_sync");
+            if (const cudaError_t status = cudaStreamSynchronize(selection_query_stream);
+                status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat selection query sync failed: {} ({})",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+        }
 
         if (ring_mode) {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ring_pick");
