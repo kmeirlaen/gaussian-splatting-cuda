@@ -2951,7 +2951,8 @@ namespace lfs::vis {
                 cmd::ToggleGTComparison{}.emit();
             }
 
-            if (auto* trainer = services().trainerOrNull(); trainer && trainer->isRunning()) {
+            if (auto* trainer = services().trainerOrNull();
+                trainer && trainer->isRunning() && !trainer->isTrainerPaused()) {
                 trainer->pauseTrainingTemporary();
                 training_was_paused_by_camera_ = true;
             }

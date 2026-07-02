@@ -159,6 +159,10 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> ensureHandshakeReady(VulkanContext& context) {
             return ensureInitialized(context);
         }
+        [[nodiscard]] std::expected<void, std::string> ensureTrainingSharedScratchReady(
+            VulkanContext& context,
+            std::size_t num_splats,
+            glm::ivec2 viewport_size);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's

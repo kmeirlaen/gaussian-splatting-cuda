@@ -256,6 +256,10 @@ namespace lfs::vis {
         return trainer_ != nullptr;
     }
 
+    bool TrainerManager::isTrainerPaused() const {
+        return trainer_ && trainer_->is_paused();
+    }
+
     void TrainerManager::clearTrainer() {
         LOG_DEBUG("Clearing trainer");
 
@@ -417,6 +421,26 @@ namespace lfs::vis {
             // Match headless mode: release init-time cached pool allocations before the
             // first training batch spins up image decoders and render workspaces.
             lfs::core::Tensor::trim_memory_pool();
+        }
+
+        if (viewer_) {
+            auto* const rendering_manager = viewer_->getRenderingManager();
+            auto* const window_manager = viewer_->getWindowManager();
+            auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+            auto* const model = scene_ ? scene_->getTrainingModel() : nullptr;
+            if (rendering_manager && vulkan_context && model) {
+                glm::ivec2 prime_size = rendering_manager->getRenderedSize();
+                if (prime_size.x <= 0 || prime_size.y <= 0) {
+                    prime_size = window_manager ? window_manager->getWindowSize() : glm::ivec2{1280, 720};
+                }
+                if (auto ok = rendering_manager->ensureVksplatTrainingSharedScratchReady(
+                        *vulkan_context,
+                        *model,
+                        prime_size);
+                    !ok) {
+                    LOG_WARN("VkSplat training shared-scratch pre-start prime skipped: {}", ok.error());
+                }
+            }
         }
 
         {
