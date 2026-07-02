@@ -859,7 +859,8 @@ namespace lfs::core {
             _deleted.set_name("splat.deleted_mask");
         }
 
-        _deleted = _deleted || mask;
+        const Tensor updated = _deleted || mask;
+        _deleted.copy_from(updated);
         return mask;
     }
 
@@ -874,7 +875,8 @@ namespace lfs::core {
             return;
         }
 
-        _deleted = _deleted && mask.logical_not();
+        const Tensor updated = _deleted && mask.logical_not();
+        _deleted.copy_from(updated);
     }
 
     void SplatData::clear_deleted() {

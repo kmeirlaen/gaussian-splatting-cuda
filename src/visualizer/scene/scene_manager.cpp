@@ -4729,6 +4729,7 @@ namespace lfs::vis {
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
         if (auto* rm = services().renderingOrNull()) {
+            rm->clearCursorPreviewState();
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
         }
 
