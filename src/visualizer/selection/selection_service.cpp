@@ -2110,6 +2110,12 @@ namespace lfs::vis {
             LOG_TIMER("commitSelection.setSelectionMask");
             scene.setSelectionMaskWithGroupCounts(new_selection, selected_count, group_counts);
         }
+        if (const auto normalized_selection = scene.getSelectionMask();
+            normalized_selection && normalized_selection->is_valid()) {
+            selected_count = static_cast<size_t>(normalized_selection->ne(0).sum_scalar());
+        } else {
+            selected_count = 0;
+        }
 
         if (entry) {
             {
