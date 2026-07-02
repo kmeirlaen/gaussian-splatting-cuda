@@ -1023,7 +1023,7 @@ namespace lfs::core {
 
         const auto live = liveSelectionMask(expected_size, mask->device(), mask->dtype());
         auto normalized = mask->where(live.ne(0), lfs::core::Tensor::zeros({expected_size}, mask->device(), mask->dtype()));
-        const size_t count = static_cast<size_t>(normalized.ne(0).to(core::DataType::Float32).sum_scalar());
+        const size_t count = normalized.count_nonzero();
         if (count == 0) {
             return nullptr;
         }

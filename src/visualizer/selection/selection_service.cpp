@@ -2112,7 +2112,7 @@ namespace lfs::vis {
         }
         if (const auto normalized_selection = scene.getSelectionMask();
             normalized_selection && normalized_selection->is_valid()) {
-            selected_count = static_cast<size_t>(normalized_selection->ne(0).sum_scalar());
+            selected_count = normalized_selection->count_nonzero();
         } else {
             selected_count = 0;
         }
