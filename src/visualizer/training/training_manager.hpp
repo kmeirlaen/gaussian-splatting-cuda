@@ -74,6 +74,7 @@ namespace lfs::vis {
         };
 
         void pauseTrainingTemporary();
+        [[nodiscard]] bool pauseTrainingTemporaryIfActive();
         [[nodiscard]] TemporaryPauseResult pauseTrainingTemporaryAndWait(std::chrono::milliseconds timeout);
         void resumeTrainingTemporary();
 
@@ -90,7 +91,6 @@ namespace lfs::vis {
         [[nodiscard]] bool isPaused() const { return state_machine_.isInState(TrainingState::Paused); }
         [[nodiscard]] bool isFinished() const { return state_machine_.isInState(TrainingState::Finished); }
         [[nodiscard]] bool isTrainingActive() const { return state_machine_.isActive(); }
-        [[nodiscard]] bool isTrainerPaused() const;
         [[nodiscard]] bool canStart() const { return canPerform(TrainingAction::Start); }
         [[nodiscard]] bool canPause() const { return canPerform(TrainingAction::Pause); }
         [[nodiscard]] bool canResume() const { return canPerform(TrainingAction::Resume); }

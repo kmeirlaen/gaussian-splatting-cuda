@@ -6607,19 +6607,6 @@ namespace lfs::vis {
             splat_data.lod_tree->rad_source.valid();
         static const bool kDisableSharedScratch = (std::getenv("LFS_NO_SHARED_SCRATCH") != nullptr);
         std::optional<RasterizerArenaRenderGuard> shared_arena_guard;
-        if (synchronize_input_upload && !kDisableSharedScratch) {
-            if (!shared_scratch_.installed_in_training_arena || !shared_scratch_.block) {
-                return std::unexpected(
-                    "VkSplat shared scratch is not installed for training render (prime shared scratch before training starts)");
-            }
-            try {
-                shared_arena_guard.emplace();
-            } catch (const std::exception& e) {
-                return std::unexpected(std::format(
-                    "VkSplat shared scratch training rasterizer arena is busy; reason={}",
-                    e.what()));
-            }
-        }
         std::vector<LodPageCache::PendingUpload> lod_page_uploads;
         std::vector<std::uint32_t> protected_lod_chunks;
         bool lod_page_inputs_active = false;

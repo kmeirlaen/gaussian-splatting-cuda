@@ -2952,8 +2952,7 @@ namespace lfs::vis {
             }
 
             if (auto* trainer_mgr = services().trainerOrNull();
-                trainer_mgr && trainer_mgr->isRunning() && !trainer_mgr->isTrainerPaused()) {
-                trainer_mgr->pauseTrainingTemporary();
+                trainer_mgr && trainer_mgr->pauseTrainingTemporaryIfActive()) {
                 training_was_paused_by_camera_ = true;
             }
         } else {
