@@ -349,6 +349,7 @@ namespace lfs::vis {
         void scheduleConsolidatedCompaction();
         [[nodiscard]] std::expected<GaussianDeletionPlan, std::string> buildSelectedGaussianDeletionPlan();
         [[nodiscard]] std::expected<void, std::string> applySelectedGaussianDeletionPlan(const GaussianDeletionPlan& plan);
+        void maskOutDeletedGaussians(lfs::core::Tensor& scene_mask) const;
 
         core::Scene scene_;
         // Lock ordering: state_mutex_ before selection_.mutex() when both needed

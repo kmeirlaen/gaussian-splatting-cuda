@@ -3115,6 +3115,16 @@ namespace lfs::vis {
         if (filters.depth_filter) {
             applyDepthFilter(selection);
         }
+
+        {
+            LOG_TIMER("applyFilters.filter_deleted_gaussians");
+            auto render_lock = acquireLiveModelRenderLock(scene_manager_);
+            const auto* const model = scene_manager_->getModelForRendering();
+            if (model && model->has_deleted_mask() &&
+                model->deleted().numel() == selection.numel()) {
+                selection = selection.logical_and(model->deleted().logical_not().to(selection.device()));
+            }
+        }
     }
 
     void SelectionService::applyCropFilter(core::Tensor& selection,

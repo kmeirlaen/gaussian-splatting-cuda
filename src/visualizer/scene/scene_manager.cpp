@@ -4270,6 +4270,12 @@ namespace lfs::vis {
                 return;
 
             mask = mask.to(src.means_raw().device());
+            if (src.has_deleted_mask() && src.deleted().numel() == mask.numel()) {
+                mask = mask.logical_and(src.deleted().logical_not().to(mask.device()));
+                if (mask.count_nonzero() == 0)
+                    return;
+            }
+
             auto extracted = std::make_unique<lfs::core::SplatData>(
                 lfs::core::extract_by_mask(src, mask));
             if (extracted->size() == 0)
@@ -4786,6 +4792,52 @@ namespace lfs::vis {
         LOG_INFO("Deleted selected Gaussians");
     }
 
+    void SceneManager::maskOutDeletedGaussians(lfs::core::Tensor& scene_mask) const {
+        if (!scene_mask.is_valid() || scene_mask.numel() == 0)
+            return;
+
+        scene_mask = scene_mask.cuda().to(lfs::core::DataType::UInt8);
+
+        if (scene_.isConsolidated()) {
+            const auto* const combined = scene_.getCombinedModel();
+            if (combined && combined->has_deleted_mask() && combined->deleted().numel() == scene_mask.numel()) {
+                scene_mask = scene_mask *
+                             combined->deleted()
+                                 .logical_not()
+                                 .to(scene_mask.device())
+                                 .to(lfs::core::DataType::UInt8);
+            }
+            return;
+        }
+
+        const size_t full_total = scene_.getSelectionGaussianCount();
+        if (scene_mask.numel() != full_total)
+            return;
+
+        size_t offset = 0;
+        for (const auto* node : scene_.getNodes()) {
+            if (!node || node->type != core::NodeType::SPLAT)
+                continue;
+
+            const size_t node_size = node->gaussian_count.load(std::memory_order_acquire);
+            const size_t node_end = offset + node_size;
+            if (node_end > scene_mask.numel())
+                return;
+
+            if (node->model && node->model->has_deleted_mask() &&
+                node->model->deleted().numel() == node_size) {
+                scene_mask.slice(0, offset, node_end) =
+                    scene_mask.slice(0, offset, node_end) *
+                    node->model->deleted()
+                        .logical_not()
+                        .to(scene_mask.device())
+                        .to(lfs::core::DataType::UInt8);
+            }
+
+            offset = node_end;
+        }
+    }
+
     void SceneManager::invertSelection() {
         auto* rendering_manager = services().renderingOrNull();
         if (selection_service_ &&
@@ -4827,6 +4879,7 @@ namespace lfs::vis {
                 {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
         }
 
+        maskOutDeletedGaussians(new_mask);
         scene_.setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
 
         entry->captureAfter();
@@ -4905,6 +4958,7 @@ namespace lfs::vis {
             } else {
                 return;
             }
+            maskOutDeletedGaussians(full_mask);
             auto new_mask = std::make_shared<lfs::core::Tensor>(std::move(full_mask));
             scene_.setSelectionMask(new_mask);
 
