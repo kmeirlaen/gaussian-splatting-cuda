@@ -3170,10 +3170,16 @@ namespace lfs::vis {
 
         const std::size_t width = static_cast<std::size_t>(viewport_size.x);
         const std::size_t height = static_cast<std::size_t>(viewport_size.y);
+        if (height != 0 && width > (std::numeric_limits<std::size_t>::max() / height)) {
+            return std::unexpected("VkSplat training shared-scratch prime viewport size overflows size_t");
+        }
         const std::size_t num_pixels = width * height;
-        const std::size_t num_tiles =
-            ((width + TILE_WIDTH - 1) / TILE_WIDTH) *
-            ((height + TILE_HEIGHT - 1) / TILE_HEIGHT);
+        const std::size_t tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
+        const std::size_t tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        if (tiles_y != 0 && tiles_x > (std::numeric_limits<std::size_t>::max() / tiles_y)) {
+            return std::unexpected("VkSplat training shared-scratch prime tile count overflows size_t");
+        }
+        const std::size_t num_tiles = tiles_x * tiles_y;
         const std::size_t sort_capacity =
             num_splats > (std::numeric_limits<std::size_t>::max() / 4u)
                 ? num_splats
@@ -6604,7 +6610,7 @@ namespace lfs::vis {
         if (synchronize_input_upload && !kDisableSharedScratch) {
             if (!shared_scratch_.installed_in_training_arena || !shared_scratch_.block) {
                 return std::unexpected(
-                    "VkSplat shared scratch training rasterizer arena is busy; reason=shared scratch is not installed before training render");
+                    "VkSplat shared scratch is not installed for training render (prime shared scratch before training starts)");
             }
             try {
                 shared_arena_guard.emplace();

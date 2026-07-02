@@ -2951,9 +2951,9 @@ namespace lfs::vis {
                 cmd::ToggleGTComparison{}.emit();
             }
 
-            if (auto* trainer = services().trainerOrNull();
-                trainer && trainer->isRunning() && !trainer->isTrainerPaused()) {
-                trainer->pauseTrainingTemporary();
+            if (auto* trainer_mgr = services().trainerOrNull();
+                trainer_mgr && trainer_mgr->isRunning() && !trainer_mgr->isTrainerPaused()) {
+                trainer_mgr->pauseTrainingTemporary();
                 training_was_paused_by_camera_ = true;
             }
         } else {
@@ -2979,7 +2979,7 @@ namespace lfs::vis {
             if (training_was_paused_by_camera_ && services().trainerOrNull() && services().trainerOrNull()->isRunning()) {
                 services().trainerOrNull()->resumeTrainingTemporary();
                 training_was_paused_by_camera_ = false;
-                LOG_INFO("Camera movement stopped - resuming training temporarily");
+                LOG_DEBUG("Camera movement stopped - resumed temporary training pause");
             }
         }
     }
