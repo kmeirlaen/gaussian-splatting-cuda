@@ -1196,6 +1196,7 @@ namespace lfs::vis {
                 .sh0 = tensor_ptr(sh0),
                 .shn = tensor_ptr(shn),
                 .deleted = deleted_ptr_src ? tensor_ptr(*deleted_ptr_src) : nullptr,
+                .deleted_version = splat_data.deleted_mask_version(),
                 .means_bytes = tensor_bytes(means),
                 .scaling_bytes = tensor_bytes(scaling),
                 .rotation_bytes = tensor_bytes(rotation),

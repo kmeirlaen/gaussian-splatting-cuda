@@ -468,6 +468,7 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     constexpr std::size_t n = 5;
     SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0x51AFu);
     auto splat = buildSplatData(in);
+    const std::uint64_t initial_version = splat->deleted_mask_version();
 
     const auto first_mask = Tensor::from_vector(
                                 std::vector<int>{0, 1, 0, 0, 0},
@@ -479,6 +480,8 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     ASSERT_TRUE(splat->has_deleted_mask());
     const void* const deleted_ptr = splat->deleted().data_ptr();
     ASSERT_NE(deleted_ptr, nullptr);
+    EXPECT_GT(splat->deleted_mask_version(), initial_version);
+    const std::uint64_t first_version = splat->deleted_mask_version();
     EXPECT_EQ(splat->deleted().cpu().to_vector_bool(),
               (std::vector<bool>{false, true, false, false, false}));
 
@@ -490,6 +493,8 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     splat->soft_delete(second_mask);
 
     EXPECT_EQ(splat->deleted().data_ptr(), deleted_ptr);
+    EXPECT_GT(splat->deleted_mask_version(), first_version);
+    const std::uint64_t second_version = splat->deleted_mask_version();
     EXPECT_EQ(splat->deleted().cpu().to_vector_bool(),
               (std::vector<bool>{false, true, true, false, true}));
 
@@ -501,6 +506,7 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     splat->undelete(undelete_mask);
 
     EXPECT_EQ(splat->deleted().data_ptr(), deleted_ptr);
+    EXPECT_GT(splat->deleted_mask_version(), second_version);
     EXPECT_EQ(splat->deleted().cpu().to_vector_bool(),
               (std::vector<bool>{false, false, true, false, false}));
 }
