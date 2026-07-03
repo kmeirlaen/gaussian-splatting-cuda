@@ -280,12 +280,12 @@ namespace lfs::vis {
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::captureViewportImage() {
-        if (auto image = getViewportImageIfAvailable()) {
-            return image;
-        }
-
         if (viewport_artifact_service_.hasLazyCapture()) {
             return viewport_artifact_service_.resolveLazyCapture();
+        }
+
+        if (auto image = getViewportImageIfAvailable()) {
+            return image;
         }
 
         if (!engine_ || !viewport_artifact_service_.hasGpuFrame()) {

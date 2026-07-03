@@ -671,6 +671,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/icon/scene"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/fonts"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/themes"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/environments"
     COMMENT "Creating resource directory structure"
 )
 
@@ -725,6 +726,14 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes"
         "${RESOURCE_DIR}/assets/themes"
     COMMENT "Copying themes"
+)
+
+# Copy bundled environment maps
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/environments"
+        "${RESOURCE_DIR}/assets/environments"
+    COMMENT "Copying environment maps"
 )
 
 # Copy additional assets (logo, splash images, etc.)

@@ -65,7 +65,6 @@ namespace lfs::python {
             const auto layout = rendering::detectImageLayout(image);
             if (layout == rendering::ImageLayout::Unknown)
                 return std::nullopt;
-            image = rendering::flipImageVertical(image, layout);
             if (layout == rendering::ImageLayout::CHW) {
                 image = image.permute({1, 2, 0});
             } else {

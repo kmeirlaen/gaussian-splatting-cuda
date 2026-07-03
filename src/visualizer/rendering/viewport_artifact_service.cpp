@@ -67,6 +67,7 @@ namespace lfs::vis {
     void ViewportArtifactService::invalidateCapture() {
         captured_image_.reset();
         captured_artifact_generation_ = 0;
+        captured_image_from_lazy_capture_ = false;
         ++artifact_generation_;
         if (artifact_generation_ == 0) {
             artifact_generation_ = 1;
@@ -110,8 +111,14 @@ namespace lfs::vis {
     }
 
     void ViewportArtifactService::storeCapturedImage(std::shared_ptr<lfs::core::Tensor> image) {
+        storeCapturedImage(std::move(image), false);
+    }
+
+    void ViewportArtifactService::storeCapturedImage(std::shared_ptr<lfs::core::Tensor> image,
+                                                     const bool from_lazy_capture) {
         captured_image_ = std::move(image);
         captured_artifact_generation_ = captured_image_ ? artifact_generation_ : 0;
+        captured_image_from_lazy_capture_ = captured_image_ && from_lazy_capture;
     }
 
     void ViewportArtifactService::setLazyCapture(LazyCaptureFn fn,
@@ -124,15 +131,27 @@ namespace lfs::vis {
         lazy_capture_ = std::move(fn);
     }
 
+    void ViewportArtifactService::setLazyCaptureForCurrentOutput(
+        LazyCaptureFn fn,
+        const lfs::rendering::FrameMetadata& metadata,
+        const glm::ivec2& rendered_size) {
+        metadata_ = makeCachedRenderMetadata(metadata);
+        gpu_frame_.reset();
+        rendered_size_ = rendered_size;
+        captured_image_from_lazy_capture_ = false;
+        lazy_capture_ = std::move(fn);
+    }
+
     std::shared_ptr<lfs::core::Tensor> ViewportArtifactService::resolveLazyCapture() {
         if (!lazy_capture_) {
             return {};
         }
-        if (captured_image_ && captured_artifact_generation_ == artifact_generation_) {
+        if (captured_image_ && captured_artifact_generation_ == artifact_generation_ &&
+            captured_image_from_lazy_capture_) {
             return captured_image_;
         }
         auto image = lazy_capture_();
-        storeCapturedImage(image);
+        storeCapturedImage(image, true);
         return image;
     }
 

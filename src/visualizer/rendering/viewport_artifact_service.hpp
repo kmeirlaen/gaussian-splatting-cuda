@@ -53,6 +53,9 @@ namespace lfs::vis {
         void setLazyCapture(LazyCaptureFn fn,
                             const lfs::rendering::FrameMetadata& metadata,
                             const glm::ivec2& rendered_size);
+        void setLazyCaptureForCurrentOutput(LazyCaptureFn fn,
+                                            const lfs::rendering::FrameMetadata& metadata,
+                                            const glm::ivec2& rendered_size);
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> resolveLazyCapture();
         [[nodiscard]] bool hasLazyCapture() const { return static_cast<bool>(lazy_capture_); }
 
@@ -64,12 +67,14 @@ namespace lfs::vis {
 
     private:
         void invalidateCapture();
+        void storeCapturedImage(std::shared_ptr<lfs::core::Tensor> image, bool from_lazy_capture);
         CachedRenderMetadata metadata_;
         std::optional<lfs::rendering::GpuFrame> gpu_frame_;
         glm::ivec2 rendered_size_{0};
         std::shared_ptr<lfs::core::Tensor> captured_image_;
         uint64_t artifact_generation_ = 1;
         uint64_t captured_artifact_generation_ = 0;
+        bool captured_image_from_lazy_capture_ = false;
         LazyCaptureFn lazy_capture_;
     };
 

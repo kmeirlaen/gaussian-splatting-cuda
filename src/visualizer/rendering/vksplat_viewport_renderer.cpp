@@ -4794,7 +4794,8 @@ namespace lfs::vis {
                                                     output.depth_image.image,
                                                     VK_IMAGE_ASPECT_COLOR_BIT,
                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkClearColorValue clear{{background.r, background.g, background.b, 1.0f}};
+            VkClearColorValue clear{
+                {background.r, background.g, background.b, transparent_background ? 0.0f : 1.0f}};
             VkClearColorValue depth_clear{{1.0e10f, 0.0f, 0.0f, 0.0f}};
             VkImageSubresourceRange range{};
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -5006,6 +5007,28 @@ namespace lfs::vis {
             lfs::core::DataType::Float32);
         if (!tensor.is_valid()) {
             return std::unexpected("VkSplat output readback failed to allocate CPU float RGB tensor");
+        }
+
+        auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
+        if (!ok) {
+            return std::unexpected(ok.error());
+        }
+        return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+    }
+
+    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
+    VksplatViewportRenderer::readOutputImageRgba(VulkanContext& context, const OutputSlot output_slot) const {
+        const auto size = latestOutputImageSize(output_slot);
+        if (!size) {
+            return std::unexpected(size.error());
+        }
+
+        auto tensor = lfs::core::Tensor::empty(
+            {static_cast<std::size_t>(size->y), static_cast<std::size_t>(size->x), std::size_t{4}},
+            lfs::core::Device::CPU,
+            lfs::core::DataType::Float32);
+        if (!tensor.is_valid()) {
+            return std::unexpected("VkSplat output readback failed to allocate CPU float RGBA tensor");
         }
 
         auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);

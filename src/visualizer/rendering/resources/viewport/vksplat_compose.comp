@@ -103,6 +103,11 @@ void main() {
     }
 
     if (pc.transparent_background != 0u) {
+        const bool empty = alpha < 0.02 || depth >= 1.0e9 || depth <= 0.0;
+        if (empty) {
+            imageStore(out_image, ivec2(gid), vec4(0.0));
+            return;
+        }
         const vec3 straight_rgb = alpha > 1e-6 ? state.rgb / alpha : vec3(0.0);
         imageStore(out_image, ivec2(gid), vec4(clamp(straight_rgb, vec3(0.0), vec3(1.0)), alpha));
         return;
