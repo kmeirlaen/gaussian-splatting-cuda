@@ -124,45 +124,6 @@ namespace lfs::io {
         const std::filesystem::path& filepath,
         const LoadOptions& options = {});
 
-    namespace detail {
-        struct ColmapPoint3DTrackElementData {
-            std::uint32_t image_id = 0;
-            std::uint32_t point2D_idx = 0;
-        };
-
-        enum class ColmapPoint3DTrackParseMode {
-            None,
-            CountOnly,
-            Full
-        };
-
-        struct ColmapPoint3DTextPointCloudData {
-            std::vector<float> positions;
-            std::vector<std::uint8_t> colors;
-            std::size_t point_count = 0;
-            std::size_t file_lines = 0;
-            std::uintmax_t byte_size = 0;
-        };
-
-        struct ColmapPoint3DTextRecordData {
-            std::uint64_t point3D_id = 0;
-            double xyz[3] = {0.0, 0.0, 0.0};
-            std::uint8_t color[3] = {255, 255, 255};
-            double error = 0.0;
-            std::size_t track_count = 0;
-            std::vector<ColmapPoint3DTrackElementData> track;
-        };
-
-        ColmapPoint3DTextPointCloudData parse_points3D_text_point_cloud_fast(
-            const std::filesystem::path& file_path,
-            const LoadOptions& options = {});
-
-        std::vector<ColmapPoint3DTextRecordData> parse_points3D_text_records_for_test(
-            const std::filesystem::path& file_path,
-            ColmapPoint3DTrackParseMode track_mode,
-            const LoadOptions& options = {});
-    } // namespace detail
-
     /**
      * @brief Read COLMAP cameras only (no image file validation required)
      * @param sparse_path Path to COLMAP sparse reconstruction folder

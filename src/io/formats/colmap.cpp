@@ -86,18 +86,6 @@ namespace lfs::io {
             Full
         };
 
-        TrackParseMode to_internal_track_parse_mode(const detail::ColmapPoint3DTrackParseMode mode) {
-            switch (mode) {
-            case detail::ColmapPoint3DTrackParseMode::None:
-                return TrackParseMode::None;
-            case detail::ColmapPoint3DTrackParseMode::CountOnly:
-                return TrackParseMode::CountOnly;
-            case detail::ColmapPoint3DTrackParseMode::Full:
-                return TrackParseMode::Full;
-            }
-            return TrackParseMode::Full;
-        }
-
         size_t count_remaining_track_pairs(const char* cur, const char* end) {
             size_t tokens = 0;
             bool in_token = false;
@@ -246,6 +234,14 @@ namespace lfs::io {
     };
 
     namespace {
+        struct Point3DTextPointCloudData {
+            std::vector<float> positions;
+            std::vector<std::uint8_t> colors;
+            std::size_t point_count = 0;
+            std::size_t file_lines = 0;
+            std::uintmax_t byte_size = 0;
+        };
+
         bool parse_point3D_header(const std::string_view line,
                                   Point3DData& point,
                                   const char*& cur,
@@ -1458,46 +1454,14 @@ namespace lfs::io {
         return points;
     }
 
-    std::vector<detail::ColmapPoint3DTextRecordData> detail::parse_points3D_text_records_for_test(
-        const std::filesystem::path& file_path,
-        const ColmapPoint3DTrackParseMode track_mode,
-        const LoadOptions& options) {
-        auto internal_records = read_point3D_text_records(file_path, options, to_internal_track_parse_mode(track_mode));
-        std::vector<ColmapPoint3DTextRecordData> records;
-        records.reserve(internal_records.size());
-
-        for (const auto& point : internal_records) {
-            ColmapPoint3DTextRecordData record;
-            record.point3D_id = point.point3D_id;
-            record.xyz[0] = point.xyz[0];
-            record.xyz[1] = point.xyz[1];
-            record.xyz[2] = point.xyz[2];
-            record.color[0] = point.color[0];
-            record.color[1] = point.color[1];
-            record.color[2] = point.color[2];
-            record.error = point.error;
-            record.track_count = point.track_count;
-            record.track.reserve(point.track.size());
-            for (const auto& track : point.track) {
-                record.track.push_back(ColmapPoint3DTrackElementData{
-                    .image_id = track.image_id,
-                    .point2D_idx = track.point2D_idx,
-                });
-            }
-            records.push_back(std::move(record));
-        }
-
-        return records;
-    }
-
-    detail::ColmapPoint3DTextPointCloudData detail::parse_points3D_text_point_cloud_fast(
+    static Point3DTextPointCloudData parse_points3D_text_point_cloud_fast(
         const std::filesystem::path& file_path,
         const LoadOptions& options) {
         const auto start = std::chrono::high_resolution_clock::now();
         std::error_code file_size_ec;
         const auto byte_size = fs::file_size(file_path, file_size_ec);
 
-        detail::ColmapPoint3DTextPointCloudData data;
+        Point3DTextPointCloudData data;
         data.byte_size = file_size_ec ? 0 : byte_size;
 
         auto buffer = read_binary(file_path);
@@ -1578,7 +1542,7 @@ namespace lfs::io {
     PointCloud read_point3D_text(const std::filesystem::path& file_path,
                                  const LoadOptions& options = {}) {
         LOG_TIMER_TRACE("Read points3D.txt point cloud");
-        auto data = detail::parse_points3D_text_point_cloud_fast(file_path, options);
+        auto data = parse_points3D_text_point_cloud_fast(file_path, options);
 
         Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::CUDA);
         Tensor colors_tensor = Tensor::from_blob(data.colors.data(), {data.point_count, 3}, Device::CPU, DataType::UInt8)
