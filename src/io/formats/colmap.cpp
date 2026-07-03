@@ -75,6 +75,39 @@ namespace lfs::io {
             return true;
         }
 
+        enum class TrackParseMode {
+            None,
+            CountOnly,
+            Full
+        };
+
+        TrackParseMode to_internal_track_parse_mode(const detail::ColmapPoint3DTrackParseMode mode) {
+            switch (mode) {
+            case detail::ColmapPoint3DTrackParseMode::None:
+                return TrackParseMode::None;
+            case detail::ColmapPoint3DTrackParseMode::CountOnly:
+                return TrackParseMode::CountOnly;
+            case detail::ColmapPoint3DTrackParseMode::Full:
+                return TrackParseMode::Full;
+            }
+            return TrackParseMode::Full;
+        }
+
+        size_t count_remaining_track_pairs(const char* cur, const char* end) {
+            size_t tokens = 0;
+            bool in_token = false;
+            while (cur < end) {
+                if (*cur == ' ' || *cur == '\t') {
+                    in_token = false;
+                } else if (!in_token) {
+                    in_token = true;
+                    ++tokens;
+                }
+                ++cur;
+            }
+            return tokens / 2;
+        }
+
         template <typename LineFn>
         size_t for_each_data_line(std::span<const char> buffer,
                                   const LoadOptions& options,
@@ -170,6 +203,7 @@ namespace lfs::io {
         double xyz[3] = {0.0, 0.0, 0.0};
         uint8_t color[3] = {255, 255, 255};
         double error = 0.0;
+        size_t track_count = 0;
         std::vector<Point3DTrackElement> track;
     };
 
@@ -796,6 +830,7 @@ namespace lfs::io {
 
             point.error = read_f64(cur);
             const uint64_t track_len = read_u64(cur);
+            point.track_count = static_cast<size_t>(track_len);
             point.track.reserve(track_len);
             for (uint64_t j = 0; j < track_len; ++j) {
                 Point3DTrackElement track;
@@ -852,7 +887,7 @@ namespace lfs::io {
         if (min_track_length > 0) {
             const auto min_track = static_cast<size_t>(min_track_length);
             std::erase_if(points, [min_track](const Point3DData& point) {
-                return point.track.size() < min_track;
+                return point.track_count < min_track;
             });
             result.points_after_filtering = points.size();
         }
@@ -1212,52 +1247,21 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     std::vector<Point3DData> read_point3D_text_records(const std::filesystem::path& file_path,
                                                        const LoadOptions& options = {},
-                                                       const bool parse_tracks = true) {
+                                                       const TrackParseMode track_mode = TrackParseMode::Full) {
         LOG_TIMER_TRACE("Read points3D.txt");
-        auto lines = read_text_file(file_path, options);
+        auto buffer = read_binary(file_path);
         const auto parse_start = std::chrono::high_resolution_clock::now();
-        uint64_t N = lines.size();
-        LOG_DEBUG("Reading {} 3D points from text file", N);
 
         std::vector<Point3DData> points;
-        points.reserve(N);
+        points.reserve(std::max<size_t>(buffer->size() / 96, 1));
         size_t total_track_elements = 0;
+        size_t file_lines = 0;
 
-        for (uint64_t i = 0; i < N; ++i) {
-            if (should_poll_cancel(static_cast<size_t>(i))) {
-                throw_if_load_cancel_requested(options, "COLMAP point cloud parse cancelled");
-            }
-            const auto& line = lines[i];
-
-            if (parse_tracks) {
-                const auto tokens = split_string(line, ' ');
-
-                if (tokens.size() < 8) {
-                    LOG_ERROR("Invalid format in points3D.txt: {}", line);
-                    throw std::runtime_error("Invalid format in points3D.txt");
-                }
-
-                Point3DData point;
-                point.point3D_id = std::stoull(tokens[0]);
-                point.xyz[0] = std::stod(tokens[1]);
-                point.xyz[1] = std::stod(tokens[2]);
-                point.xyz[2] = std::stod(tokens[3]);
-
-                point.color[0] = static_cast<uint8_t>(std::stoi(tokens[4]));
-                point.color[1] = static_cast<uint8_t>(std::stoi(tokens[5]));
-                point.color[2] = static_cast<uint8_t>(std::stoi(tokens[6]));
-                point.error = std::stod(tokens[7]);
-
-                for (size_t j = 8; j + 1 < tokens.size(); j += 2) {
-                    point.track.push_back(Point3DTrackElement{
-                        .image_id = static_cast<uint32_t>(std::stoul(tokens[j])),
-                        .point2D_idx = static_cast<uint32_t>(std::stoul(tokens[j + 1])),
-                    });
-                    ++total_track_elements;
-                }
-
-                points.push_back(std::move(point));
-            } else {
+        file_lines = for_each_data_line(
+            std::span<const char>(*buffer),
+            options,
+            "COLMAP point cloud parse cancelled",
+            [&](const std::string_view line, size_t) {
                 const char* cur = line.data();
                 const char* end = cur + line.size();
 
@@ -1273,23 +1277,80 @@ namespace lfs::io {
                     !parse_next_number(cur, end, green) ||
                     !parse_next_number(cur, end, blue) ||
                     !parse_next_number(cur, end, point.error)) {
-                    LOG_ERROR("Invalid format in points3D.txt: {}", line);
+                    LOG_ERROR("Invalid format in points3D.txt: {}", std::string(line));
                     throw std::runtime_error("Invalid format in points3D.txt");
                 }
 
                 point.color[0] = static_cast<uint8_t>(red);
                 point.color[1] = static_cast<uint8_t>(green);
                 point.color[2] = static_cast<uint8_t>(blue);
-                points.push_back(std::move(point));
-            }
-        }
 
-        LOG_INFO("[COLMAP_LOAD] parse points3D.txt points={} track_elements={} parse_tracks={} elapsed_ms={:.2f}",
+                if (track_mode == TrackParseMode::CountOnly) {
+                    point.track_count = count_remaining_track_pairs(cur, end);
+                    total_track_elements += point.track_count;
+                } else if (track_mode == TrackParseMode::Full) {
+                    const size_t estimated_pairs = static_cast<size_t>(std::max<std::ptrdiff_t>((end - cur) / 12, 0));
+                    point.track.reserve(estimated_pairs);
+                    while (true) {
+                        Point3DTrackElement track;
+                        if (!parse_next_number(cur, end, track.image_id)) {
+                            break;
+                        }
+                        if (!parse_next_number(cur, end, track.point2D_idx)) {
+                            break;
+                        }
+                        point.track.push_back(track);
+                    }
+                    point.track_count = point.track.size();
+                    total_track_elements += point.track_count;
+                }
+
+                points.push_back(std::move(point));
+            });
+        buffer.reset();
+
+        LOG_DEBUG("Reading {} 3D points from text file", points.size());
+        const char* mode_name = track_mode == TrackParseMode::Full ? "full" : (track_mode == TrackParseMode::CountOnly ? "count_only" : "none");
+        LOG_INFO("[COLMAP_LOAD] parse points3D.txt points={} track_elements={} parse_tracks={} mode={} file_lines={} elapsed_ms={:.2f}",
                  points.size(),
                  total_track_elements,
-                 parse_tracks,
+                 track_mode == TrackParseMode::Full,
+                 mode_name,
+                 file_lines,
                  elapsed_ms(parse_start));
         return points;
+    }
+
+    std::vector<detail::ColmapPoint3DTextRecordData> detail::parse_points3D_text_records_for_test(
+        const std::filesystem::path& file_path,
+        const ColmapPoint3DTrackParseMode track_mode,
+        const LoadOptions& options) {
+        auto internal_records = read_point3D_text_records(file_path, options, to_internal_track_parse_mode(track_mode));
+        std::vector<ColmapPoint3DTextRecordData> records;
+        records.reserve(internal_records.size());
+
+        for (const auto& point : internal_records) {
+            ColmapPoint3DTextRecordData record;
+            record.point3D_id = point.point3D_id;
+            record.xyz[0] = point.xyz[0];
+            record.xyz[1] = point.xyz[1];
+            record.xyz[2] = point.xyz[2];
+            record.color[0] = point.color[0];
+            record.color[1] = point.color[1];
+            record.color[2] = point.color[2];
+            record.error = point.error;
+            record.track_count = point.track_count;
+            record.track.reserve(point.track.size());
+            for (const auto& track : point.track) {
+                record.track.push_back(ColmapPoint3DTrackElementData{
+                    .image_id = track.image_id,
+                    .point2D_idx = track.point2D_idx,
+                });
+            }
+            records.push_back(std::move(record));
+        }
+
+        return records;
     }
 
     detail::ColmapPoint3DTextPointCloudData detail::parse_points3D_text_point_cloud_fast(
@@ -2365,7 +2426,7 @@ namespace lfs::io {
         LOG_TIMER_TRACE("Read COLMAP point cloud (text)");
         fs::path points3d_file = get_sparse_file_path(filepath, "points3D.txt");
         return point3D_records_to_point_cloud_with_stats(
-            read_point3D_text_records(points3d_file, options, true),
+            read_point3D_text_records(points3d_file, options, TrackParseMode::CountOnly),
             options);
     }
 
