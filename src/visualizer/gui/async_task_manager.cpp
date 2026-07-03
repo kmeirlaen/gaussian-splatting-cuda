@@ -417,6 +417,8 @@ namespace lfs::vis::gui {
         }
 
         auto frame = *image;
+        // Preview readbacks currently arrive as uint8 HWC and need normalization;
+        // float preview tensors are expected to already be in normalized color space.
         const bool normalize_uint8 = frame.dtype() == lfs::core::DataType::UInt8;
         if (frame.dtype() != lfs::core::DataType::Float32) {
             frame = frame.to(lfs::core::DataType::Float32);

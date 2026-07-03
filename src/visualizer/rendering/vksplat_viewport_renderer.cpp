@@ -4794,8 +4794,9 @@ namespace lfs::vis {
                                                     output.depth_image.image,
                                                     VK_IMAGE_ASPECT_COLOR_BIT,
                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkClearColorValue clear{
-                {background.r, background.g, background.b, transparent_background ? 0.0f : 1.0f}};
+            VkClearColorValue clear = transparent_background
+                                          ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}
+                                          : VkClearColorValue{{background.r, background.g, background.b, 1.0f}};
             VkClearColorValue depth_clear{{1.0e10f, 0.0f, 0.0f, 0.0f}};
             VkImageSubresourceRange range{};
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
