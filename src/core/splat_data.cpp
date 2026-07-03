@@ -864,10 +864,11 @@ namespace lfs::core {
             _deleted.set_name("splat.deleted_mask");
         }
 
+        const Tensor newly_deleted = mask && _deleted.logical_not();
         const Tensor updated = _deleted || mask;
         _deleted.copy_from(updated);
         _deleted_mask_version.fetch_add(1, std::memory_order_relaxed);
-        return mask;
+        return newly_deleted;
     }
 
     void SplatData::undelete(const Tensor& mask) {

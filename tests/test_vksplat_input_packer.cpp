@@ -475,26 +475,30 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
                                 {n},
                                 Device::CUDA)
                                 .to(DataType::Bool);
-    splat->soft_delete(first_mask);
+    const Tensor first_newly_deleted = splat->soft_delete(first_mask);
 
     ASSERT_TRUE(splat->has_deleted_mask());
     const void* const deleted_ptr = splat->deleted().data_ptr();
     ASSERT_NE(deleted_ptr, nullptr);
     EXPECT_GT(splat->deleted_mask_version(), initial_version);
     const std::uint64_t first_version = splat->deleted_mask_version();
+    EXPECT_EQ(first_newly_deleted.cpu().to_vector_bool(),
+              (std::vector<bool>{false, true, false, false, false}));
     EXPECT_EQ(splat->deleted().cpu().to_vector_bool(),
               (std::vector<bool>{false, true, false, false, false}));
 
     const auto second_mask = Tensor::from_vector(
-                                 std::vector<int>{0, 0, 1, 0, 1},
+                                 std::vector<int>{0, 1, 1, 0, 1},
                                  {n},
                                  Device::CUDA)
                                  .to(DataType::Bool);
-    splat->soft_delete(second_mask);
+    const Tensor second_newly_deleted = splat->soft_delete(second_mask);
 
     EXPECT_EQ(splat->deleted().data_ptr(), deleted_ptr);
     EXPECT_GT(splat->deleted_mask_version(), first_version);
     const std::uint64_t second_version = splat->deleted_mask_version();
+    EXPECT_EQ(second_newly_deleted.cpu().to_vector_bool(),
+              (std::vector<bool>{false, false, true, false, true}));
     EXPECT_EQ(splat->deleted().cpu().to_vector_bool(),
               (std::vector<bool>{false, true, true, false, true}));
 

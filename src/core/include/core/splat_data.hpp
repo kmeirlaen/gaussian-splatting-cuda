@@ -314,7 +314,7 @@ namespace lfs::core {
         void remap_frozen_ranges_after_keep(size_t old_size, const std::vector<int>& kept_old_indices);
         void remap_frozen_ranges_after_keep(size_t old_size, const std::vector<int64_t>& kept_old_indices);
 
-        // Mark gaussians as deleted, returns previous state for undo
+        // Mark gaussians as deleted, returns newly deleted mask for undo
         Tensor soft_delete(const Tensor& mask);
         void undelete(const Tensor& mask);
         void clear_deleted();
