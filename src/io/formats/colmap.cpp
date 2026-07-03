@@ -20,8 +20,10 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <vector>
@@ -52,7 +54,7 @@ namespace lfs::io {
         }
 
         void skip_ascii_spaces(const char*& cur, const char* end) {
-            while (cur < end && std::isspace(static_cast<unsigned char>(*cur))) {
+            while (cur < end && (*cur == ' ' || *cur == '\t')) {
                 ++cur;
             }
         }
@@ -71,6 +73,39 @@ namespace lfs::io {
 
             cur = parsed.ptr;
             return true;
+        }
+
+        template <typename LineFn>
+        size_t for_each_data_line(std::span<const char> buffer,
+                                  const LoadOptions& options,
+                                  const char* cancel_msg,
+                                  LineFn&& fn) {
+            const char* cur = buffer.data();
+            const char* end = cur + buffer.size();
+            size_t line_count = 0;
+
+            while (cur < end) {
+                if (should_poll_cancel(line_count)) {
+                    throw_if_load_cancel_requested(options, cancel_msg);
+                }
+
+                const char* line_begin = cur;
+                const void* newline = std::memchr(cur, '\n', static_cast<size_t>(end - cur));
+                const char* line_end = newline ? static_cast<const char*>(newline) : end;
+                cur = newline ? line_end + 1 : end;
+                ++line_count;
+
+                if (line_end > line_begin && *(line_end - 1) == '\r') {
+                    --line_end;
+                }
+                if (line_begin == line_end || *line_begin == '#') {
+                    continue;
+                }
+
+                fn(std::string_view(line_begin, static_cast<size_t>(line_end - line_begin)), line_count);
+            }
+
+            return line_count;
         }
     } // namespace
 
@@ -1257,53 +1292,33 @@ namespace lfs::io {
         return points;
     }
 
-    PointCloud read_point3D_text(const std::filesystem::path& file_path,
-                                 const LoadOptions& options = {}) {
-        LOG_TIMER_TRACE("Read points3D.txt point cloud");
+    detail::ColmapPoint3DTextPointCloudData detail::parse_points3D_text_point_cloud_fast(
+        const std::filesystem::path& file_path,
+        const LoadOptions& options) {
         const auto start = std::chrono::high_resolution_clock::now();
         std::error_code file_size_ec;
         const auto byte_size = fs::file_size(file_path, file_size_ec);
 
-        std::ifstream file;
-        if (!lfs::core::open_file_for_read(file_path, file)) {
-            LOG_ERROR("Failed to open text file: {}", lfs::core::path_to_utf8(file_path));
-            throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(file_path));
-        }
-
-        std::vector<float> positions;
-        std::vector<uint8_t> colors;
+        detail::ColmapPoint3DTextPointCloudData data;
+        data.byte_size = file_size_ec ? 0 : byte_size;
         if (!file_size_ec) {
             const auto estimated_points = static_cast<size_t>(std::max<uintmax_t>(byte_size / 96, 1));
-            positions.reserve(estimated_points * 3);
-            colors.reserve(estimated_points * 3);
+            data.positions.reserve(estimated_points * 3);
+            data.colors.reserve(estimated_points * 3);
         }
 
-        std::string line;
-        size_t line_count = 0;
-        size_t point_count = 0;
-        while (std::getline(file, line)) {
-            if (should_poll_cancel(line_count)) {
-                throw_if_load_cancel_requested(options, "COLMAP point cloud parse cancelled");
-            }
-            ++line_count;
-
-            if (line.starts_with("#")) {
-                continue;
-            }
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (line.empty()) {
-                continue;
-            }
-
+        auto buffer = read_binary(file_path);
+        data.file_lines = for_each_data_line(
+            std::span<const char>(*buffer),
+            options,
+            "COLMAP point cloud parse cancelled",
+            [&](const std::string_view line, size_t) {
             const char* cur = line.data();
             const char* end = cur + line.size();
-
             uint64_t point_id = 0;
-            double x = 0.0;
-            double y = 0.0;
-            double z = 0.0;
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
             int red = 255;
             int green = 255;
             int blue = 255;
@@ -1316,34 +1331,43 @@ namespace lfs::io {
                 !parse_next_number(cur, end, green) ||
                 !parse_next_number(cur, end, blue) ||
                 !parse_next_number(cur, end, error)) {
-                LOG_ERROR("Invalid format in points3D.txt: {}", line);
+                LOG_ERROR("Invalid format in points3D.txt: {}", std::string(line));
                 throw std::runtime_error("Invalid format in points3D.txt");
             }
             (void)point_id;
             (void)error;
 
-            positions.push_back(static_cast<float>(x));
-            positions.push_back(static_cast<float>(y));
-            positions.push_back(static_cast<float>(z));
-            colors.push_back(static_cast<uint8_t>(red));
-            colors.push_back(static_cast<uint8_t>(green));
-            colors.push_back(static_cast<uint8_t>(blue));
-            ++point_count;
-        }
+            data.positions.push_back(x);
+            data.positions.push_back(y);
+            data.positions.push_back(z);
+            data.colors.push_back(static_cast<uint8_t>(red));
+            data.colors.push_back(static_cast<uint8_t>(green));
+            data.colors.push_back(static_cast<uint8_t>(blue));
+            ++data.point_count;
+        });
+        buffer.reset();
 
-        if (point_count == 0) {
+        if (data.point_count == 0) {
             LOG_ERROR("No valid points found in {}", lfs::core::path_to_utf8(file_path));
             throw std::runtime_error("No valid points in points3D.txt");
         }
 
         LOG_INFO("[COLMAP_LOAD] parse points3D.txt point_cloud_fast points={} file_lines={} bytes={} elapsed_ms={:.2f}",
-                 point_count,
-                 line_count,
+                 data.point_count,
+                 data.file_lines,
                  file_size_ec ? std::string("unknown") : std::format("{}", byte_size),
                  elapsed_ms(start));
 
-        Tensor means = Tensor::from_vector(positions, {point_count, 3}, Device::CUDA);
-        Tensor colors_tensor = Tensor::from_blob(colors.data(), {point_count, 3}, Device::CPU, DataType::UInt8)
+        return data;
+    }
+
+    PointCloud read_point3D_text(const std::filesystem::path& file_path,
+                                 const LoadOptions& options = {}) {
+        LOG_TIMER_TRACE("Read points3D.txt point cloud");
+        auto data = detail::parse_points3D_text_point_cloud_fast(file_path, options);
+
+        Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::CUDA);
+        Tensor colors_tensor = Tensor::from_blob(data.colors.data(), {data.point_count, 3}, Device::CPU, DataType::UInt8)
                                    .to(Device::CUDA)
                                    .contiguous();
 

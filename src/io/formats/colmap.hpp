@@ -10,6 +10,7 @@
 #include "io/error.hpp"
 #include "io/loader.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
@@ -122,6 +123,20 @@ namespace lfs::io {
     ColmapPointCloudLoadStats read_colmap_point_cloud_text_with_stats(
         const std::filesystem::path& filepath,
         const LoadOptions& options = {});
+
+    namespace detail {
+        struct ColmapPoint3DTextPointCloudData {
+            std::vector<float> positions;
+            std::vector<std::uint8_t> colors;
+            std::size_t point_count = 0;
+            std::size_t file_lines = 0;
+            std::uintmax_t byte_size = 0;
+        };
+
+        ColmapPoint3DTextPointCloudData parse_points3D_text_point_cloud_fast(
+            const std::filesystem::path& file_path,
+            const LoadOptions& options = {});
+    } // namespace detail
 
     /**
      * @brief Read COLMAP cameras only (no image file validation required)
