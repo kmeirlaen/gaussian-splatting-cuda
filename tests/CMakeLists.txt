@@ -120,6 +120,7 @@ set(TEST_FILES
     test_mrnf_strategy.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
+    test_training_cropbox_mask.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp

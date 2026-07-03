@@ -101,6 +101,7 @@ set(TRAINING_NEW_SOURCES
     metrics/metrics.cpp
         checkpoint.cpp
         progress.cpp
+        training_cropbox_mask.cpp
         trainer.cpp
     training_setup.cpp
 )
