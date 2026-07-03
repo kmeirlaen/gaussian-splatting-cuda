@@ -111,6 +111,18 @@ TEST(ColmapPoints3DText, FastPathThrowsOnEmptyOrCommentOnlyFile) {
         std::runtime_error);
 }
 
+TEST(ColmapPoints3DText, RecordPathThrowsOnEmptyOrCommentOnlyFile) {
+    const auto path = write_points3d_fixture(
+        "empty_records_points3D.txt",
+        "# only comments\n\n# still no points\n");
+
+    EXPECT_THROW(
+        (void)lfs::io::detail::parse_points3D_text_records_for_test(
+            path,
+            lfs::io::detail::ColmapPoint3DTrackParseMode::CountOnly),
+        std::runtime_error);
+}
+
 TEST(ColmapPoints3DText, RecordFullModeParsesTracksExactly) {
     const auto path = write_points3d_fixture(
         "full_tracks_points3D.txt",
@@ -158,6 +170,34 @@ TEST(ColmapPoints3DText, RecordCountOnlyMatchesFullTrackCounts) {
     EXPECT_TRUE(count_only[1].track.empty());
 }
 
+TEST(ColmapPoints3DText, RecordModesIgnoreDanglingOddTrackTokenConsistently) {
+    const auto path = write_points3d_fixture(
+        "dangling_track_token_points3D.txt",
+        "15 0 0 0 1 2 3 0.0 10 20 30\n");
+
+    const auto full = lfs::io::detail::parse_points3D_text_records_for_test(
+        path,
+        lfs::io::detail::ColmapPoint3DTrackParseMode::Full);
+    const auto count_only = lfs::io::detail::parse_points3D_text_records_for_test(
+        path,
+        lfs::io::detail::ColmapPoint3DTrackParseMode::CountOnly);
+    const auto none = lfs::io::detail::parse_points3D_text_records_for_test(
+        path,
+        lfs::io::detail::ColmapPoint3DTrackParseMode::None);
+
+    ASSERT_EQ(full.size(), 1u);
+    ASSERT_EQ(count_only.size(), 1u);
+    ASSERT_EQ(none.size(), 1u);
+    EXPECT_EQ(full[0].track_count, 1u);
+    ASSERT_EQ(full[0].track.size(), 1u);
+    EXPECT_EQ(full[0].track[0].image_id, 10u);
+    EXPECT_EQ(full[0].track[0].point2D_idx, 20u);
+    EXPECT_EQ(count_only[0].track_count, full[0].track_count);
+    EXPECT_TRUE(count_only[0].track.empty());
+    EXPECT_EQ(none[0].track_count, 0u);
+    EXPECT_TRUE(none[0].track.empty());
+}
+
 TEST(ColmapPoints3DText, RecordNoneModeLeavesTrackCountZero) {
     const auto path = write_points3d_fixture(
         "none_tracks_points3D.txt",
@@ -176,6 +216,34 @@ TEST(ColmapPoints3DText, RecordPathThrowsOnMalformedHeader) {
         "malformed_record_points3D.txt",
         "14 0 0 0 1 2 3\n");
 
+    EXPECT_THROW(
+        (void)lfs::io::detail::parse_points3D_text_records_for_test(
+            path,
+            lfs::io::detail::ColmapPoint3DTrackParseMode::CountOnly),
+        std::runtime_error);
+}
+
+TEST(ColmapPoints3DText, ParallelPathThrowsOnMalformedLineInLaterChunk) {
+    std::ostringstream contents;
+    contents << "# generated large malformed fixture\n";
+    constexpr int kValidPrefixCount = 300000;
+    for (int i = 0; i < kValidPrefixCount; ++i) {
+        contents << i << ' '
+                 << static_cast<double>(i) * 0.5 << ' '
+                 << static_cast<double>(i) * -0.25 << ' '
+                 << static_cast<double>(i) * 0.125 << ' '
+                 << (i % 256) << ' '
+                 << ((i + 1) % 256) << ' '
+                 << ((i + 2) % 256) << " 0.0 "
+                 << i << ' ' << (i + 10) << ' '
+                 << (i + 20) << ' ' << (i + 30) << '\n';
+    }
+    contents << "bad malformed later chunk\n";
+
+    const auto path = write_points3d_fixture("large_parallel_malformed_points3D.txt", contents.str());
+    EXPECT_THROW(
+        (void)lfs::io::detail::parse_points3D_text_point_cloud_fast(path),
+        std::runtime_error);
     EXPECT_THROW(
         (void)lfs::io::detail::parse_points3D_text_records_for_test(
             path,

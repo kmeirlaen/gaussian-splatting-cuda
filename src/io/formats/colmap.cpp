@@ -1411,6 +1411,7 @@ namespace lfs::io {
 
             const auto chunks = split_line_aligned_chunks(std::span<const char>(*buffer));
             std::vector<RecordChunkResult> results(chunks.size());
+            // oneTBB propagates parse/cancellation exceptions to the caller and cancels sibling work.
             tbb::parallel_for(size_t{0}, chunks.size(), [&](const size_t chunk_index) {
                 const auto& chunk = chunks[chunk_index];
                 auto& result = results[chunk_index];
@@ -1439,6 +1440,11 @@ namespace lfs::io {
             }
         }
         buffer.reset();
+
+        if (points.empty()) {
+            LOG_ERROR("No valid points found in {}", lfs::core::path_to_utf8(file_path));
+            throw std::runtime_error("No valid points in points3D.txt");
+        }
 
         LOG_DEBUG("Reading {} 3D points from text file", points.size());
         const char* mode_name = track_mode == TrackParseMode::Full ? "full" : (track_mode == TrackParseMode::CountOnly ? "count_only" : "none");
@@ -1493,14 +1499,15 @@ namespace lfs::io {
 
         detail::ColmapPoint3DTextPointCloudData data;
         data.byte_size = file_size_ec ? 0 : byte_size;
-        if (!file_size_ec) {
-            const auto estimated_points = static_cast<size_t>(std::max<uintmax_t>(byte_size / 96, 1));
-            data.positions.reserve(estimated_points * 3);
-            data.colors.reserve(estimated_points * 3);
-        }
 
         auto buffer = read_binary(file_path);
         if (buffer->size() < POINTS3D_PARALLEL_MIN_BYTES) {
+            if (!file_size_ec) {
+                const auto estimated_points = static_cast<size_t>(std::max<uintmax_t>(byte_size / 96, 1));
+                data.positions.reserve(estimated_points * 3);
+                data.colors.reserve(estimated_points * 3);
+            }
+
             data.file_lines = for_each_data_line(
                 std::span<const char>(*buffer),
                 options,
@@ -1518,6 +1525,7 @@ namespace lfs::io {
 
             const auto chunks = split_line_aligned_chunks(std::span<const char>(*buffer));
             std::vector<PointCloudChunkResult> results(chunks.size());
+            // oneTBB propagates parse/cancellation exceptions to the caller and cancels sibling work.
             tbb::parallel_for(size_t{0}, chunks.size(), [&](const size_t chunk_index) {
                 const auto& chunk = chunks[chunk_index];
                 auto& result = results[chunk_index];
