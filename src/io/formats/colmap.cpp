@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <chrono>
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <span>
@@ -25,6 +27,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <tbb/parallel_for.h>
 #include <unordered_map>
 #include <vector>
 
@@ -42,6 +45,8 @@ namespace lfs::io {
     namespace {
         constexpr size_t CANCEL_POLL_INTERVAL = 64;
         constexpr size_t IMAGE_METADATA_PROBE_LIMIT = 8192;
+        constexpr size_t POINTS3D_PARALLEL_MIN_BYTES = 16ull * 1024ull * 1024ull;
+        constexpr size_t POINTS3D_TARGET_CHUNK_BYTES = 8ull * 1024ull * 1024ull;
 
         [[nodiscard]] bool should_poll_cancel(const size_t index) {
             return (index % CANCEL_POLL_INTERVAL) == 0;
@@ -106,6 +111,39 @@ namespace lfs::io {
                 ++cur;
             }
             return tokens / 2;
+        }
+
+        struct TextChunk {
+            const char* begin = nullptr;
+            const char* end = nullptr;
+        };
+
+        std::vector<TextChunk> split_line_aligned_chunks(std::span<const char> buffer,
+                                                         const size_t target_chunk_bytes = POINTS3D_TARGET_CHUNK_BYTES) {
+            std::vector<TextChunk> chunks;
+            if (buffer.empty()) {
+                return chunks;
+            }
+
+            const char* base = buffer.data();
+            const char* end = base + buffer.size();
+            const size_t nominal_chunks = std::max<size_t>(1, buffer.size() / std::max<size_t>(target_chunk_bytes, 1));
+            chunks.reserve(nominal_chunks + 1);
+
+            const char* chunk_begin = base;
+            while (chunk_begin < end) {
+                const char* nominal_end = chunk_begin + std::min<size_t>(target_chunk_bytes, static_cast<size_t>(end - chunk_begin));
+                const char* chunk_end = end;
+                if (nominal_end < end) {
+                    const void* newline = std::memchr(nominal_end, '\n', static_cast<size_t>(end - nominal_end));
+                    chunk_end = newline ? static_cast<const char*>(newline) + 1 : end;
+                }
+
+                chunks.push_back(TextChunk{.begin = chunk_begin, .end = chunk_end});
+                chunk_begin = chunk_end;
+            }
+
+            return chunks;
         }
 
         template <typename LineFn>
@@ -206,6 +244,103 @@ namespace lfs::io {
         size_t track_count = 0;
         std::vector<Point3DTrackElement> track;
     };
+
+    namespace {
+        bool parse_point3D_header(const std::string_view line,
+                                  Point3DData& point,
+                                  const char*& cur,
+                                  const char*& end) {
+            cur = line.data();
+            end = cur + line.size();
+            int red = 255;
+            int green = 255;
+            int blue = 255;
+            if (!parse_next_number(cur, end, point.point3D_id) ||
+                !parse_next_number(cur, end, point.xyz[0]) ||
+                !parse_next_number(cur, end, point.xyz[1]) ||
+                !parse_next_number(cur, end, point.xyz[2]) ||
+                !parse_next_number(cur, end, red) ||
+                !parse_next_number(cur, end, green) ||
+                !parse_next_number(cur, end, blue) ||
+                !parse_next_number(cur, end, point.error)) {
+                return false;
+            }
+
+            point.color[0] = static_cast<uint8_t>(red);
+            point.color[1] = static_cast<uint8_t>(green);
+            point.color[2] = static_cast<uint8_t>(blue);
+            return true;
+        }
+
+        void parse_point3D_record_line(const std::string_view line,
+                                       const TrackParseMode track_mode,
+                                       Point3DData& point,
+                                       size_t& total_track_elements) {
+            const char* cur = nullptr;
+            const char* end = nullptr;
+            if (!parse_point3D_header(line, point, cur, end)) {
+                LOG_ERROR("Invalid format in points3D.txt: {}", std::string(line));
+                throw std::runtime_error("Invalid format in points3D.txt");
+            }
+
+            if (track_mode == TrackParseMode::CountOnly) {
+                point.track_count = count_remaining_track_pairs(cur, end);
+                total_track_elements += point.track_count;
+            } else if (track_mode == TrackParseMode::Full) {
+                const size_t estimated_pairs = static_cast<size_t>(std::max<std::ptrdiff_t>((end - cur) / 12, 0));
+                point.track.reserve(estimated_pairs);
+                while (true) {
+                    Point3DTrackElement track;
+                    if (!parse_next_number(cur, end, track.image_id)) {
+                        break;
+                    }
+                    if (!parse_next_number(cur, end, track.point2D_idx)) {
+                        break;
+                    }
+                    point.track.push_back(track);
+                }
+                point.track_count = point.track.size();
+                total_track_elements += point.track_count;
+            }
+        }
+
+        void parse_point3D_point_cloud_line(const std::string_view line,
+                                            std::vector<float>& positions,
+                                            std::vector<uint8_t>& colors,
+                                            size_t& point_count) {
+            const char* cur = line.data();
+            const char* end = cur + line.size();
+            uint64_t point_id = 0;
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            int red = 255;
+            int green = 255;
+            int blue = 255;
+            double error = 0.0;
+            if (!parse_next_number(cur, end, point_id) ||
+                !parse_next_number(cur, end, x) ||
+                !parse_next_number(cur, end, y) ||
+                !parse_next_number(cur, end, z) ||
+                !parse_next_number(cur, end, red) ||
+                !parse_next_number(cur, end, green) ||
+                !parse_next_number(cur, end, blue) ||
+                !parse_next_number(cur, end, error)) {
+                LOG_ERROR("Invalid format in points3D.txt: {}", std::string(line));
+                throw std::runtime_error("Invalid format in points3D.txt");
+            }
+            (void)point_id;
+            (void)error;
+
+            positions.push_back(x);
+            positions.push_back(y);
+            positions.push_back(z);
+            colors.push_back(static_cast<uint8_t>(red));
+            colors.push_back(static_cast<uint8_t>(green));
+            colors.push_back(static_cast<uint8_t>(blue));
+            ++point_count;
+        }
+    } // namespace
 
     // -----------------------------------------------------------------------------
     //  Camera data structure (intermediate)
@@ -1252,61 +1387,57 @@ namespace lfs::io {
         auto buffer = read_binary(file_path);
         const auto parse_start = std::chrono::high_resolution_clock::now();
 
-        std::vector<Point3DData> points;
-        points.reserve(std::max<size_t>(buffer->size() / 96, 1));
         size_t total_track_elements = 0;
         size_t file_lines = 0;
+        std::vector<Point3DData> points;
 
-        file_lines = for_each_data_line(
-            std::span<const char>(*buffer),
-            options,
-            "COLMAP point cloud parse cancelled",
-            [&](const std::string_view line, size_t) {
-                const char* cur = line.data();
-                const char* end = cur + line.size();
-
+        if (buffer->size() < POINTS3D_PARALLEL_MIN_BYTES) {
+            points.reserve(std::max<size_t>(buffer->size() / 96, 1));
+            file_lines = for_each_data_line(
+                std::span<const char>(*buffer),
+                options,
+                "COLMAP point cloud parse cancelled",
+                [&](const std::string_view line, size_t) {
                 Point3DData point;
-                int red = 255;
-                int green = 255;
-                int blue = 255;
-                if (!parse_next_number(cur, end, point.point3D_id) ||
-                    !parse_next_number(cur, end, point.xyz[0]) ||
-                    !parse_next_number(cur, end, point.xyz[1]) ||
-                    !parse_next_number(cur, end, point.xyz[2]) ||
-                    !parse_next_number(cur, end, red) ||
-                    !parse_next_number(cur, end, green) ||
-                    !parse_next_number(cur, end, blue) ||
-                    !parse_next_number(cur, end, point.error)) {
-                    LOG_ERROR("Invalid format in points3D.txt: {}", std::string(line));
-                    throw std::runtime_error("Invalid format in points3D.txt");
-                }
-
-                point.color[0] = static_cast<uint8_t>(red);
-                point.color[1] = static_cast<uint8_t>(green);
-                point.color[2] = static_cast<uint8_t>(blue);
-
-                if (track_mode == TrackParseMode::CountOnly) {
-                    point.track_count = count_remaining_track_pairs(cur, end);
-                    total_track_elements += point.track_count;
-                } else if (track_mode == TrackParseMode::Full) {
-                    const size_t estimated_pairs = static_cast<size_t>(std::max<std::ptrdiff_t>((end - cur) / 12, 0));
-                    point.track.reserve(estimated_pairs);
-                    while (true) {
-                        Point3DTrackElement track;
-                        if (!parse_next_number(cur, end, track.image_id)) {
-                            break;
-                        }
-                        if (!parse_next_number(cur, end, track.point2D_idx)) {
-                            break;
-                        }
-                        point.track.push_back(track);
-                    }
-                    point.track_count = point.track.size();
-                    total_track_elements += point.track_count;
-                }
-
+                parse_point3D_record_line(line, track_mode, point, total_track_elements);
                 points.push_back(std::move(point));
             });
+        } else {
+            struct RecordChunkResult {
+                std::vector<Point3DData> points;
+                size_t file_lines = 0;
+                size_t track_elements = 0;
+            };
+
+            const auto chunks = split_line_aligned_chunks(std::span<const char>(*buffer));
+            std::vector<RecordChunkResult> results(chunks.size());
+            tbb::parallel_for(size_t{0}, chunks.size(), [&](const size_t chunk_index) {
+                const auto& chunk = chunks[chunk_index];
+                auto& result = results[chunk_index];
+                result.points.reserve(std::max<size_t>(static_cast<size_t>(chunk.end - chunk.begin) / 96, 1));
+                result.file_lines = for_each_data_line(
+                    std::span<const char>(chunk.begin, static_cast<size_t>(chunk.end - chunk.begin)),
+                    options,
+                    "COLMAP point cloud parse cancelled",
+                    [&](const std::string_view line, size_t) {
+                    Point3DData point;
+                    parse_point3D_record_line(line, track_mode, point, result.track_elements);
+                    result.points.push_back(std::move(point));
+                });
+            });
+
+            size_t total_points = 0;
+            for (const auto& result : results) {
+                total_points += result.points.size();
+                total_track_elements += result.track_elements;
+                file_lines += result.file_lines;
+            }
+
+            points.reserve(total_points);
+            for (auto& result : results) {
+                std::move(result.points.begin(), result.points.end(), std::back_inserter(points));
+            }
+        }
         buffer.reset();
 
         LOG_DEBUG("Reading {} 3D points from text file", points.size());
@@ -1369,43 +1500,57 @@ namespace lfs::io {
         }
 
         auto buffer = read_binary(file_path);
-        data.file_lines = for_each_data_line(
-            std::span<const char>(*buffer),
-            options,
-            "COLMAP point cloud parse cancelled",
-            [&](const std::string_view line, size_t) {
-            const char* cur = line.data();
-            const char* end = cur + line.size();
-            uint64_t point_id = 0;
-            float x = 0.0f;
-            float y = 0.0f;
-            float z = 0.0f;
-            int red = 255;
-            int green = 255;
-            int blue = 255;
-            double error = 0.0;
-            if (!parse_next_number(cur, end, point_id) ||
-                !parse_next_number(cur, end, x) ||
-                !parse_next_number(cur, end, y) ||
-                !parse_next_number(cur, end, z) ||
-                !parse_next_number(cur, end, red) ||
-                !parse_next_number(cur, end, green) ||
-                !parse_next_number(cur, end, blue) ||
-                !parse_next_number(cur, end, error)) {
-                LOG_ERROR("Invalid format in points3D.txt: {}", std::string(line));
-                throw std::runtime_error("Invalid format in points3D.txt");
-            }
-            (void)point_id;
-            (void)error;
+        if (buffer->size() < POINTS3D_PARALLEL_MIN_BYTES) {
+            data.file_lines = for_each_data_line(
+                std::span<const char>(*buffer),
+                options,
+                "COLMAP point cloud parse cancelled",
+                [&](const std::string_view line, size_t) {
+                parse_point3D_point_cloud_line(line, data.positions, data.colors, data.point_count);
+            });
+        } else {
+            struct PointCloudChunkResult {
+                std::vector<float> positions;
+                std::vector<uint8_t> colors;
+                size_t point_count = 0;
+                size_t file_lines = 0;
+            };
 
-            data.positions.push_back(x);
-            data.positions.push_back(y);
-            data.positions.push_back(z);
-            data.colors.push_back(static_cast<uint8_t>(red));
-            data.colors.push_back(static_cast<uint8_t>(green));
-            data.colors.push_back(static_cast<uint8_t>(blue));
-            ++data.point_count;
-        });
+            const auto chunks = split_line_aligned_chunks(std::span<const char>(*buffer));
+            std::vector<PointCloudChunkResult> results(chunks.size());
+            tbb::parallel_for(size_t{0}, chunks.size(), [&](const size_t chunk_index) {
+                const auto& chunk = chunks[chunk_index];
+                auto& result = results[chunk_index];
+                const auto estimated_points = std::max<size_t>(static_cast<size_t>(chunk.end - chunk.begin) / 96, 1);
+                result.positions.reserve(estimated_points * 3);
+                result.colors.reserve(estimated_points * 3);
+                result.file_lines = for_each_data_line(
+                    std::span<const char>(chunk.begin, static_cast<size_t>(chunk.end - chunk.begin)),
+                    options,
+                    "COLMAP point cloud parse cancelled",
+                    [&](const std::string_view line, size_t) {
+                    parse_point3D_point_cloud_line(line, result.positions, result.colors, result.point_count);
+                });
+            });
+
+            size_t total_position_values = 0;
+            size_t total_color_values = 0;
+            for (const auto& result : results) {
+                data.point_count += result.point_count;
+                data.file_lines += result.file_lines;
+                total_position_values += result.positions.size();
+                total_color_values += result.colors.size();
+            }
+
+            data.positions.clear();
+            data.colors.clear();
+            data.positions.reserve(total_position_values);
+            data.colors.reserve(total_color_values);
+            for (auto& result : results) {
+                std::move(result.positions.begin(), result.positions.end(), std::back_inserter(data.positions));
+                std::move(result.colors.begin(), result.colors.end(), std::back_inserter(data.colors));
+            }
+        }
         buffer.reset();
 
         if (data.point_count == 0) {
