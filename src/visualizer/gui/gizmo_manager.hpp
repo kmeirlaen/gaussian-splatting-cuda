@@ -37,6 +37,12 @@ namespace lfs::vis {
             Individual = 1
         };
 
+        constexpr MultiTransformMode normalizeMultiTransformMode(const MultiTransformMode mode) {
+            return mode == MultiTransformMode::Individual
+                       ? MultiTransformMode::Individual
+                       : MultiTransformMode::Group;
+        }
+
         class GizmoManager {
         public:
             explicit GizmoManager(VisualizerImpl* viewer);

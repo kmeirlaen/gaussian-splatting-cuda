@@ -549,8 +549,11 @@ namespace lfs::vis {
                 return gm ? static_cast<int>(gm->gizmo().getMultiTransformMode()) : 0;
             },
             [](int mode) {
-                if (auto* gm = python::get_gui_manager())
-                    gm->gizmo().setMultiTransformMode(static_cast<gui::MultiTransformMode>(mode));
+                if (auto* gm = python::get_gui_manager()) {
+                    const auto normalized_mode =
+                        gui::normalizeMultiTransformMode(static_cast<gui::MultiTransformMode>(mode));
+                    gm->gizmo().setMultiTransformMode(normalized_mode);
+                }
             });
         callback_cleanup_.add([] { python::set_multi_transform_mode_callbacks(nullptr, nullptr); });
         python::set_thumbnail_callbacks(

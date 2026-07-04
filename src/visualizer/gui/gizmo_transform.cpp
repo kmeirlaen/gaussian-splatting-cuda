@@ -103,7 +103,11 @@ namespace lfs::vis::gui {
             const glm::mat4& visualizer_delta,
             const TransformDeltaComposition composition) {
             std::vector<NodeLocalTransformResult> results;
-            const size_t count = std::min(target_names.size(), original_visualizer_world_transforms.size());
+            assert(target_names.size() == original_visualizer_world_transforms.size());
+            if (target_names.size() != original_visualizer_world_transforms.size()) {
+                return results;
+            }
+            const size_t count = target_names.size();
             results.reserve(count);
 
             for (size_t i = 0; i < count; ++i) {

@@ -6,6 +6,7 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "gui/gizmo_manager.hpp"
 #include "gui/gizmo_transform.hpp"
 #include "operation/ops/select_ops.hpp"
 #include "operation/ops/transform_ops.hpp"
@@ -506,6 +507,34 @@ TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoRequiresAllTargetsEditable) {
 
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), "selection contains locked nodes");
+}
+
+TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoInvalidModeFallsBackToGroup) {
+    EXPECT_EQ(
+        lfs::vis::gui::normalizeMultiTransformMode(lfs::vis::gui::MultiTransformMode::Individual),
+        lfs::vis::gui::MultiTransformMode::Individual);
+    EXPECT_EQ(
+        lfs::vis::gui::normalizeMultiTransformMode(static_cast<lfs::vis::gui::MultiTransformMode>(99)),
+        lfs::vis::gui::MultiTransformMode::Group);
+}
+
+TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoTransformHelpersRejectMismatchedSnapshots) {
+    add_node("first");
+    add_node("second");
+    scene_manager_->setNodeTransform("first", glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+    scene_manager_->setNodeTransform("second", glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+
+    const std::vector<std::string> names{"first", "second"};
+    const auto originals = capture_visualizer_world_transforms({"first"});
+    const glm::mat4 delta = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 3.0f, 0.0f));
+
+    const auto group_results = lfs::vis::gui::gizmo_ops::computeNodeGroupLocalTransforms(
+        scene_manager_->getScene(), names, originals, delta);
+    const auto individual_results = lfs::vis::gui::gizmo_ops::computeNodeIndividualLocalTransforms(
+        scene_manager_->getScene(), names, originals, delta);
+
+    EXPECT_TRUE(group_results.empty());
+    EXPECT_TRUE(individual_results.empty());
 }
 
 TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedLockedSelection) {

@@ -2906,9 +2906,10 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::setMultiTransformMode(const MultiTransformMode mode) {
-        if (multi_transform_mode_ == mode)
+        const auto normalized_mode = normalizeMultiTransformMode(mode);
+        if (multi_transform_mode_ == normalized_mode)
             return;
-        multi_transform_mode_ = mode;
+        multi_transform_mode_ = normalized_mode;
         app_store().multi_transform_mode.set(static_cast<int>(multi_transform_mode_));
     }
 
