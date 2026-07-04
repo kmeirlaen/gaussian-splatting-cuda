@@ -1152,17 +1152,41 @@ namespace lfs::vis {
 
     bool SceneManager::nodeRemovalAffectsTraining(const std::string& name) const {
         const auto& training_name = scene_.getTrainingModelNodeName();
-        if (training_name.empty()) {
-            return false;
-        }
-        if (name == training_name) {
+        if (!training_name.empty() && name == training_name) {
             return true;
         }
-        for (const auto* n = scene_.getNode(training_name); n && n->parent_id != core::NULL_NODE;) {
-            n = scene_.getNodeById(n->parent_id);
-            if (n && n->name == name) {
+
+        if (!training_name.empty()) {
+            for (const auto* n = scene_.getNode(training_name); n && n->parent_id != core::NULL_NODE;) {
+                n = scene_.getNodeById(n->parent_id);
+                if (n && n->name == name) {
+                    return true;
+                }
+            }
+        }
+
+        const auto* root = scene_.getNode(name);
+        if (!root) {
+            return false;
+        }
+
+        std::vector<core::NodeId> pending{root->id};
+        while (!pending.empty()) {
+            const core::NodeId id = pending.back();
+            pending.pop_back();
+
+            const auto* node = scene_.getNodeById(id);
+            if (!node) {
+                continue;
+            }
+
+            if (node->type == core::NodeType::CAMERA &&
+                node->camera &&
+                node->training_enabled) {
                 return true;
             }
+
+            pending.insert(pending.end(), node->children.begin(), node->children.end());
         }
         return false;
     }
