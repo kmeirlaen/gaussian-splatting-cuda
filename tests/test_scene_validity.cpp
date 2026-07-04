@@ -841,4 +841,53 @@ namespace lfs::python {
         EXPECT_EQ(scene.getTrainingModelNodeName(), "Model");
     }
 
+    TEST_F(SceneValidityTest, SceneManagerRemovesAllowedActiveCameraSubtreeWithoutClearingTrainer) {
+        const ScopedServicesClear services_scope;
+        lfs::vis::SceneManager sm;
+        lfs::vis::TrainerManager trainer_manager;
+        lfs::vis::services().set(&sm);
+        lfs::vis::services().set(&trainer_manager);
+
+        auto& scene = sm.getScene();
+        const auto nodes = build_training_scene(sm);
+        sm.selectNodesById({nodes.camera});
+
+        trainer_manager.setScene(&scene);
+        ASSERT_TRUE(transition_trainer_manager_for_test(trainer_manager, lfs::vis::TrainingState::Ready));
+        ASSERT_TRUE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+        sm.removePLY("Training (1)");
+
+        EXPECT_EQ(scene.getNodeById(nodes.train_group), nullptr);
+        EXPECT_EQ(scene.getNodeById(nodes.camera), nullptr);
+        EXPECT_EQ(scene.getAllCameras().size(), 0u);
+        EXPECT_EQ(scene.getActiveCameraCount(), 0u);
+        EXPECT_TRUE(sm.getSelectedNodeNames().empty());
+        EXPECT_NE(scene.getNodeById(nodes.model), nullptr);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "Model");
+        EXPECT_EQ(trainer_manager.getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_TRUE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerRemovesAllowedTrainingModelAndClearsTrainerState) {
+        const ScopedServicesClear services_scope;
+        lfs::vis::SceneManager sm;
+        lfs::vis::TrainerManager trainer_manager;
+        lfs::vis::services().set(&sm);
+        lfs::vis::services().set(&trainer_manager);
+
+        auto& scene = sm.getScene();
+        const auto nodes = build_training_scene(sm);
+
+        trainer_manager.setScene(&scene);
+        ASSERT_TRUE(transition_trainer_manager_for_test(trainer_manager, lfs::vis::TrainingState::Ready));
+        ASSERT_TRUE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+        sm.removePLY("Model");
+
+        EXPECT_EQ(scene.getNodeById(nodes.model), nullptr);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "");
+        EXPECT_EQ(trainer_manager.getState(), lfs::vis::TrainingState::Idle);
+    }
+
 } // namespace lfs::python

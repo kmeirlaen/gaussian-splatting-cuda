@@ -1150,24 +1150,24 @@ namespace lfs::vis {
         LOG_INFO("Scene cleared");
     }
 
-    bool SceneManager::nodeRemovalAffectsTraining(const std::string& name) const {
+    SceneManager::TrainingRemovalImpact SceneManager::classifyTrainingRemovalImpact(const std::string& name) const {
         const auto& training_name = scene_.getTrainingModelNodeName();
         if (!training_name.empty() && name == training_name) {
-            return true;
+            return TrainingRemovalImpact::TrainingModel;
         }
 
         if (!training_name.empty()) {
             for (const auto* n = scene_.getNode(training_name); n && n->parent_id != core::NULL_NODE;) {
                 n = scene_.getNodeById(n->parent_id);
                 if (n && n->name == name) {
-                    return true;
+                    return TrainingRemovalImpact::TrainingModel;
                 }
             }
         }
 
         const auto* root = scene_.getNode(name);
         if (!root) {
-            return false;
+            return TrainingRemovalImpact::None;
         }
 
         std::vector<core::NodeId> pending{root->id};
@@ -1183,17 +1183,26 @@ namespace lfs::vis {
             if (node->type == core::NodeType::CAMERA &&
                 node->camera &&
                 node->training_enabled) {
-                return true;
+                return TrainingRemovalImpact::ActiveTrainingCamera;
             }
 
             pending.insert(pending.end(), node->children.begin(), node->children.end());
         }
-        return false;
+        return TrainingRemovalImpact::None;
+    }
+
+    bool SceneManager::nodeRemovalAffectsTraining(const std::string& name) const {
+        return classifyTrainingRemovalImpact(name) != TrainingRemovalImpact::None;
     }
 
     std::expected<void, std::string> SceneManager::validateNodeRemoval(const std::string& name) const {
+        return validateNodeRemoval(name, classifyTrainingRemovalImpact(name));
+    }
+
+    std::expected<void, std::string> SceneManager::validateNodeRemoval(const std::string& name,
+                                                                       const TrainingRemovalImpact impact) const {
         auto* trainer = services().trainerOrNull();
-        if (!trainer || !nodeRemovalAffectsTraining(name)) {
+        if (!trainer || impact == TrainingRemovalImpact::None) {
             return {};
         }
 
@@ -1208,17 +1217,22 @@ namespace lfs::vis {
     std::expected<void, std::string> SceneManager::removeNodeImpl(const std::string& name,
                                                                   const bool keep_children,
                                                                   const HistoryMode history_mode) {
+        return removeNodeImpl(name, keep_children, history_mode, classifyTrainingRemovalImpact(name));
+    }
+
+    std::expected<void, std::string> SceneManager::removeNodeImpl(const std::string& name,
+                                                                  const bool keep_children,
+                                                                  const HistoryMode history_mode,
+                                                                  const TrainingRemovalImpact training_removal_impact) {
         const auto* node_to_remove = scene_.getNode(name);
         if (!node_to_remove) {
             return {};
         }
 
-        const bool affects_training = nodeRemovalAffectsTraining(name);
-        if (affects_training) {
-            if (const auto result = validateNodeRemoval(name); !result) {
-                return result;
-            }
+        if (const auto result = validateNodeRemoval(name, training_removal_impact); !result) {
+            return result;
         }
+        const bool removes_training_model = training_removal_impact == TrainingRemovalImpact::TrainingModel;
 
         bool trainer_cleared = false;
         const bool record_history = history_mode == HistoryMode::Record;
@@ -1232,7 +1246,7 @@ namespace lfs::vis {
             }
         }
 
-        if (affects_training) {
+        if (removes_training_model) {
             if (auto* trainer = services().trainerOrNull()) {
                 LOG_INFO("Stopping training due to node deletion: {}", name);
                 trainer->stopTraining();
@@ -4746,6 +4760,8 @@ namespace lfs::vis {
 
     std::expected<void, std::string> SceneManager::applySelectedGaussianDeletionPlan(
         const GaussianDeletionPlan& plan) {
+        std::vector<std::pair<std::string, TrainingRemovalImpact>> removed_node_impacts;
+
         if (plan.consolidated) {
             auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
             if (!combined) {
@@ -4755,10 +4771,13 @@ namespace lfs::vis {
                 return std::unexpected("Selection size mismatch");
             }
         } else {
+            removed_node_impacts.reserve(plan.removed_node_names.size());
             for (const auto& node_name : plan.removed_node_names) {
-                if (const auto result = validateNodeRemoval(node_name); !result) {
+                const auto impact = classifyTrainingRemovalImpact(node_name);
+                if (const auto result = validateNodeRemoval(node_name, impact); !result) {
                     return result;
                 }
+                removed_node_impacts.emplace_back(node_name, impact);
             }
 
             for (const auto& slice : plan.partial_slices) {
@@ -4780,8 +4799,8 @@ namespace lfs::vis {
                 node->model->soft_delete(plan.selection_mask.slice(0, slice.begin, slice.end));
             }
 
-            for (const auto& node_name : plan.removed_node_names) {
-                if (const auto result = removeNodeImpl(node_name, false, HistoryMode::Skip); !result) {
+            for (const auto& [node_name, impact] : removed_node_impacts) {
+                if (const auto result = removeNodeImpl(node_name, false, HistoryMode::Skip, impact); !result) {
                     return result;
                 }
             }
