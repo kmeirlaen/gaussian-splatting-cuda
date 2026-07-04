@@ -84,6 +84,8 @@
     "viewport_export": "Exportar vista",
     "local_space": "Espacio local",
     "world_space": "Espacio mundial",
+    "group_transform": "Transformación de grupo",
+    "individual_transform": "Transformación individual",
     "origin_pivot": "Origen",
     "bounds_center_pivot": "Centro de límites",
     "depth_mode_disable": "Desactivar modo de profundidad",

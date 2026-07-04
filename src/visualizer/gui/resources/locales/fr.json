@@ -758,6 +758,8 @@
     "color_selection": "Color selection",
     "local_space": "Espace Local",
     "world_space": "Espace Monde",
+    "group_transform": "Transformation groupée",
+    "individual_transform": "Transformation individuelle",
     "origin_pivot": "Origine",
     "bounds_center_pivot": "Centre des limites",
     "resize_bounds": "Redimensionner les Limites",

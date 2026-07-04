@@ -770,6 +770,8 @@
     "color_selection": "Color selection",
     "local_space": "局部空间",
     "world_space": "世界空间",
+    "group_transform": "组合变换",
+    "individual_transform": "单独变换",
     "origin_pivot": "原点",
     "bounds_center_pivot": "边界中心",
     "resize_bounds": "调整边界大小",

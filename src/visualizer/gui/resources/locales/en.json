@@ -770,6 +770,8 @@
     "color_selection": "Color selection",
     "local_space": "Local Space",
     "world_space": "World Space",
+    "group_transform": "Group Transform",
+    "individual_transform": "Individual Transform",
     "origin_pivot": "Origin",
     "bounds_center_pivot": "Bounds Center",
     "resize_bounds": "Resize Bounds",

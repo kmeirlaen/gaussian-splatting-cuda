@@ -758,6 +758,8 @@
     "color_selection": "Color selection",
     "local_space": "ローカル空間",
     "world_space": "ワールド空間",
+    "group_transform": "グループ変換",
+    "individual_transform": "個別変換",
     "origin_pivot": "原点",
     "bounds_center_pivot": "境界中心",
     "resize_bounds": "境界をリサイズ",

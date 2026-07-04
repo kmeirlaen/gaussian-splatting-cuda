@@ -758,6 +758,8 @@
     "color_selection": "Color selection",
     "local_space": "로컬 공간",
     "world_space": "월드 공간",
+    "group_transform": "그룹 변환",
+    "individual_transform": "개별 변환",
     "origin_pivot": "원점",
     "bounds_center_pivot": "경계 중심",
     "resize_bounds": "경계 크기 조절",
