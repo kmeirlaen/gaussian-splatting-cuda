@@ -3,11 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_appearance_correction.hpp"
+#include "core/logger.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include <exception>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -37,6 +40,13 @@ namespace lfs::vis {
         [[nodiscard]] bool isImageWithAlpha(const lfs::core::Tensor& image) {
             return image.ndim() == 3 &&
                    ((image.shape()[0] == 4) || (image.shape()[2] == 4));
+        }
+
+        [[nodiscard]] lfs::core::Tensor preparePpispInput(lfs::core::Tensor input) {
+            if (!input.is_valid() || input.device() == lfs::core::Device::CUDA) {
+                return input;
+            }
+            return input.cuda();
         }
 
         [[nodiscard]] lfs::core::Tensor applyStandaloneAppearance(
@@ -117,7 +127,21 @@ namespace lfs::vis {
             if (!has_alpha || !corrected_rgb.is_valid()) {
                 return corrected_rgb;
             }
-            return lfs::core::Tensor::cat({corrected_rgb, alpha}, alpha_concat_dim).contiguous();
+            auto alpha_for_copy = alpha;
+            if (alpha_for_copy.device() != corrected_rgb.device()) {
+                alpha_for_copy = alpha_for_copy.to(corrected_rgb.device());
+            }
+
+            std::vector<size_t> restored_shape = corrected_rgb.shape().dims();
+            restored_shape[static_cast<size_t>(alpha_concat_dim)] = 4;
+            auto restored = lfs::core::Tensor::empty(
+                lfs::core::TensorShape(restored_shape),
+                corrected_rgb.device(),
+                corrected_rgb.dtype());
+
+            restored.slice(static_cast<size_t>(alpha_concat_dim), 0, 3).copy_from(corrected_rgb);
+            restored.slice(static_cast<size_t>(alpha_concat_dim), 3, 4).copy_from(alpha_for_copy);
+            return restored.contiguous();
         };
 
         if (const auto* tm = scene_manager->getTrainerManager()) {
@@ -132,10 +156,19 @@ namespace lfs::vis {
                     trainer_overrides.gamma_multiplier = settings.ppisp_overrides.gamma_multiplier;
                 }
                 const bool use_controller = (settings.ppisp_mode == RenderSettings::PPISPMode::AUTO);
-                auto corrected = trainer->applyPPISPForViewport(
-                    rgb_input, camera_uid, trainer_overrides, use_controller);
-                corrected = restore_alpha(std::move(corrected));
-                return std::make_shared<lfs::core::Tensor>(std::move(corrected));
+                try {
+                    auto ppisp_input = preparePpispInput(rgb_input);
+                    auto corrected = trainer->applyPPISPForViewport(
+                        ppisp_input, camera_uid, trainer_overrides, use_controller);
+                    corrected = restore_alpha(std::move(corrected));
+                    return std::make_shared<lfs::core::Tensor>(std::move(corrected));
+                } catch (const std::exception& e) {
+                    LOG_WARN("Viewport trainer PPISP correction failed: {}", e.what());
+                    return image;
+                } catch (...) {
+                    LOG_WARN("Viewport trainer PPISP correction failed");
+                    return image;
+                }
             }
         }
 
@@ -147,7 +180,17 @@ namespace lfs::vis {
                                     ? settings.ppisp_overrides
                                     : PPISPOverrides{};
         const bool use_controller = (settings.ppisp_mode == RenderSettings::PPISPMode::AUTO);
-        auto corrected = applyStandaloneAppearance(rgb_input, *scene_manager, camera_uid, overrides, use_controller);
+        lfs::core::Tensor corrected;
+        try {
+            auto ppisp_input = preparePpispInput(rgb_input);
+            corrected = applyStandaloneAppearance(ppisp_input, *scene_manager, camera_uid, overrides, use_controller);
+        } catch (const std::exception& e) {
+            LOG_WARN("Standalone viewport PPISP correction failed: {}", e.what());
+            return image;
+        } catch (...) {
+            LOG_WARN("Standalone viewport PPISP correction failed");
+            return image;
+        }
         if (!corrected.is_valid()) {
             return has_alpha ? std::make_shared<lfs::core::Tensor>(restore_alpha(rgb_input)) : image;
         }
