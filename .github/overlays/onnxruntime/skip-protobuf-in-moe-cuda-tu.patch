@@ -5,13 +5,13 @@ index 0000000000..1111111111 100644
 @@ -42,7 +42,11 @@
  #include <cub/device/device_radix_sort.cuh>
  #include <cub/util_type.cuh>
-
+ 
 -#include "contrib_ops/cuda/utils/dump_cuda_tensor.h"
 +// dump_cuda_tensor.h drags onnx protobuf headers into this CUDA TU; protobuf
 +// 6.x declares an incomplete-type variable template (EnumTraitsImpl::value)
 +// that nvcc rejects. The DUMP_* macros are no-ops at DUMP_TENSOR_LEVEL 0, so
 +// only the macro definitions are needed here.
 +#include "contrib_ops/cpu/utils/debug_macros.h"
-
+ 
  namespace ort_fastertransformer {
  static constexpr int WARP_SIZE = 32;

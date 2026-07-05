@@ -28,10 +28,10 @@ index ffe8661..a3e9b4f 100644
 +++ b/cmake/onnxruntime_webassembly.cmake
 @@ -94,7 +94,7 @@ if (NOT onnxruntime_ENABLE_WEBASSEMBLY_THREADS)
    )
-
+ 
    # Override re2 compiler options to remove -pthread
 -  set_property(TARGET re2 PROPERTY COMPILE_OPTIONS )
 +  # set_property(TARGET re2 PROPERTY COMPILE_OPTIONS )
  endif()
-
+ 
  if (NOT onnxruntime_USE_VCPKG)
