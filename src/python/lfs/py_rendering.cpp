@@ -24,6 +24,7 @@
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/viewport_appearance_correction.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <algorithm>
@@ -1322,11 +1323,19 @@ namespace lfs::python {
 
                 std::optional<lfs::rendering::GpuFrame> primary_frame;
                 if (preview_image && preview_image->is_valid()) {
+                    auto normalized_preview =
+                        (preview_image->to(core::DataType::Float32) * (1.0f / 255.0f)).contiguous();
+                    preview_image = std::make_shared<core::Tensor>(std::move(normalized_preview));
+                    preview_image = vis::applyViewportAppearanceCorrection(
+                        std::move(preview_image),
+                        scene_manager,
+                        settings,
+                        rendering_manager->getCurrentCameraId());
                     auto frame = *preview_image;
                     if (frame.dtype() != core::DataType::Float32) {
                         frame = frame.to(core::DataType::Float32);
                     }
-                    frame = (frame * (1.0f / 255.0f)).permute({2, 0, 1}).contiguous();
+                    frame = frame.permute({2, 0, 1}).contiguous();
                     if (frame.device() != core::Device::CUDA) {
                         frame = frame.cuda();
                     }

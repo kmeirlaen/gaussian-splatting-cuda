@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering_types.hpp"
 #include <memory>
@@ -12,7 +13,7 @@ namespace lfs::vis {
 
     class SceneManager;
 
-    [[nodiscard]] std::shared_ptr<lfs::core::Tensor> applyViewportAppearanceCorrection(
+    [[nodiscard]] LFS_VIS_API std::shared_ptr<lfs::core::Tensor> applyViewportAppearanceCorrection(
         std::shared_ptr<lfs::core::Tensor> image,
         SceneManager* scene_manager,
         const RenderSettings& settings,
