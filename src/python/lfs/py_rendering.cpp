@@ -1225,7 +1225,7 @@ namespace lfs::python {
                 throw std::runtime_error("viewport export expected a 3D image tensor");
             }
             if (image.shape()[0] <= 4 && image.shape()[2] > 4) {
-                image = image.permute({1, 2, 0});
+                image = image.permute({1, 2, 0}).contiguous();
             }
             image = image.to(core::Device::CPU);
             if (image.dtype() != core::DataType::UInt8) {
@@ -1276,6 +1276,152 @@ namespace lfs::python {
                 throw std::runtime_error("transparent viewport export render failed");
             }
             return toU8Hwc(std::move(*image));
+        }
+
+        [[nodiscard]] std::optional<core::Tensor> renderCurrentViewHdrComposite8(
+            const vis::ViewInfo& view_info,
+            const int width,
+            const int height) {
+            auto invoke_render = [&]() -> std::optional<core::Tensor> {
+                auto* const viewer = get_visualizer();
+                auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+                auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+                if (!rendering_manager || !scene_manager) {
+                    return std::nullopt;
+                }
+
+                const auto settings = rendering_manager->getSettings();
+                if (!vis::environmentBackgroundEnabled(settings)) {
+                    return std::nullopt;
+                }
+
+                auto* const engine = rendering_manager->getRenderingEngine();
+                if (!engine) {
+                    return std::nullopt;
+                }
+
+                const auto rotation = viewInfoRotationMatrix(view_info);
+                const glm::vec3 translation{
+                    view_info.translation[0],
+                    view_info.translation[1],
+                    view_info.translation[2]};
+                const float focal_length_mm = lfs::rendering::vFovToFocalLength(view_info.fov);
+                const auto ortho_scale_override = scaledViewInfoOrthoScale(view_info, height);
+                const float ortho_scale = ortho_scale_override.value_or(view_info.ortho_scale);
+
+                auto preview_image = rendering_manager->renderPreviewImageRgba8(
+                    scene_manager,
+                    rotation,
+                    translation,
+                    focal_length_mm,
+                    width,
+                    height,
+                    view_info.orthographic,
+                    ortho_scale_override);
+                rendering_manager->releasePreviewImageResources();
+
+                std::optional<lfs::rendering::GpuFrame> primary_frame;
+                if (preview_image && preview_image->is_valid()) {
+                    auto frame = *preview_image;
+                    if (frame.dtype() != core::DataType::Float32) {
+                        frame = frame.to(core::DataType::Float32);
+                    }
+                    frame = (frame * (1.0f / 255.0f)).permute({2, 0, 1}).contiguous();
+                    if (frame.device() != core::Device::CUDA) {
+                        frame = frame.cuda();
+                    }
+                    auto frame_image = std::make_shared<core::Tensor>(std::move(frame));
+                    lfs::rendering::FrameMetadata metadata{
+                        .valid = true,
+                        .far_plane = settings.depth_clip_enabled
+                                          ? settings.depth_clip_far
+                                          : lfs::rendering::DEFAULT_FAR_PLANE,
+                        .orthographic = view_info.orthographic,
+                        .color_has_alpha = true};
+                    auto materialized = engine->materializeGpuFrame(
+                        frame_image,
+                        metadata,
+                        {width, height});
+                    if (!materialized || !materialized->valid()) {
+                        LOG_ERROR("Viewport export HDRI composite failed to materialize Gaussian frame: {}",
+                                  materialized ? "invalid frame" : materialized.error());
+                        return std::nullopt;
+                    }
+                    primary_frame = std::move(*materialized);
+                }
+
+                lfs::rendering::FrameView frame_view{
+                    .rotation = rotation,
+                    .translation = translation,
+                    .size = {width, height},
+                    .focal_length_mm = focal_length_mm,
+                    .near_plane = lfs::rendering::DEFAULT_NEAR_PLANE,
+                    .far_plane = settings.depth_clip_enabled
+                                      ? settings.depth_clip_far
+                                      : lfs::rendering::DEFAULT_FAR_PLANE,
+                    .orthographic = view_info.orthographic,
+                    .ortho_scale = ortho_scale,
+                    .background_color = settings.background_color};
+                lfs::rendering::ViewportData viewport{
+                    .rotation = frame_view.rotation,
+                    .translation = frame_view.translation,
+                    .size = frame_view.size,
+                    .focal_length_mm = frame_view.focal_length_mm,
+                    .orthographic = frame_view.orthographic,
+                    .ortho_scale = frame_view.ortho_scale};
+                lfs::rendering::VideoCompositeFrameRequest composite_request{
+                    .viewport = viewport,
+                    .frame_view = frame_view,
+                    .background_color = settings.background_color,
+                    .environment =
+                        {.enabled = true,
+                         .map_path = settings.environment_map_path,
+                         .exposure = settings.environment_exposure,
+                         .rotation_degrees = settings.environment_rotation_degrees,
+                         .equirectangular = settings.equirectangular},
+                    .meshes = {}};
+
+                auto composited = engine->renderVideoCompositeFrame(primary_frame, composite_request);
+                if (!composited) {
+                    LOG_ERROR("Viewport export HDRI composite failed: {}", composited.error());
+                    return std::nullopt;
+                }
+                return toU8Hwc(std::move(*composited));
+            };
+
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                return invoke_render();
+            }
+            if (!viewer->acceptsPostedWork()) {
+                return std::nullopt;
+            }
+
+            auto promise = std::make_shared<std::promise<std::optional<core::Tensor>>>();
+            auto future = promise->get_future();
+            auto completed = std::make_shared<std::atomic_bool>(false);
+
+            auto finish = [promise, completed](std::optional<core::Tensor> result) mutable {
+                if (!completed->exchange(true)) {
+                    promise->set_value(std::move(result));
+                }
+            };
+
+            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
+                .run =
+                    [invoke_render, finish]() mutable {
+                        finish(invoke_render());
+                    },
+                .cancel =
+                    [finish]() mutable {
+                        finish(std::nullopt);
+                    }});
+            if (!posted) {
+                return std::nullopt;
+            }
+
+            nb::gil_scoped_release release;
+            return future.get();
         }
 
         [[nodiscard]] core::Tensor recoverAlphaRgba(core::Tensor black_rgb, core::Tensor white_rgb) {
@@ -1656,7 +1802,24 @@ namespace lfs::python {
                     image = recoverAlphaRgba(std::move(black), std::move(white));
                 }
             } else {
-                image = renderCurrentViewRgb8(*view_info, target_width, target_height, std::nullopt);
+                const auto render_settings = vis::get_render_settings();
+                const bool export_hdr_environment =
+                    render_settings &&
+                    render_settings->environment_mode ==
+                        static_cast<int>(vis::EnvironmentBackgroundMode::Equirectangular) &&
+                    !render_settings->environment_map_path.empty();
+                if (export_hdr_environment) {
+                    auto composited = renderCurrentViewHdrComposite8(
+                        *view_info,
+                        target_width,
+                        target_height);
+                    if (!composited || !composited->is_valid()) {
+                        throw std::runtime_error("viewport HDRI export render failed");
+                    }
+                    image = std::move(*composited);
+                } else {
+                    image = renderCurrentViewRgb8(*view_info, target_width, target_height, std::nullopt);
+                }
             }
         }
 
