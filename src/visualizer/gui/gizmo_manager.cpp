@@ -767,7 +767,7 @@ namespace lfs::vis::gui {
             if (auto* const sm = viewer_->getSceneManager())
                 sm->syncCropBoxToRenderSettings();
             node_bounds_cache_valid_ = false;
-            node_group_bounds_cache_valid_ = false;
+            node_selection_bounds_cache_valid_ = false;
         });
 
         ui::NodeDeselected::when([this](const auto&) {
@@ -775,7 +775,7 @@ namespace lfs::vis::gui {
             if (auto* const t = viewer_->getAlignTool())
                 t->setEnabled(false);
             node_bounds_cache_valid_ = false;
-            node_group_bounds_cache_valid_ = false;
+            node_selection_bounds_cache_valid_ = false;
         });
 
         state::PLYRemoved::when([this](const auto&) { deactivateAllTools(); });
@@ -1118,7 +1118,7 @@ namespace lfs::vis::gui {
 
         const auto& settings = render_manager->getSettings();
         const bool is_multi_selection = (target_names.size() > 1);
-        const bool use_group_mode = !is_multi_selection || multi_transform_mode_ == MultiTransformMode::Group;
+        const bool use_selection_mode = !is_multi_selection || multi_transform_mode_ == MultiTransformMode::Selection;
         const bool use_individual_mode = is_multi_selection && multi_transform_mode_ == MultiTransformMode::Individual;
         std::optional<std::vector<std::string>> top_level_target_names;
         const auto get_top_level_target_names = [&]() -> const std::vector<std::string>& {
@@ -1148,9 +1148,9 @@ namespace lfs::vis::gui {
 
         bool has_valid_bounds = false;
         const bool use_single_bounds_scale = !is_multi_selection && node_gizmo_operation_ == GizmoOperation::Scale;
-        const bool use_group_bounds_scale = is_multi_selection && use_group_mode &&
+        const bool use_selection_bounds_scale = is_multi_selection && use_selection_mode &&
                                             node_gizmo_operation_ == GizmoOperation::Scale;
-        const bool use_bounds_scale = use_single_bounds_scale || use_group_bounds_scale;
+        const bool use_bounds_scale = use_single_bounds_scale || use_selection_bounds_scale;
 
         const auto* first_node = (!is_multi_selection && !target_names.empty())
                                      ? scene.getNode(target_names.front())
@@ -1186,11 +1186,11 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (use_group_bounds_scale) {
-            if (node_group_bounds_scale_active_) {
+        if (use_selection_bounds_scale) {
+            if (node_selection_bounds_scale_active_) {
                 has_valid_bounds = true;
-                bounds_min = node_group_bounds_min_;
-                bounds_max = node_group_bounds_max_;
+                bounds_min = node_selection_bounds_min_;
+                bounds_max = node_selection_bounds_max_;
             } else {
                 struct GroupBoundsCacheKeyEntry {
                     core::NodeId id = core::NULL_NODE;
@@ -1221,13 +1221,13 @@ namespace lfs::vis::gui {
                     cache_world_transforms.push_back(entry.visualizer_world_transform);
                 }
 
-                bool cache_matches = node_group_bounds_cache_valid_ &&
-                                     node_group_bounds_cache_node_ids_ == cache_node_ids &&
-                                     node_group_bounds_cache_visualizer_world_transforms_.size() ==
+                bool cache_matches = node_selection_bounds_cache_valid_ &&
+                                     node_selection_bounds_cache_node_ids_ == cache_node_ids &&
+                                     node_selection_bounds_cache_visualizer_world_transforms_.size() ==
                                          cache_world_transforms.size();
                 if (cache_matches) {
                     for (size_t i = 0; i < cache_world_transforms.size(); ++i) {
-                        if (node_group_bounds_cache_visualizer_world_transforms_[i] != cache_world_transforms[i]) {
+                        if (node_selection_bounds_cache_visualizer_world_transforms_[i] != cache_world_transforms[i]) {
                             cache_matches = false;
                             break;
                         }
@@ -1236,20 +1236,20 @@ namespace lfs::vis::gui {
 
                 if (cache_matches) {
                     has_valid_bounds = true;
-                    bounds_min = node_group_bounds_cache_min_;
-                    bounds_max = node_group_bounds_cache_max_;
+                    bounds_min = node_selection_bounds_cache_min_;
+                    bounds_max = node_selection_bounds_cache_max_;
                 } else if (gizmo_ops::computeCombinedVisualizerWorldBounds(
                                scene, top_level_names, bounds_min, bounds_max)) {
                     has_valid_bounds = true;
-                    node_group_bounds_cache_valid_ = true;
-                    node_group_bounds_cache_node_ids_ = std::move(cache_node_ids);
-                    node_group_bounds_cache_visualizer_world_transforms_ = std::move(cache_world_transforms);
-                    node_group_bounds_cache_min_ = bounds_min;
-                    node_group_bounds_cache_max_ = bounds_max;
+                    node_selection_bounds_cache_valid_ = true;
+                    node_selection_bounds_cache_node_ids_ = std::move(cache_node_ids);
+                    node_selection_bounds_cache_visualizer_world_transforms_ = std::move(cache_world_transforms);
+                    node_selection_bounds_cache_min_ = bounds_min;
+                    node_selection_bounds_cache_max_ = bounds_max;
                 } else {
-                    node_group_bounds_cache_valid_ = false;
-                    node_group_bounds_cache_node_ids_.clear();
-                    node_group_bounds_cache_visualizer_world_transforms_.clear();
+                    node_selection_bounds_cache_valid_ = false;
+                    node_selection_bounds_cache_node_ids_.clear();
+                    node_selection_bounds_cache_visualizer_world_transforms_.clear();
                 }
             }
             world_transform = glm::mat4(1.0f);
@@ -1260,7 +1260,7 @@ namespace lfs::vis::gui {
         const bool actually_using_bounds = use_bounds_scale && has_valid_bounds;
 
         const glm::vec3 transform_gizmo_position = (node_gizmo_active_ && !node_bounds_scale_active_ &&
-                                                    !node_group_bounds_scale_active_)
+                                                    !node_selection_bounds_scale_active_)
                                                        ? gizmo_pivot_
                                                        : (is_multi_selection
                                                               ? transform_targets->world_center
@@ -1284,11 +1284,11 @@ namespace lfs::vis::gui {
             const glm::vec3 bounds_center_local = (bounds_min + bounds_max) * 0.5f;
 
             glm::vec3 center_world;
-            if (use_group_bounds_scale) {
-                const glm::vec3 display_size = node_group_bounds_scale_active_
-                                                   ? (node_group_bounds_max_ - node_group_bounds_min_) * gizmo_cumulative_scale_
+            if (use_selection_bounds_scale) {
+                const glm::vec3 display_size = node_selection_bounds_scale_active_
+                                                   ? (node_selection_bounds_max_ - node_selection_bounds_min_) * gizmo_cumulative_scale_
                                                    : bounds_size;
-                center_world = node_group_bounds_scale_active_ ? gizmo_pivot_ : bounds_center_local;
+                center_world = node_selection_bounds_scale_active_ ? gizmo_pivot_ : bounds_center_local;
                 gizmo_matrix[3] = glm::vec4(center_world, 1.0f);
                 gizmo_matrix[0] = glm::vec4(display_size.x, 0.0f, 0.0f, 0.0f);
                 gizmo_matrix[1] = glm::vec4(0.0f, display_size.y, 0.0f, 0.0f);
@@ -1470,13 +1470,13 @@ namespace lfs::vis::gui {
             gizmo_cumulative_rotation_ = glm::mat3(1.0f);
             gizmo_cumulative_scale_ = glm::vec3(1.0f);
 
-            if (actually_using_bounds && use_group_bounds_scale && bounds_gizmo_active) {
+            if (actually_using_bounds && use_selection_bounds_scale && bounds_gizmo_active) {
                 glm::vec3 fresh_min, fresh_max;
                 if (gizmo_ops::computeCombinedVisualizerWorldBounds(
                         scene, get_top_level_target_names(), fresh_min, fresh_max)) {
-                    node_group_bounds_min_ = fresh_min;
-                    node_group_bounds_max_ = fresh_max;
-                    node_group_bounds_scale_active_ = true;
+                    node_selection_bounds_min_ = fresh_min;
+                    node_selection_bounds_max_ = fresh_max;
+                    node_selection_bounds_scale_active_ = true;
                 }
             } else if (actually_using_bounds && first_node && bounds_gizmo_active) {
                 glm::vec3 fresh_min, fresh_max;
@@ -1519,7 +1519,7 @@ namespace lfs::vis::gui {
                                                   node_gizmo_node_names_,
                                                   node_original_visualizer_world_transforms_,
                                                   glm::mat4(gizmo_cumulative_rotation_))
-                                            : gizmo_ops::computeNodeGroupLocalTransforms(
+                                            : gizmo_ops::computeNodeSharedSelectionLocalTransforms(
                                                   scene_manager->getScene(),
                                                   node_gizmo_node_names_,
                                                   node_original_visualizer_world_transforms_,
@@ -1531,7 +1531,7 @@ namespace lfs::vis::gui {
                     scene_manager->setNodeTransform(transform.name, transform.local_transform);
                 }
             } else if (node_gizmo_operation_ == GizmoOperation::Scale &&
-                       node_group_bounds_scale_active_) {
+                       node_selection_bounds_scale_active_) {
                 glm::vec3 new_world_size;
                 glm::vec3 new_center_world;
                 if (bounds_result_valid) {
@@ -1542,18 +1542,18 @@ namespace lfs::vis::gui {
                     new_center_world = glm::vec3(gizmo_matrix[3]);
                 }
 
-                const glm::vec3 original_bounds_size = node_group_bounds_max_ - node_group_bounds_min_;
+                const glm::vec3 original_bounds_size = node_selection_bounds_max_ - node_selection_bounds_min_;
                 const glm::vec3 safe_bounds = glm::max(original_bounds_size, glm::vec3(1e-6f));
                 const glm::vec3 scale_ratio = new_world_size / safe_bounds;
                 gizmo_cumulative_scale_ = scale_ratio;
                 gizmo_pivot_ = new_center_world;
 
-                const glm::vec3 original_center = (node_group_bounds_min_ + node_group_bounds_max_) * 0.5f;
+                const glm::vec3 original_center = (node_selection_bounds_min_ + node_selection_bounds_max_) * 0.5f;
                 const glm::mat4 world_delta = glm::translate(glm::mat4(1.0f), new_center_world) *
                                               glm::scale(glm::mat4(1.0f), scale_ratio) *
                                               glm::translate(glm::mat4(1.0f), -original_center);
 
-                for (const auto& transform : gizmo_ops::computeNodeGroupLocalTransforms(
+                for (const auto& transform : gizmo_ops::computeNodeSharedSelectionLocalTransforms(
                          scene_manager->getScene(),
                          node_gizmo_node_names_,
                          node_original_visualizer_world_transforms_,
@@ -1562,7 +1562,7 @@ namespace lfs::vis::gui {
                 }
             } else if (node_gizmo_operation_ == GizmoOperation::Scale &&
                        !node_bounds_scale_active_ &&
-                       !node_group_bounds_scale_active_ &&
+                       !node_selection_bounds_scale_active_ &&
                        (is_multi_selection || use_world_space)) {
                 gizmo_cumulative_scale_ *= extractScale(delta_matrix);
                 const auto transforms = use_individual_mode
@@ -1571,7 +1571,7 @@ namespace lfs::vis::gui {
                                                   node_gizmo_node_names_,
                                                   node_original_visualizer_world_transforms_,
                                                   glm::scale(glm::mat4(1.0f), gizmo_cumulative_scale_))
-                                            : gizmo_ops::computeNodeGroupLocalTransforms(
+                                            : gizmo_ops::computeNodeSharedSelectionLocalTransforms(
                                                   scene_manager->getScene(),
                                                   node_gizmo_node_names_,
                                                   node_original_visualizer_world_transforms_,
@@ -1588,7 +1588,7 @@ namespace lfs::vis::gui {
                     const glm::vec3 delta = new_gizmo_pos - gizmo_pivot_;
                     const glm::mat4 world_delta = glm::translate(glm::mat4(1.0f), delta);
 
-                    for (const auto& transform : gizmo_ops::computeNodeGroupLocalTransforms(
+                    for (const auto& transform : gizmo_ops::computeNodeSharedSelectionLocalTransforms(
                              scene_manager->getScene(),
                              node_gizmo_node_names_,
                              node_original_visualizer_world_transforms_,
@@ -1650,9 +1650,9 @@ namespace lfs::vis::gui {
         if (!is_using && node_gizmo_active_) {
             node_gizmo_active_ = false;
             node_bounds_scale_active_ = false;
-            node_group_bounds_scale_active_ = false;
+            node_selection_bounds_scale_active_ = false;
             node_bounds_cache_valid_ = false;
-            node_group_bounds_cache_valid_ = false;
+            node_selection_bounds_cache_valid_ = false;
             if (render_manager) {
                 render_manager->setCropboxGizmoActive(false);
                 render_manager->setEllipsoidGizmoActive(false);

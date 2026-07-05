@@ -185,15 +185,15 @@ class _GizmoToolbarController:
         "builtin.select:sphere": "toolbar.sphere_selection",
         "builtin.translate:local": "toolbar.local_space",
         "builtin.translate:world": "toolbar.world_space",
-        "builtin.translate:group": "toolbar.group_transform",
+        "builtin.translate:selection": "toolbar.selection_transform",
         "builtin.translate:individual": "toolbar.individual_transform",
         "builtin.rotate:local": "toolbar.local_space",
         "builtin.rotate:world": "toolbar.world_space",
-        "builtin.rotate:group": "toolbar.group_transform",
+        "builtin.rotate:selection": "toolbar.selection_transform",
         "builtin.rotate:individual": "toolbar.individual_transform",
         "builtin.scale:local": "toolbar.local_space",
         "builtin.scale:world": "toolbar.world_space",
-        "builtin.scale:group": "toolbar.group_transform",
+        "builtin.scale:selection": "toolbar.selection_transform",
         "builtin.scale:individual": "toolbar.individual_transform",
         "builtin.mirror:x": "toolbar.mirror_x",
         "builtin.mirror:y": "toolbar.mirror_y",
@@ -221,7 +221,7 @@ class _GizmoToolbarController:
     _CROP_TOOL_ID = "builtin.cropbox"
     _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
-    _MULTI_TRANSFORM_MODE_IDS = {"group": 0, "individual": 1}
+    _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
     _CROP_OBJECT_SHAPES = ("box", "ellipsoid")
     _CROP_TRANSFORM_GIZMOS = ("translate", "rotate", "scale")
@@ -633,7 +633,7 @@ class _GizmoToolbarController:
 
             records = []
             for mode_id, icon, label in (
-                ("group", "bounds", "Group"),
+                ("selection", "bounds", "Selection"),
                 ("individual", "local", "Individual"),
             ):
                 tooltip_key = self._SUBMODE_LOCALE_KEYS.get(f"{active_tool_id}:{mode_id}", "")

@@ -164,7 +164,7 @@ protected:
     void apply_group_visualizer_delta(const std::vector<std::string>& names,
                                       const std::vector<glm::mat4>& original_visualizer_world,
                                       const glm::mat4& delta) {
-        for (const auto& transform : lfs::vis::gui::gizmo_ops::computeNodeGroupLocalTransforms(
+        for (const auto& transform : lfs::vis::gui::gizmo_ops::computeNodeSharedSelectionLocalTransforms(
                  scene_manager_->getScene(), names, original_visualizer_world, delta)) {
             scene_manager_->setNodeTransform(transform.name, transform.local_transform);
         }
@@ -295,7 +295,7 @@ TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoScaleUsesSharedPivot) {
     }
 }
 
-TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoGroupScaleUsesCombinedVisualizerBounds) {
+TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoSelectionScaleUsesCombinedVisualizerBounds) {
     add_node("left");
     add_node("right");
     scene_manager_->setNodeTransform("left", glm::translate(glm::mat4(1.0f), glm::vec3(-2.0f, 0.0f, 0.0f)));
@@ -509,13 +509,13 @@ TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoRequiresAllTargetsEditable) {
     EXPECT_EQ(result.error(), "selection contains locked nodes");
 }
 
-TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoInvalidModeFallsBackToGroup) {
+TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoInvalidModeFallsBackToSelection) {
     EXPECT_EQ(
         lfs::vis::gui::normalizeMultiTransformMode(lfs::vis::gui::MultiTransformMode::Individual),
         lfs::vis::gui::MultiTransformMode::Individual);
     EXPECT_EQ(
         lfs::vis::gui::normalizeMultiTransformMode(static_cast<lfs::vis::gui::MultiTransformMode>(99)),
-        lfs::vis::gui::MultiTransformMode::Group);
+        lfs::vis::gui::MultiTransformMode::Selection);
 }
 
 TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoTransformHelpersRejectMismatchedSnapshots) {
@@ -528,12 +528,12 @@ TEST_F(OperatorRegistryPropsTest, MultiNodeGizmoTransformHelpersRejectMismatched
     const auto originals = capture_visualizer_world_transforms({"first"});
     const glm::mat4 delta = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 3.0f, 0.0f));
 
-    const auto group_results = lfs::vis::gui::gizmo_ops::computeNodeGroupLocalTransforms(
+    const auto selection_results = lfs::vis::gui::gizmo_ops::computeNodeSharedSelectionLocalTransforms(
         scene_manager_->getScene(), names, originals, delta);
     const auto individual_results = lfs::vis::gui::gizmo_ops::computeNodeIndividualLocalTransforms(
         scene_manager_->getScene(), names, originals, delta);
 
-    EXPECT_TRUE(group_results.empty());
+    EXPECT_TRUE(selection_results.empty());
     EXPECT_TRUE(individual_results.empty());
 }
 

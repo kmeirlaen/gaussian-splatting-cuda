@@ -543,9 +543,9 @@ def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, mo
     snapshot = controller.snapshot()
 
     assert snapshot["show_transform_space_controls"] is True
-    assert [button["value"] for button in snapshot["submode_buttons"]] == ["group", "individual"]
-    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "group")["selected"] is True
-    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "group")["tooltip_key"] == "toolbar.group_transform"
+    assert [button["value"] for button in snapshot["submode_buttons"]] == ["selection", "individual"]
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "selection")["selected"] is True
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "selection")["tooltip_key"] == "toolbar.selection_transform"
     assert next(button for button in snapshot["submode_buttons"] if button["value"] == "individual")["tooltip_key"] == "toolbar.individual_transform"
 
     controller.dispatch("submode", "individual")
@@ -789,7 +789,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     transform_toolbar_tooltip_keys = (
         "local_space",
         "world_space",
-        "group_transform",
+        "selection_transform",
         "individual_transform",
         "origin_pivot",
         "bounds_center_pivot",

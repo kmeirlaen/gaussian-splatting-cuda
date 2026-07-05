@@ -758,7 +758,7 @@
     "color_selection": "Color selection",
     "local_space": "Lokale Ruimte",
     "world_space": "Wereld Ruimte",
-    "group_transform": "Groepstransformatie",
+    "selection_transform": "Selectietransformatie",
     "individual_transform": "Individuele transformatie",
     "origin_pivot": "Oorsprong",
     "bounds_center_pivot": "Grenzen Midden",

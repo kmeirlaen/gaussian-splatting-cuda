@@ -510,7 +510,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API int get_transform_space();
     LFS_PYTHON_RUNTIME_API void set_transform_space(int space);
 
-    // Multi-transform mode (group/individual for transform gizmos)
+    // Multi-transform mode (selection/individual for transform gizmos)
     using GetMultiTransformModeCallback = int (*)();
     using SetMultiTransformModeCallback = void (*)(int);
     LFS_PYTHON_RUNTIME_API void set_multi_transform_mode_callbacks(GetMultiTransformModeCallback get_cb,

@@ -76,7 +76,7 @@ namespace lfs::vis::gui {
             const core::Scene& scene,
             const std::vector<std::string>& target_names);
 
-        LFS_VIS_API std::vector<NodeLocalTransformResult> computeNodeGroupLocalTransforms(
+        LFS_VIS_API std::vector<NodeLocalTransformResult> computeNodeSharedSelectionLocalTransforms(
             const core::Scene& scene,
             const std::vector<std::string>& target_names,
             const std::vector<glm::mat4>& original_visualizer_world_transforms,

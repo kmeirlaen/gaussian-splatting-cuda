@@ -92,7 +92,7 @@ namespace lfs::vis::gui {
         }
 
         enum class TransformDeltaComposition {
-            GroupWorld,
+            SharedSelectionWorld,
             IndividualLocal,
         };
 
@@ -111,7 +111,7 @@ namespace lfs::vis::gui {
             results.reserve(count);
 
             for (size_t i = 0; i < count; ++i) {
-                const glm::mat4 next_visualizer_world = composition == TransformDeltaComposition::GroupWorld
+                const glm::mat4 next_visualizer_world = composition == TransformDeltaComposition::SharedSelectionWorld
                                                             ? visualizer_delta * original_visualizer_world_transforms[i]
                                                             : original_visualizer_world_transforms[i] * visualizer_delta;
                 if (const auto local_transform =
@@ -127,7 +127,7 @@ namespace lfs::vis::gui {
             return results;
         }
 
-        std::vector<NodeLocalTransformResult> computeNodeGroupLocalTransforms(
+        std::vector<NodeLocalTransformResult> computeNodeSharedSelectionLocalTransforms(
             const core::Scene& scene,
             const std::vector<std::string>& target_names,
             const std::vector<glm::mat4>& original_visualizer_world_transforms,
@@ -137,7 +137,7 @@ namespace lfs::vis::gui {
                 target_names,
                 original_visualizer_world_transforms,
                 visualizer_world_delta,
-                TransformDeltaComposition::GroupWorld);
+                TransformDeltaComposition::SharedSelectionWorld);
         }
 
         std::vector<NodeLocalTransformResult> computeNodeIndividualLocalTransforms(
