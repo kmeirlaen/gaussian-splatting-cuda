@@ -1105,6 +1105,7 @@ namespace lfs::vis::gui {
                     p.is_native,
                     p.initial_width,
                     p.initial_height,
+                    p.float_stack_order,
                 };
         }
         return std::nullopt;
@@ -1150,6 +1151,17 @@ namespace lfs::vis::gui {
 
         if (changed)
             lfs::vis::publish_viewport_toolbar_generation();
+    }
+
+    bool PanelRegistry::bring_panel_to_front(const std::string& id) {
+        std::lock_guard lock(mutex_);
+        for (auto& p : panels_) {
+            if (p.id == id && p.enabled && !p.error_disabled && p.space == PanelSpace::Floating) {
+                bring_floating_panel_to_front_locked(p);
+                return true;
+            }
+        }
+        return false;
     }
 
     void PanelRegistry::set_panel_disabled_override(const std::string& id) {

@@ -216,6 +216,10 @@ namespace lfs::gui {
         return player_ && player_->isPlaying();
     }
 
+    bool VideoExtractorDialog::openVideoPath(const std::filesystem::path& path) {
+        return openVideo(path);
+    }
+
     void VideoExtractorDialog::preloadDirect(const float w, const float h,
                                              const lfs::vis::gui::PanelDrawContext& ctx,
                                              const float clip_y_min,
@@ -412,6 +416,7 @@ namespace lfs::gui {
             return false;
         }
 
+        const bool video_path_changed = path != video_path_;
         video_path_ = path;
         trim_start_ = 0.0f;
         trim_end_ = static_cast<float>(player_->duration());
@@ -420,7 +425,7 @@ namespace lfs::gui {
         texture_needs_update_ = true;
         preview_src_.clear();
 
-        if (output_dir_.empty()) {
+        if (video_path_changed || output_dir_.empty()) {
             std::filesystem::path output_name = video_path_.stem();
             output_name += "_frames";
             output_dir_ = video_path_.parent_path() / output_name;

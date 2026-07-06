@@ -7009,6 +7009,20 @@ namespace lfs::vis::gui {
             showWindow(e.window_name, e.show);
         });
 
+        cmd::ShowVideoExtractor::when([this](const auto& e) {
+            auto& panels = PanelRegistry::instance();
+            panels.set_panel_enabled("native.video_extractor", true);
+            panels.bring_panel_to_front("native.video_extractor");
+            if (!video_widget_) {
+                LOG_ERROR("Video extractor widget is not available");
+                return;
+            }
+            if (!video_widget_->openVideoPath(e.video_path)) {
+                LOG_WARN("Failed to open dropped video in extractor: {}",
+                         lfs::core::path_to_utf8(e.video_path));
+            }
+        });
+
         cmd::GoToCamView::when([this](const auto& e) {
             if (auto* sm = viewer_->getSceneManager()) {
                 const auto& scene = sm->getScene();
