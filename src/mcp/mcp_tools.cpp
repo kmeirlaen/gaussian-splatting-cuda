@@ -14,6 +14,11 @@ namespace lfs::mcp {
 
     namespace {
 
+        std::string normalize_tool_name(std::string name) {
+            std::replace(name.begin(), name.end(), '.', '_');
+            return name;
+        }
+
         std::string target_to_string(training::CommandTarget target) {
             switch (target) {
             case training::CommandTarget::Model:
@@ -50,13 +55,14 @@ namespace lfs::mcp {
 
     void ToolRegistry::register_tool(McpTool tool, ToolHandler handler) {
         std::lock_guard lock(mutex_);
+        tool.name = normalize_tool_name(tool.name);
         std::string name = tool.name;
         tools_[name] = RegisteredTool{std::move(tool), std::move(handler)};
     }
 
     void ToolRegistry::unregister_tool(const std::string& name) {
         std::lock_guard lock(mutex_);
-        tools_.erase(name);
+        tools_.erase(normalize_tool_name(name));
     }
 
     std::vector<McpTool> ToolRegistry::list_tools() const {
@@ -77,7 +83,8 @@ namespace lfs::mcp {
         std::vector<std::string> required;
         {
             std::lock_guard lock(mutex_);
-            auto it = tools_.find(name);
+            const std::string normalized_name = normalize_tool_name(name);
+            auto it = tools_.find(normalized_name);
             if (it == tools_.end())
                 return json{{"error", "Tool not found: " + name}};
             handler = it->second.handler;
@@ -195,7 +202,7 @@ namespace lfs::mcp {
         tool.metadata.category = target_str;
         tool.metadata.kind = "command";
 
-        json properties;
+        json properties = json::object();
         std::vector<std::string> required;
 
         for (const auto& arg : op.args) {

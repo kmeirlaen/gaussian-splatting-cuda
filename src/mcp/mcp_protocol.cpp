@@ -69,7 +69,9 @@ namespace lfs::mcp {
 
         json schema;
         schema["type"] = tool.input_schema.type;
-        schema["properties"] = tool.input_schema.properties;
+        schema["properties"] = tool.input_schema.properties.is_object()
+                                   ? tool.input_schema.properties
+                                   : json::object();
         if (!tool.input_schema.required.empty()) {
             schema["required"] = tool.input_schema.required;
         }
@@ -79,16 +81,20 @@ namespace lfs::mcp {
             {"readOnlyHint", tool.metadata.kind == "query"},
             {"destructiveHint", tool.metadata.destructive},
             {"idempotentHint", tool.metadata.kind == "query"},
-            {"x-lfs-category", tool.metadata.category},
-            {"x-lfs-kind", tool.metadata.kind},
-            {"x-lfs-runtime", tool.metadata.runtime},
-            {"x-lfs-thread-affinity", tool.metadata.thread_affinity},
-            {"x-lfs-user-visible", tool.metadata.user_visible},
+        };
+        j["annotations"] = std::move(annotations);
+
+        json meta{
+            {"app.lichtfeld/category", tool.metadata.category},
+            {"app.lichtfeld/kind", tool.metadata.kind},
+            {"app.lichtfeld/runtime", tool.metadata.runtime},
+            {"app.lichtfeld/thread_affinity", tool.metadata.thread_affinity},
+            {"app.lichtfeld/user_visible", tool.metadata.user_visible},
         };
         if (tool.metadata.long_running) {
-            annotations["x-lfs-long-running"] = true;
+            meta["app.lichtfeld/long_running"] = true;
         }
-        j["annotations"] = std::move(annotations);
+        j["_meta"] = std::move(meta);
 
         return j;
     }

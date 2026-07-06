@@ -1469,7 +1469,7 @@ namespace lfs::app {
                 break;
             }
             case core::ExportFormat::COLMAP:
-                return std::unexpected("COLMAP export uses scene.export_colmap");
+                return std::unexpected("COLMAP export uses scene_export_colmap");
             }
 
             return {};
@@ -1867,7 +1867,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "render.capture_window",
-                .description = "Capture the current composited app window. Unlike render.capture without camera_index, this includes the full window, including panels, toolbars, and GUI overlays.",
+                .description = "Capture the current composited app window. Unlike render_capture without camera_index, this includes the full window, including panels, toolbars, and GUI overlays.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
@@ -3057,7 +3057,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "selection.click",
-                .description = "Alias for selection.brush",
+                .description = "Alias for selection_brush",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
@@ -3994,7 +3994,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "events.poll",
-                .description = "Poll queued events for a subscription created with events.subscribe",
+                .description = "Poll queued events for a subscription created with events_subscribe",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
@@ -4247,7 +4247,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "plugin.invoke",
-                .description = "Invoke a plugin capability by name. Use plugin.list to see available capabilities.",
+                .description = "Invoke a plugin capability by name. Use plugin_list to see available capabilities.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
