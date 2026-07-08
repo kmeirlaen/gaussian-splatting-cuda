@@ -3,9 +3,19 @@
 
 #include "mcp_protocol.hpp"
 
+#include <algorithm>
 #include <cassert>
 
 namespace lfs::mcp {
+
+    namespace {
+
+        std::string normalize_tool_name(std::string name) {
+            std::replace(name.begin(), name.end(), '.', '_');
+            return name;
+        }
+
+    } // namespace
 
     JsonRpcRequest parse_request(const std::string& input) {
         JsonRpcRequest req;
@@ -64,7 +74,7 @@ namespace lfs::mcp {
 
     json tool_to_json(const McpTool& tool) {
         json j;
-        j["name"] = tool.name;
+        j["name"] = normalize_tool_name(tool.name);
         j["description"] = tool.description;
 
         json schema;

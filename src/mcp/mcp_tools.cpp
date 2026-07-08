@@ -55,8 +55,7 @@ namespace lfs::mcp {
 
     void ToolRegistry::register_tool(McpTool tool, ToolHandler handler) {
         std::lock_guard lock(mutex_);
-        tool.name = normalize_tool_name(tool.name);
-        std::string name = tool.name;
+        std::string name = normalize_tool_name(tool.name);
         tools_[name] = RegisteredTool{std::move(tool), std::move(handler)};
     }
 

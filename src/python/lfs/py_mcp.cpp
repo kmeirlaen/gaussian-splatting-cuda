@@ -13,9 +13,16 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
+
 namespace lfs::python {
 
     namespace {
+
+        std::string normalize_tool_name(std::string name) {
+            std::replace(name.begin(), name.end(), '.', '_');
+            return name;
+        }
 
         std::string python_type_to_json_type(const std::string& py_type) {
             if (py_type == "int")
@@ -261,7 +268,7 @@ namespace lfs::python {
             std::vector<std::string> names;
             names.reserve(tools.size());
             for (const auto& tool : tools) {
-                names.push_back(tool.name);
+                names.push_back(normalize_tool_name(tool.name));
             }
             return names;
         }

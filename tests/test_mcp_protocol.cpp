@@ -265,6 +265,13 @@ namespace lfs::mcp {
                 };
             });
 
+        const auto registered_tools = ToolRegistry::instance().list_tools();
+        const auto internal_tool = std::find_if(
+            registered_tools.begin(),
+            registered_tools.end(),
+            [](const McpTool& tool) { return tool.name == dotted_tool_name; });
+        ASSERT_NE(internal_tool, registered_tools.end());
+
         McpServer server;
         const auto init_response = server.handle_request(JsonRpcRequest{
             .id = int64_t{1},
