@@ -119,8 +119,11 @@ namespace lfs::vis {
                                           bool select_new_node = true);
         size_t consolidateNodeModels();
 
+        [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;
+        [[nodiscard]] std::expected<void, std::string> removePLYWithResult(const std::string& name, bool keep_children = false);
         void removePLY(const std::string& name, bool keep_children = false);
         void setPLYVisibility(const std::string& name, bool visible);
+        [[nodiscard]] std::expected<void, std::string> removeNodeWithResult(core::NodeId id, bool keep_children = false);
         void removeNode(core::NodeId id, bool keep_children = false);
         void setNodeVisibility(core::NodeId id, bool visible);
 

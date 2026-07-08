@@ -4,6 +4,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/camera.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -12,6 +13,8 @@
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/trainer.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 #include <algorithm>
@@ -1730,6 +1733,52 @@ TEST_F(UndoHistoryTest, DeleteKeepChildrenRestoresHierarchyOnUndo) {
     child = scene_manager->getScene().getNode("child");
     ASSERT_NE(child, nullptr);
     EXPECT_EQ(child->parent_id, lfs::core::NULL_NODE);
+}
+
+TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto root_id = scene.addGroup("root");
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}), root_id);
+    const auto unrelated_id = scene.addSplat("unrelated", make_test_splat({1.0f, 0.0f, 0.0f}));
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    const auto val_group_id = scene.addCameraGroup("Validation", cameras_id, 1);
+    const auto train_camera_id = scene.addCamera("train.png", train_group_id, std::make_shared<lfs::core::Camera>());
+    const auto val_camera_id = scene.addCamera("val.png", val_group_id, std::make_shared<lfs::core::Camera>());
+    scene.setCameraTrainingEnabled(val_camera_id, false);
+    scene.setTrainingModelNode("Model");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    const auto model_result = scene_manager->removePLYWithResult("Model");
+    EXPECT_FALSE(model_result);
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+
+    const auto ancestor_result = scene_manager->canRemoveNode(root_id);
+    EXPECT_FALSE(ancestor_result);
+    EXPECT_NE(scene.getNodeById(root_id), nullptr);
+
+    const auto training_camera_result = scene_manager->removeNodeWithResult(train_camera_id);
+    EXPECT_FALSE(training_camera_result);
+    EXPECT_NE(scene.getNodeById(train_camera_id), nullptr);
+
+    const auto validation_camera_result = scene_manager->removeNodeWithResult(val_camera_id);
+    EXPECT_TRUE(validation_camera_result);
+    EXPECT_EQ(scene.getNodeById(val_camera_id), nullptr);
+
+    const auto unrelated_result = scene_manager->removeNodeWithResult(unrelated_id);
+    EXPECT_TRUE(unrelated_result);
+    EXPECT_EQ(scene.getNodeById(unrelated_id), nullptr);
 }
 
 TEST_F(UndoHistoryTest, RenameNodeCreatesUndoableSceneGraphEntry) {

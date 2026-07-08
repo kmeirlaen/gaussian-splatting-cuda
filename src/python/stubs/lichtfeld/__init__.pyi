@@ -324,7 +324,12 @@ def set_camera_training_enabled(name: str, enabled: bool) -> None:
     """Enable or disable a camera for training by name"""
 
 def remove_node(name: str, keep_children: bool = False) -> None:
-    """Remove a scene node by name"""
+    """Remove a scene node by name.
+
+    Raises:
+        RuntimeError: If the GUI scene manager rejects removal, for example
+            when training protects the target node or subtree.
+    """
 
 def select_node(name: str) -> None:
     """Select a scene node by name"""

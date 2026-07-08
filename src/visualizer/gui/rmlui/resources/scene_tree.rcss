@@ -606,8 +606,17 @@ scene-graph,
     image-color: rgba(243, 139, 168, 230);
 }
 
+.row-icon.trash-icon.trash-disabled,
+.row-icon.trash-icon.trash-disabled:hover {
+    image-color: rgba(130, 130, 130, 115);
+}
+
 .tree-row.selected .row-icon.trash-icon {
     image-color: rgba(255, 153, 153, 230);
+}
+
+.tree-row.selected .row-icon.trash-icon.trash-disabled {
+    image-color: rgba(150, 150, 150, 130);
 }
 
 .node-name {

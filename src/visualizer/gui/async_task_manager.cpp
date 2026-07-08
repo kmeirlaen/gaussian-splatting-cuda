@@ -1274,6 +1274,14 @@ namespace lfs::vis::gui {
         lfs::vis::app_store().import_overlay_state.set(std::move(state));
     }
 
+    void AsyncTaskManager::setImportNumImages(const size_t num_images) {
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.num_images = num_images;
+        }
+        publishImportOverlayState();
+    }
+
     void AsyncTaskManager::publishVideoExportOverlayState() {
         lfs::vis::AppStore::VideoExportOverlayState state;
         state.active = video_export_state_.active.load();
