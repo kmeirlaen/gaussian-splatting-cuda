@@ -129,6 +129,7 @@ namespace lfs::vis {
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
+            [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
             void dismissStartupOverlay();
             void setStartupPluginLoadState(bool active, float progress, const std::string& stage);
@@ -296,6 +297,7 @@ namespace lfs::vis {
             // Panel layout and viewport
             PanelLayoutManager panel_layout_;
             ViewportLayout viewport_layout_;
+            float menu_toolbar_right_edge_ = 0.0f;
             bool force_exit_ = false;
 
             std::unique_ptr<MenuBar> menu_bar_;

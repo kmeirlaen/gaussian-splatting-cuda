@@ -1546,7 +1546,7 @@ namespace lfs::io {
         encode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_ENCODE_PARAMS;
         encode_params.struct_size = sizeof(nvimgcodecEncodeParams_t);
         encode_params.quality_value = static_cast<float>(quality);
-        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_DEFAULT;
+        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_QUALITY;
 
         nvimgcodecFuture_t encode_future;
         status = nvimgcodecEncoderEncode(
@@ -1788,7 +1788,7 @@ namespace lfs::io {
         encode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_ENCODE_PARAMS;
         encode_params.struct_size = sizeof(nvimgcodecEncodeParams_t);
         encode_params.quality_value = static_cast<float>(quality);
-        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_DEFAULT;
+        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_QUALITY;
 
         nvimgcodecFuture_t encode_future;
         status = nvimgcodecEncoderEncode(
@@ -1896,7 +1896,7 @@ namespace lfs::io {
         encode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_ENCODE_PARAMS;
         encode_params.struct_size = sizeof(nvimgcodecEncodeParams_t);
         encode_params.quality_value = static_cast<float>(quality);
-        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_DEFAULT;
+        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_QUALITY;
 
         nvimgcodecFuture_t encode_future;
         auto status = nvimgcodecEncoderEncode(

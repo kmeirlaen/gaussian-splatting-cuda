@@ -5383,9 +5383,9 @@ namespace lfs::vis::gui {
             auto& focus = guiFocusState();
             focus.reset();
             // Seed from ImGui only; RmlUi panels populate their own claims during
-            // processInput. Aggregating wantsCaptureMouse() here reads stale hover
-            // state from the previous frame, which becomes self-perpetuating once a
-            // panel sets a hover element — toolbar tools then cannot be activated.
+            // processInput. Aggregating RmlUi's mouse-capture state here reads stale
+            // hover state from the previous frame, which becomes self-perpetuating once
+            // a panel sets a hover element — toolbar tools then cannot be activated.
             const ImGuiIO& io = ImGui::GetIO();
             focus.want_capture_mouse = io.WantCaptureMouse;
             focus.want_capture_keyboard = io.WantCaptureKeyboard || rmlui_manager_.wantsCaptureKeyboard();
@@ -5522,8 +5522,7 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_mouse = true;
 
             if (!vulkan_gui_) {
-                rml_menu_bar_.setViewportRightEdge(
-                    viewport_layout_.pos.x + viewport_layout_.size.x - menu_input.screen_x);
+                rml_menu_bar_.setViewportRightEdge(menu_toolbar_right_edge_ - menu_input.screen_x);
                 rml_menu_bar_.draw(menu_input.screen_w, menu_input.screen_h);
             }
         } else {
@@ -6068,6 +6067,12 @@ namespace lfs::vis::gui {
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
 
+        // The render-mode toolbar anchors to the right panel's edge, so the docked
+        // editor console must not drag it left when it shrinks the viewport.
+        const ViewportLayout toolbar_layout = panel_layout_.computeViewportLayout(
+            show_main_panel_, ui_hidden_, false, screen);
+        menu_toolbar_right_edge_ = toolbar_layout.pos.x + toolbar_layout.size.x;
+
         {
             LOG_TIMER_THRESHOLD("gui_render.gizmo_update", 0.25);
             gizmo_manager_.updateToolState(ctx, ui_hidden_);
@@ -6346,8 +6351,7 @@ namespace lfs::vis::gui {
             if (menu_bar_) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.menu_bar", 0.25);
                 rml_menu_bar_.setUiHidden(ui_hidden_);
-                rml_menu_bar_.setViewportRightEdge(
-                    viewport_layout_.pos.x + viewport_layout_.size.x - panel_input.screen_x);
+                rml_menu_bar_.setViewportRightEdge(menu_toolbar_right_edge_ - panel_input.screen_x);
                 rml_menu_bar_.draw(panel_input.screen_w, panel_input.screen_h);
             }
             if (global_context_menu_->hasPendingRenderWork()) {
@@ -6964,6 +6968,11 @@ namespace lfs::vis::gui {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
+        if (rmlui_manager_.activeOverlayContainsPoint(static_cast<float>(x),
+                                                      static_cast<float>(y))) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
         if (panel_layout_.isResizingPanel() || isPositionOverFloatingPanel(x, y)) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
@@ -7223,6 +7232,10 @@ namespace lfs::vis::gui {
         return rmlui_manager_.passiveMouseMoveNeedsRender(mouse_x, mouse_y);
     }
 
+    std::optional<double> GuiManager::secondsUntilTooltipReveal() const {
+        return rmlui_manager_.secondsUntilTooltipReveal();
+    }
+
     void GuiManager::captureKey(int physical_key, int logical_key, int mods) {
         if (auto* input_controller = viewer_->getInputController()) {
             input_controller->getBindings().captureKey(physical_key, logical_key, mods);
@@ -7427,6 +7440,8 @@ namespace lfs::vis::gui {
         if (isVramHudPublishDue(now))
             return true;
         if (rml_viewport_overlay_.needsAnimationFrame())
+            return true;
+        if (rml_menu_bar_.needsAnimationFrame())
             return true;
         if (rml_right_panel_.needsAnimationFrame())
             return true;
