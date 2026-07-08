@@ -1344,6 +1344,31 @@ namespace lfs::vis {
         return removeNodeImpl(name, keep_children, HistoryMode::Record);
     }
 
+    std::expected<void, std::string> SceneManager::removeNodesWithResult(const std::vector<std::string>& names,
+                                                                         const bool keep_children) {
+        std::vector<std::pair<std::string, TrainingRemovalImpact>> planned_removals;
+        planned_removals.reserve(names.size());
+
+        for (const auto& name : names) {
+            if (!scene_.getNode(name)) {
+                return std::unexpected("Node not found: " + name);
+            }
+
+            const auto impact = classifyTrainingRemovalImpact(name);
+            if (const auto result = validateNodeRemoval(name, impact); !result) {
+                return result;
+            }
+            planned_removals.emplace_back(name, impact);
+        }
+
+        for (const auto& [name, impact] : planned_removals) {
+            if (const auto result = removeNodeImpl(name, keep_children, HistoryMode::Record, impact); !result) {
+                return result;
+            }
+        }
+        return {};
+    }
+
     void SceneManager::removePLY(const std::string& name, const bool keep_children) {
         if (const auto result = removePLYWithResult(name, keep_children); !result) {
             LOG_WARN("{}", result.error());
