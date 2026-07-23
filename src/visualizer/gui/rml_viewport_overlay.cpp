@@ -409,10 +409,6 @@ namespace lfs::vis::gui {
             markRenderNeeded(RenderReason::VramHud);
     }
 
-    bool RmlViewportOverlay::isDueForVramProcessSample(std::chrono::milliseconds interval) {
-        return vram_hud_ ? vram_hud_->isDueForProcessSample(interval) : false;
-    }
-
     void RmlViewportOverlay::bindReactiveStore() {
         auto& store = lfs::vis::app_store();
         gt_metrics_config_ = store.gt_metrics_overlay_config.get();
@@ -518,7 +514,6 @@ namespace lfs::vis::gui {
                 element->SetProperty("left", std::format("{:.1f}px", x));
             }
         };
-        apply_left_toolbar_offset("primary-shelf-background", -primary_toolbar_x_);
         apply_left_toolbar_offset("primary-utility-toolbar", -primary_toolbar_x_);
         applied_primary_toolbar_x_ = primary_toolbar_x_;
         applied_primary_toolbar_width_ = primary_toolbar_width_;
@@ -950,8 +945,10 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.tooltip", 0.25);
             tooltip_changed = applyFrameTooltip();
         }
-        if (rml_manager_)
+        if (rml_manager_) {
             rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
+            rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
+        }
         const bool can_update_tooltip_only =
             rml_manager_ && tooltip_changed && theme_current && !document_hooks_due &&
             !builtin_document_sync_due && !render_needed_ && !animation_active_ &&
@@ -1035,8 +1032,10 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.tooltip", 0.25);
             tooltip_changed = applyFrameTooltip();
         }
-        if (rml_manager_)
+        if (rml_manager_) {
             rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
+            rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
+        }
 
         const bool needs_render = render_needed_ || animation_active_ || document_dirty ||
                                   theme_changed || size_changed || toolbar_changed ||

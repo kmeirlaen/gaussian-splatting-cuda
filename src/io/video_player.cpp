@@ -9,6 +9,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/display.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
 #include <libavutil/imgutils.h>
@@ -18,7 +19,9 @@ extern "C" {
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -108,6 +111,34 @@ namespace lfs::io {
             AVStream* const stream = fmt_ctx_->streams[video_stream_idx_];
             const AVCodecID codec_id = stream->codecpar->codec_id;
 
+            // Read rotation metadata from stream (metadata dict or display matrix)
+            rotation_ = 0;
+            AVDictionaryEntry* tag = av_dict_get(stream->metadata, "rotate", nullptr, 0);
+            if (tag && tag->value) {
+                rotation_ = std::atoi(tag->value);
+            } else {
+                // Try display matrix side data (common in MP4/MOV from smartphones)
+                int32_t* display_matrix = nullptr;
+
+                // Check codecpar coded_side_data
+                for (int i = 0; i < stream->codecpar->nb_coded_side_data; i++) {
+                    if (stream->codecpar->coded_side_data[i].type == AV_PKT_DATA_DISPLAYMATRIX) {
+                        display_matrix = reinterpret_cast<int32_t*>(
+                            stream->codecpar->coded_side_data[i].data);
+                        break;
+                    }
+                }
+
+                if (display_matrix) {
+                    const double angle = av_display_rotation_get(display_matrix);
+                    // av_display_rotation_get returns CCW, our convention is CW
+                    rotation_ = static_cast<int>(std::round(-angle));
+                }
+            }
+            rotation_ = ((rotation_ % 360) + 360) % 360; // normalize
+            if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
+                rotation_ = 0;
+
             const char* hw_decoder_name = getHwDecoderName(codec_id);
             const AVCodec* codec = nullptr;
 
@@ -187,6 +218,22 @@ namespace lfs::io {
                 display_buffer_ = std::move(decoded_frame_.data);
                 current_time_ = decoded_frame_.pts;
                 current_frame_ = decoded_frame_.frame_number;
+
+                // Fallback: check decoded frame for display matrix
+                if (rotation_ == 0 && frame_) {
+                    for (int i = 0; i < frame_->nb_side_data; i++) {
+                        if (frame_->side_data[i]->type == AV_FRAME_DATA_DISPLAYMATRIX) {
+                            const double angle = av_display_rotation_get(
+                                reinterpret_cast<int32_t*>(frame_->side_data[i]->data));
+                            // av_display_rotation_get returns CCW, our convention is CW
+                            rotation_ = static_cast<int>(std::round(-angle));
+                            break;
+                        }
+                    }
+                    rotation_ = ((rotation_ % 360) + 360) % 360;
+                    if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
+                        rotation_ = 0;
+                }
             }
 
             is_open_ = true;
@@ -379,6 +426,7 @@ namespace lfs::io {
         [[nodiscard]] int height() const { return height_; }
         [[nodiscard]] int sourceWidth() const { return src_width_; }
         [[nodiscard]] int sourceHeight() const { return src_height_; }
+        [[nodiscard]] int rotation() const { return rotation_; }
         [[nodiscard]] double currentTime() const { return current_time_; }
         [[nodiscard]] double duration() const { return duration_; }
         [[nodiscard]] int64_t currentFrameNumber() const { return current_frame_; }
@@ -537,6 +585,7 @@ namespace lfs::io {
         double duration_ = 0;
         int64_t total_frames_ = 0;
         size_t frame_size_ = 0;
+        int rotation_ = 0;
 
         std::vector<uint8_t> display_buffer_;
         double current_time_ = 0;
@@ -582,6 +631,7 @@ namespace lfs::io {
     int VideoPlayer::height() const { return impl_->height(); }
     int VideoPlayer::sourceWidth() const { return impl_->sourceWidth(); }
     int VideoPlayer::sourceHeight() const { return impl_->sourceHeight(); }
+    int VideoPlayer::rotation() const { return impl_->rotation(); }
 
     double VideoPlayer::currentTime() const { return impl_->currentTime(); }
     double VideoPlayer::duration() const { return impl_->duration(); }

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <type_traits>
 
 namespace lfs::mcp {
 
@@ -17,21 +18,40 @@ namespace lfs::mcp {
 
     } // namespace
 
+    RequestId RequestId::from_json(const json& request_object) {
+        if (!request_object.contains("id")) {
+            return RequestId{};
+        }
+
+        const auto& id = request_object["id"];
+        if (id.is_number_integer()) {
+            return RequestId{id.get<std::int64_t>()};
+        }
+        if (id.is_string()) {
+            return RequestId{id.get<std::string>()};
+        }
+        return RequestId{nullptr};
+    }
+
+    std::optional<json> RequestId::to_json() const {
+        return std::visit(
+            []<typename T>(const T& value) -> std::optional<json> {
+                if constexpr (std::is_same_v<T, std::monostate>) {
+                    return std::nullopt;
+                } else {
+                    return json(value);
+                }
+            },
+            value_);
+    }
+
     JsonRpcRequest parse_request(const std::string& input) {
         JsonRpcRequest req;
 
         auto j = json::parse(input);
 
         req.jsonrpc = j.value("jsonrpc", "2.0");
-
-        if (j.contains("id")) {
-            if (j["id"].is_number_integer()) {
-                req.id = j["id"].get<int64_t>();
-            } else if (j["id"].is_string()) {
-                req.id = j["id"].get<std::string>();
-            }
-        }
-
+        req.id = RequestId::from_json(j);
         req.method = j.value("method", "");
 
         if (j.contains("params")) {
@@ -45,7 +65,9 @@ namespace lfs::mcp {
         json j;
         j["jsonrpc"] = response.jsonrpc;
 
-        std::visit([&j](const auto& id) { j["id"] = id; }, response.id);
+        if (const auto id = response.id.to_json()) {
+            j["id"] = *id;
+        }
 
         if (response.result) {
             j["result"] = *response.result;
@@ -61,7 +83,7 @@ namespace lfs::mcp {
             j["error"] = err;
         }
 
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string serialize_notification(const std::string& method, const json& params) {
@@ -69,7 +91,7 @@ namespace lfs::mcp {
         j["jsonrpc"] = "2.0";
         j["method"] = method;
         j["params"] = params;
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     json tool_to_json(const McpTool& tool) {
@@ -151,7 +173,7 @@ namespace lfs::mcp {
     }
 
     JsonRpcResponse make_error_response(
-        const std::variant<int64_t, std::string>& id,
+        const RequestId& id,
         int code,
         const std::string& message,
         const std::optional<json>& data) {
@@ -163,7 +185,7 @@ namespace lfs::mcp {
     }
 
     JsonRpcResponse make_success_response(
-        const std::variant<int64_t, std::string>& id,
+        const RequestId& id,
         const json& result) {
 
         JsonRpcResponse resp;

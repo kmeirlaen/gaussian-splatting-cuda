@@ -3,10 +3,10 @@
     <link type="text/rcss" href="viewport_overlay.rcss"/>
 </head>
 <body id="overlay-body">
+    <div id="left-frame-border" class="viewport-frame-border"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
 
     <div id="primary-toolbar-root" class="panel-toolbar-root">
-        <div id="primary-shelf-background" class="shelf-background"></div>
         <div id="primary-utility-toolbar" class="toolbar-container toolbar-vertical">
             <div class="icon-btn"
                  data-for="button : selection_group_buttons"
@@ -185,7 +185,6 @@
     </div>
 
     <div id="secondary-toolbar-root" class="panel-toolbar-root hidden">
-        <div id="secondary-shelf-background" class="shelf-background"></div>
         <div id="secondary-utility-toolbar" class="toolbar-container toolbar-vertical">
             <div class="icon-btn"
                  data-for="button : selection_group_buttons"
@@ -624,6 +623,23 @@
                             data-event-click="depth_view_action('disable')">
                         <img src="../icon/scene/x.png" />
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="gt-compare-mode-block" class="viewport-depth-overlay hidden">
+        <div class="viewport-transform-panel viewport-depth-panel viewport-gt-compare-panel" data-tooltip="tooltip.gt_compare_mode">
+            <div class="viewport-transform-header viewport-depth-header">
+                <div class="viewport-transform-meta viewport-depth-meta">
+                    <span class="viewport-transform-meta__tool">{{gt_compare_tool_label}}</span>
+                    <select class="viewport-depth-mode-select viewport-gt-compare-mode-select"
+                            data-value="gt_compare_mode_value"
+                            data-tooltip="tooltip.gt_compare_mode">
+                        <option value="rgb">RGB</option>
+                        <option value="normal">Normal</option>
+                        <option value="depth">Depth</option>
+                    </select>
                 </div>
             </div>
         </div>

@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace Rml {
     class Element;
@@ -53,6 +54,14 @@ namespace lfs::gui {
         int custom_height = 0;
 
         std::string filename_pattern = "frame_%d";
+
+        io::SharpnessAlgorithm sharpness_algorithm = io::SharpnessAlgorithm::COMBINED;
+        double sharpness_threshold = 10.0;
+        int window_candidates_target = 10;
+        bool sharpness_window_mode = false;
+        bool sharpness_enabled = false;
+        bool generate_metadata = false;
+        int rotation = 0; // 0, 90, 180, 270
     };
 
     class LFS_VIS_API VideoExtractorDialog : public IVideoExtractorWidget {
@@ -61,6 +70,7 @@ namespace lfs::gui {
         ~VideoExtractorDialog() override;
 
         [[nodiscard]] bool isVideoPlaying() const override;
+        [[nodiscard]] bool openVideoPath(const std::filesystem::path& path) override;
         void shutdown() override;
         [[nodiscard]] bool supportsDirectDraw() const override { return true; }
         void preloadDirect(float w, float h, const lfs::vis::gui::PanelDrawContext& ctx,
@@ -105,7 +115,7 @@ namespace lfs::gui {
         void startExtraction(const VideoExtractionParams& params);
         void joinExtractionThread();
 
-        void updateProgress(int current, int total);
+        void updateProgress(int current, int total, int discarded = 0);
         void setExtractionComplete();
         void setExtractionStopped();
         void setExtractionError(const std::string& error);
@@ -152,6 +162,7 @@ namespace lfs::gui {
 
         int format_selection_ = 0;
         int jpg_quality_ = 95;
+        int window_candidates_target_ = 10;
 
         int resolution_mode_ = 0;
         int scale_selection_ = 3;
@@ -167,6 +178,7 @@ namespace lfs::gui {
         std::atomic<bool> stop_extraction_requested_{false};
         std::atomic<int> current_frame_{0};
         std::atomic<int> total_frames_{0};
+        std::atomic<int> discarded_frames_{0};
         std::atomic<bool> extraction_status_dirty_{false};
         mutable std::mutex extraction_status_mutex_;
         std::string error_message_;
@@ -253,6 +265,26 @@ namespace lfs::gui {
         Rml::Element* error_section_el_ = nullptr;
         Rml::Element* error_text_el_ = nullptr;
         Rml::Element* dismiss_btn_el_ = nullptr;
+        Rml::Element* sharpness_toggle_el_ = nullptr;
+        Rml::Element* sharpness_options_el_ = nullptr;
+        Rml::Element* sharpness_threshold_row_el_ = nullptr;
+        Rml::ElementFormControlSelect* sharpness_algorithm_select_el_ = nullptr;
+        Rml::ElementFormControlSelect* sharpness_mode_select_el_ = nullptr;
+        Rml::Element* sharpness_mode_desc_el_ = nullptr;
+        Rml::Element* sharpness_threshold_slider_el_ = nullptr;
+        Rml::Element* sharpness_threshold_value_el_ = nullptr;
+        Rml::Element* sharpness_window_row_el_ = nullptr;
+        Rml::Element* window_candidates_select_el_ = nullptr;
+        Rml::Element* window_candidates_readout_el_ = nullptr;
+        Rml::Element* generate_metadata_el_ = nullptr;
+        Rml::Element* overwrite_overlay_el_ = nullptr;
+        int rotation_deg_ = 0;
+        std::vector<uint8_t> rotated_buf_;
+        Rml::Element* rotation_cw_btn_el_ = nullptr;
+        Rml::Element* rotation_ccw_btn_el_ = nullptr;
+        Rml::Element* rotation_value_el_ = nullptr;
+        VideoExtractionParams pending_params_;
+        bool pending_params_set_ = false;
     };
 
 } // namespace lfs::gui

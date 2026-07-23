@@ -12,6 +12,7 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include <cctype>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -216,6 +217,10 @@ namespace lfs::gui {
         return player_ && player_->isPlaying();
     }
 
+    bool VideoExtractorDialog::openVideoPath(const std::filesystem::path& path) {
+        return openVideo(path);
+    }
+
     void VideoExtractorDialog::preloadDirect(const float w, const float h,
                                              const lfs::vis::gui::PanelDrawContext& ctx,
                                              const float clip_y_min,
@@ -312,12 +317,19 @@ namespace lfs::gui {
             extract_params.custom_width = params.custom_width;
             extract_params.custom_height = params.custom_height;
             extract_params.filename_pattern = params.filename_pattern;
+            extract_params.sharpness.enabled = params.sharpness_enabled;
+            extract_params.sharpness.algorithm = params.sharpness_algorithm;
+            extract_params.sharpness.threshold = params.sharpness_threshold;
+            extract_params.sharpness.window_candidates_target = params.window_candidates_target;
+            extract_params.sharpness.window_mode = params.sharpness_window_mode;
+            extract_params.generate_metadata = params.generate_metadata;
+            extract_params.rotation = params.rotation;
             extract_params.cancel_requested = [this]() {
                 return stop_extraction_requested_.load();
             };
 
-            extract_params.progress_callback = [this](const int current, const int total) {
-                updateProgress(current, total);
+            extract_params.progress_callback = [this](const int current, const int total, const int discarded) {
+                updateProgress(current, total, discarded);
             };
 
             std::string error;
@@ -346,9 +358,10 @@ namespace lfs::gui {
         stop_extraction_requested_.store(false);
     }
 
-    void VideoExtractorDialog::updateProgress(const int current, const int total) {
+    void VideoExtractorDialog::updateProgress(const int current, const int total, const int discarded) {
         current_frame_.store(current);
         total_frames_.store(total);
+        discarded_frames_.store(discarded);
         extraction_status_dirty_.store(true);
     }
 
@@ -412,15 +425,19 @@ namespace lfs::gui {
             return false;
         }
 
+        const bool video_path_changed = path != video_path_;
         video_path_ = path;
         trim_start_ = 0.0f;
         trim_end_ = static_cast<float>(player_->duration());
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
+        rotation_deg_ = player_->rotation();
+        if (rotation_value_el_)
+            rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
         texture_needs_update_ = true;
         preview_src_.clear();
 
-        if (output_dir_.empty()) {
+        if (video_path_changed || output_dir_.empty()) {
             std::filesystem::path output_name = video_path_.stem();
             output_name += "_frames";
             output_dir_ = video_path_.parent_path() / output_name;
@@ -456,12 +473,44 @@ namespace lfs::gui {
         if (!data)
             return;
 
-        const int width = player_->width();
-        const int height = player_->height();
+        int width = player_->width();
+        int height = player_->height();
+        const uint8_t* upload_data = data;
+        std::vector<uint8_t> rotated_buf;
+
+        if (rotation_deg_ != 0) {
+            rotated_buf.resize(static_cast<size_t>(width) * height * 3);
+            if (rotation_deg_ == 180) {
+                for (int y = 0; y < height; ++y)
+                    for (int x = 0; x < width; ++x) {
+                        const int si = (y * width + x) * 3;
+                        const int di = ((height - 1 - y) * width + (width - 1 - x)) * 3;
+                        rotated_buf[di + 0] = data[si + 0];
+                        rotated_buf[di + 1] = data[si + 1];
+                        rotated_buf[di + 2] = data[si + 2];
+                    }
+            } else {
+                const int dst_w = height;
+                const int dst_h = width;
+                for (int y = 0; y < height; ++y)
+                    for (int x = 0; x < width; ++x) {
+                        const int si = (y * width + x) * 3;
+                        const int di = (rotation_deg_ == 90)
+                                           ? (x * height + (height - 1 - y)) * 3 // CW
+                                           : ((width - 1 - x) * height + y) * 3; // CCW
+                        rotated_buf[di + 0] = data[si + 0];
+                        rotated_buf[di + 1] = data[si + 1];
+                        rotated_buf[di + 2] = data[si + 2];
+                    }
+                width = dst_w;
+                height = dst_h;
+            }
+            upload_data = rotated_buf.data();
+        }
+
         if (!preview_texture_)
             preview_texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
-
-        if (preview_texture_->upload(data, width, height, 3)) {
+        if (preview_texture_->upload(upload_data, width, height, 3)) {
             preview_texture_width_ = width;
             preview_texture_height_ = height;
         } else {
@@ -633,6 +682,21 @@ namespace lfs::gui {
         error_section_el_ = document_->GetElementById("error-section");
         error_text_el_ = document_->GetElementById("error-text");
         dismiss_btn_el_ = document_->GetElementById("btn-error-dismiss");
+        sharpness_toggle_el_ = document_->GetElementById("sharpness-toggle");
+        sharpness_options_el_ = document_->GetElementById("sharpness-options");
+        sharpness_threshold_row_el_ = document_->GetElementById("sharpness-threshold-row");
+        sharpness_algorithm_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(
+            document_->GetElementById("sharpness-algorithm-select"));
+        sharpness_mode_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(
+            document_->GetElementById("sharpness-mode-select"));
+        sharpness_mode_desc_el_ = document_->GetElementById("sharpness-mode-desc");
+        sharpness_threshold_slider_el_ = document_->GetElementById("sharpness-threshold-slider");
+        sharpness_threshold_value_el_ = document_->GetElementById("sharpness-threshold-value");
+        sharpness_window_row_el_ = document_->GetElementById("sharpness-window-row");
+        window_candidates_select_el_ = document_->GetElementById("window-candidates-select");
+        window_candidates_readout_el_ = document_->GetElementById("window-candidates-readout");
+        generate_metadata_el_ = document_->GetElementById("generate-metadata");
+        overwrite_overlay_el_ = document_->GetElementById("overwrite-overlay");
 
         elements_cached_ =
             title_el_ && close_btn_el_ && preview_shell_el_ && preview_image_el_ &&
@@ -651,12 +715,18 @@ namespace lfs::gui {
             start_btn_el_ && stop_btn_el_ && cancel_btn_el_ && select_hint_el_ && progress_section_el_ &&
             progress_text_el_ && progress_bar_el_ && complete_section_el_ &&
             complete_text_el_ && ok_btn_el_ && stopped_section_el_ && stopped_text_el_ &&
-            stopped_ok_btn_el_ && error_section_el_ && error_text_el_ && dismiss_btn_el_;
+            stopped_ok_btn_el_ && error_section_el_ && error_text_el_ && dismiss_btn_el_ &&
+            sharpness_toggle_el_ && sharpness_options_el_ && sharpness_algorithm_select_el_ &&
+            sharpness_mode_select_el_ && sharpness_threshold_slider_el_ && sharpness_threshold_value_el_;
 
         if (!elements_cached_) {
             LOG_ERROR("VideoExtractorDialog: missing required Rml elements");
             return;
         }
+
+        rotation_cw_btn_el_ = document_->GetElementById("btn-rotation-cw");
+        rotation_ccw_btn_el_ = document_->GetElementById("btn-rotation-ccw");
+        rotation_value_el_ = document_->GetElementById("rotation-value");
 
         bindEventListeners();
         controls_dirty_ = true;
@@ -694,6 +764,16 @@ namespace lfs::gui {
         listen_click(stopped_ok_btn_el_);
         listen_click(dismiss_btn_el_);
 
+        // Overwrite confirmation buttons
+        {
+            auto* no = document_->GetElementById("overwrite-no");
+            if (no)
+                no->AddEventListener(Rml::EventId::Click, &listener_);
+            auto* yes = document_->GetElementById("overwrite-yes");
+            if (yes)
+                yes->AddEventListener(Rml::EventId::Click, &listener_);
+        }
+
         listen_change(mode_select_el_);
         listen_change(fps_slider_el_);
         listen_input(fps_slider_el_);
@@ -708,6 +788,15 @@ namespace lfs::gui {
         listen_change(pattern_input_el_);
         listen_change(trim_start_input_el_);
         listen_change(trim_end_input_el_);
+        listen_change(sharpness_toggle_el_);
+        listen_change(sharpness_algorithm_select_el_);
+        listen_change(sharpness_mode_select_el_);
+        listen_change(sharpness_threshold_slider_el_);
+        listen_input(sharpness_threshold_slider_el_);
+        listen_change(window_candidates_select_el_);
+        listen_change(generate_metadata_el_);
+        listen_click(rotation_cw_btn_el_);
+        listen_click(rotation_ccw_btn_el_);
 
         timeline_el_->AddEventListener(Rml::EventId::Mousedown, &listener_);
         if (auto* const body = document_->GetElementById("body")) {
@@ -925,6 +1014,52 @@ namespace lfs::gui {
         changed |= setCachedProperty(custom_resolution_row_el_, "display", resolution_mode_ == 2 ? "flex" : "none");
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
 
+        const bool sharpness_on = sharpness_toggle_el_ && sharpness_toggle_el_->HasAttribute("checked");
+        changed |= setCachedProperty(sharpness_options_el_, "display", sharpness_on ? "block" : "none");
+
+        // Show threshold slider only in threshold mode (hidden in window mode)
+        const bool window_mode = sharpness_mode_select_el_ &&
+                                 sharpness_mode_select_el_->GetSelection() == 1;
+        changed |= setCachedProperty(sharpness_threshold_row_el_, "display",
+                                     (sharpness_on && !window_mode) ? "flex" : "none");
+        changed |= setCachedProperty(sharpness_window_row_el_, "display",
+                                     (sharpness_on && window_mode) ? "flex" : "none");
+        if (sharpness_mode_desc_el_) {
+            changed |= setCachedText(sharpness_mode_desc_el_,
+                                     window_mode ? LOC(VideoExtractor::SHARPNESS_MODE_DESC_WINDOW)
+                                                 : LOC(VideoExtractor::SHARPNESS_MODE_DESC_THRESHOLD));
+        }
+
+        if (window_candidates_readout_el_) {
+            // Calculate estimated window frames
+            int est_window = 0;
+            if (mode_selection_ == 0 && player_ && player_->fps() > 0 && fps_ > 0)
+                est_window = static_cast<int>(std::round(player_->fps() / fps_));
+            else if (mode_selection_ == 1)
+                est_window = frame_interval_;
+
+            std::string opt = window_candidates_select_el_
+                                  ? window_candidates_select_el_->GetAttribute<Rml::String>("value", "10")
+                                  : "10";
+            int candidates = 0;
+            if (window_candidates_target_ < 0) {
+                // Auto mode: sqrt-based
+                candidates = std::clamp(static_cast<int>(std::round(std::sqrt(static_cast<double>(est_window))) * 2), 5, 20);
+            } else if (window_candidates_target_ == 0) {
+                // All frames
+                candidates = est_window;
+            } else {
+                candidates = std::min(window_candidates_target_, std::max(1, est_window));
+            }
+            changed |= setCachedText(window_candidates_readout_el_,
+                                     localizedFormat(VideoExtractor::CANDIDATES_READOUT_FMT, candidates, est_window));
+        }
+
+        if (sharpness_threshold_slider_el_ && sharpness_threshold_value_el_) {
+            const int val = readIntValue(sharpness_threshold_slider_el_, 10);
+            changed |= setCachedText(sharpness_threshold_value_el_, std::to_string(val) + "%");
+        }
+
         changed |= setCachedControlValue(fps_slider_el_, std::format("{:.1f}", fps_));
         changed |= setCachedText(fps_value_el_, std::format("{:.1f} {}", fps_, LOC(VideoExtractor::FPS_LABEL)));
         changed |= setCachedControlValue(interval_input_el_, std::to_string(frame_interval_));
@@ -960,9 +1095,16 @@ namespace lfs::gui {
         if (extracting) {
             const float progress = total > 0 ? static_cast<float>(current) / static_cast<float>(total) : 0.0f;
             changed |= setCachedAttribute(progress_bar_el_, "value", std::format("{:.4f}", progress));
-            changed |= setCachedText(progress_text_el_, total > 0
-                                                            ? localizedFormat(VideoExtractor::EXTRACTING, current, total)
-                                                            : LOC(VideoExtractor::STARTING));
+            if (total > 0) {
+                const int discarded = discarded_frames_.load();
+                const std::string discard_str = discarded > 0
+                                                    ? localizedFormat(VideoExtractor::DISCARDED_FORMAT, discarded)
+                                                    : "";
+                changed |= setCachedText(progress_text_el_,
+                                         std::format("{}/{}{}", current, total, discard_str));
+            } else {
+                changed |= setCachedText(progress_text_el_, LOC(VideoExtractor::STARTING));
+            }
         }
 
         const auto snapshot = getExtractionStatusSnapshot();
@@ -971,9 +1113,14 @@ namespace lfs::gui {
                                          ? "flex"
                                          : "none");
         if (snapshot.status_message == ExtractionStatusMessage::Complete && !extracting) {
-            changed |= setCachedText(complete_text_el_,
-                                     std::format("{} {}", LOC(VideoExtractor::COMPLETE),
-                                                 localizedFormat(VideoExtractor::EXTRACTED, current)));
+            const int saved = current - discarded_frames_.load();
+            const int discarded = discarded_frames_.load();
+            std::string complete_msg = std::format("{} {}",
+                                                   LOC(VideoExtractor::COMPLETE),
+                                                   localizedFormat(VideoExtractor::EXTRACTED, saved));
+            if (discarded > 0)
+                complete_msg += localizedFormat(VideoExtractor::DISCARDED_FORMAT, discarded);
+            changed |= setCachedText(complete_text_el_, complete_msg);
         }
 
         changed |= setCachedProperty(stopped_section_el_, "display",
@@ -1106,12 +1253,59 @@ namespace lfs::gui {
             markContentDirty();
         } else if (id == "btn-start") {
             beginExtractionFromUi();
+        } else if (id == "overwrite-yes") {
+            if (pending_params_set_) {
+                // Clear the folder
+                const auto& dir = pending_params_.output_dir;
+                if (std::filesystem::exists(dir)) {
+                    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+                        if (!entry.is_regular_file())
+                            continue;
+                        const auto ext = entry.path().extension().string();
+                        std::string lower;
+                        lower.reserve(ext.size());
+                        for (auto c : ext)
+                            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                        if (lower == ".jpg" || lower == ".jpeg" || lower == ".png" ||
+                            entry.path().filename() == "extraction_metadata.json") {
+                            std::error_code ec;
+                            std::filesystem::remove(entry.path(), ec);
+                        }
+                    }
+                }
+                pending_params_set_ = false;
+                if (overwrite_overlay_el_)
+                    overwrite_overlay_el_->SetClass("hidden", true);
+                stop_extraction_requested_.store(false);
+                extracting_.store(true);
+                current_frame_.store(0);
+                total_frames_.store(0);
+                discarded_frames_.store(0);
+                clearExtractionStatus();
+                startExtraction(pending_params_);
+            }
+        } else if (id == "overwrite-no") {
+            pending_params_set_ = false;
+            if (overwrite_overlay_el_)
+                overwrite_overlay_el_->SetClass("hidden", true);
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();
             current_frame_.store(0);
             total_frames_.store(0);
         } else if (id == "btn-error-dismiss") {
             clearErrorMessage();
+        } else if (id == "btn-rotation-cw") {
+            rotation_deg_ = (rotation_deg_ + 90) % 360;
+            if (rotation_value_el_)
+                rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
+            texture_needs_update_ = true;
+            markContentDirty();
+        } else if (id == "btn-rotation-ccw") {
+            rotation_deg_ = (rotation_deg_ + 270) % 360;
+            if (rotation_value_el_)
+                rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
+            texture_needs_update_ = true;
+            markContentDirty();
         }
     }
 
@@ -1135,6 +1329,26 @@ namespace lfs::gui {
         } else if (id == "quality-slider") {
             jpg_quality_ = std::clamp(readIntValue(quality_slider_el_, jpg_quality_), 50, 100);
             changed_control = quality_slider_el_;
+        } else if (id == "window-candidates-select") {
+            if (window_candidates_select_el_) {
+                const auto* select = dynamic_cast<const Rml::ElementFormControlSelect*>(window_candidates_select_el_);
+                if (select) {
+                    const int values[] = {-1, 3, 5, 10, 20, 50, 0};
+                    window_candidates_target_ = values[std::clamp(select->GetSelection(), 0, 6)];
+                }
+            }
+            changed_control = window_candidates_select_el_;
+        } else if (id == "sharpness-toggle") {
+            changed_control = sharpness_toggle_el_;
+        } else if (id == "sharpness-algorithm-select") {
+            changed_control = sharpness_algorithm_select_el_;
+        } else if (id == "sharpness-mode-select") {
+            changed_control = sharpness_mode_select_el_;
+        } else if (id == "sharpness-threshold-slider") {
+            // value read in syncControls
+            changed_control = sharpness_threshold_slider_el_;
+        } else if (id == "generate-metadata") {
+            changed_control = generate_metadata_el_;
         } else {
             applyTextInput(id);
             if (id == "trim-start-input")
@@ -1268,7 +1482,6 @@ namespace lfs::gui {
         params.jpg_quality = jpg_quality_;
         params.start_time = static_cast<double>(trim_start_);
         params.end_time = static_cast<double>(trim_end_);
-
         static constexpr std::array<io::ResolutionMode, 3> RES_MODES{
             io::ResolutionMode::Original,
             io::ResolutionMode::Scale,
@@ -1278,6 +1491,45 @@ namespace lfs::gui {
         params.custom_width = custom_width_;
         params.custom_height = custom_height_;
         params.filename_pattern = filename_pattern_.data();
+        params.sharpness_enabled = sharpness_toggle_el_ && sharpness_toggle_el_->HasAttribute("checked");
+        if (sharpness_algorithm_select_el_) {
+            static constexpr io::SharpnessAlgorithm ALGO_MAP[] = {
+                io::SharpnessAlgorithm::COMBINED,
+                io::SharpnessAlgorithm::TENENGRAD,
+                io::SharpnessAlgorithm::LAPLACIAN};
+            params.sharpness_algorithm = ALGO_MAP[std::clamp(sharpness_algorithm_select_el_->GetSelection(), 0, 2)];
+        }
+        params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
+        params.window_candidates_target = window_candidates_target_;
+        params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 10));
+        params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
+        params.rotation = rotation_deg_;
+
+        // Check if output folder already contains generated extraction files
+        if (std::filesystem::exists(output_dir_)) {
+            bool has_generated = false;
+            for (const auto& entry : std::filesystem::directory_iterator(output_dir_)) {
+                if (!entry.is_regular_file())
+                    continue;
+                const auto ext = entry.path().extension().string();
+                std::string ext_lower;
+                ext_lower.reserve(ext.size());
+                for (auto c : ext)
+                    ext_lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                if (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".png" ||
+                    entry.path().filename() == "extraction_metadata.json") {
+                    has_generated = true;
+                    break;
+                }
+            }
+            if (has_generated) {
+                pending_params_ = params;
+                pending_params_set_ = true;
+                if (overwrite_overlay_el_)
+                    overwrite_overlay_el_->SetClass("hidden", false);
+                return;
+            }
+        }
 
         stop_extraction_requested_.store(false);
         extracting_.store(true);

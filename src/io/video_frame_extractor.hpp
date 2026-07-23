@@ -30,6 +30,20 @@ namespace lfs::io {
         Custom
     };
 
+    enum class SharpnessAlgorithm {
+        LAPLACIAN, // Laplacian variance — fast, blur detection
+        TENENGRAD, // Sobel energy — directional blur detection
+        COMBINED   // Tenengrad + Laplacian — best overall
+    };
+
+    struct SharpnessParams {
+        bool enabled = false;
+        SharpnessAlgorithm algorithm = SharpnessAlgorithm::COMBINED;
+        double threshold = 0.0;            // 0 = disabled (no threshold filtering)
+        int window_candidates_target = 10; // <0=auto, 0=all, >0=fixed candidates per interval
+        bool window_mode = false;
+    };
+
     class VideoFrameExtractor {
     public:
         VideoFrameExtractor();
@@ -43,7 +57,8 @@ namespace lfs::io {
             int frame_interval = 1;
             ImageFormat format = ImageFormat::PNG;
             int jpg_quality = 95;
-            std::function<void(int, int)> progress_callback; // (current, total)
+            SharpnessParams sharpness;
+            std::function<void(int, int, int)> progress_callback; // (current, total, discarded)
             std::function<bool()> cancel_requested;
 
             // Trim range
@@ -58,6 +73,8 @@ namespace lfs::io {
 
             // Output naming
             std::string filename_pattern = "frame_%d"; // %d = frame number
+            bool generate_metadata = false;
+            int rotation = 0; // 0, 90, 180, 270
         };
 
         bool extract(const Params& params, std::string& error);

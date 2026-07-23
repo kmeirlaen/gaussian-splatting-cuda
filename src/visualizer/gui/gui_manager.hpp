@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/cuda_version.hpp"
+#include "core/error_bus.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
@@ -12,6 +13,7 @@
 #include "gui/async_task_manager.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/global_context_menu.hpp"
+#include "gui/gui_error_consumer.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
@@ -20,6 +22,7 @@
 #include "gui/rml_right_panel.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/sequencer_ui_manager.hpp"
@@ -27,6 +30,7 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
@@ -87,6 +91,7 @@ namespace lfs::vis {
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
@@ -129,9 +134,14 @@ namespace lfs::vis {
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
+            [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
+            [[nodiscard]] bool isStartupBlockingInput() const {
+                return startup_overlay_.blocksUnderlayInput();
+            }
             void dismissStartupOverlay();
-            void setStartupPluginLoadState(bool active, float progress, const std::string& stage);
+            void setStartupPluginLoadState(bool started, bool active, float progress,
+                                           const std::string& stage);
             void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
             void captureMouseButtonRelease(int button);
@@ -273,6 +283,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;
 
             // UI state only
@@ -296,6 +307,7 @@ namespace lfs::vis {
             // Panel layout and viewport
             PanelLayoutManager panel_layout_;
             ViewportLayout viewport_layout_;
+            float menu_toolbar_right_edge_ = 0.0f;
             bool force_exit_ = false;
 
             std::unique_ptr<MenuBar> menu_bar_;
@@ -340,6 +352,7 @@ namespace lfs::vis {
 
             // Deferred CUDA version warning (emitted on first drawFrame)
             std::optional<lfs::core::CudaVersionInfo> pending_cuda_warning_;
+            bool cuda_unavailable_notified_ = false;
 
             // File association prompt (Windows only, one-shot)
             bool file_association_checked_ = false;
@@ -351,6 +364,7 @@ namespace lfs::vis {
             std::uint64_t cached_imgui_resize_frame_count_ = 0;
             bool used_cached_imgui_resize_frame_ = false;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
+            lfs::rendering::CudaVulkanUploadStream vulkan_interop_upload_stream_;
             std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
             std::uint64_t vulkan_scene_image_generation_ = 0;
@@ -436,6 +450,13 @@ namespace lfs::vis {
             };
 
             DevResourceWatchState dev_resource_watch_;
+
+            // Native ErrorBus surfacing (Phase 8). Declared last so
+            // error_subscription_ unsubscribes before any other member (the
+            // modal overlay included) is torn down; error_consumer_ outlives
+            // its subscription per the frozen lifetime rule.
+            std::unique_ptr<GuiErrorConsumer> error_consumer_;
+            lfs::Subscription error_subscription_;
         };
     } // namespace gui
 } // namespace lfs::vis

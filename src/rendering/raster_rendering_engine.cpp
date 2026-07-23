@@ -47,8 +47,7 @@ namespace lfs::rendering {
 
         struct EnvironmentImageCache {
             std::mutex mutex;
-            EnvironmentImage image;
-            std::string last_error;
+            std::shared_ptr<const EnvironmentImage> image;
         };
 
         [[nodiscard]] EnvironmentImageCache& environmentImageCache() {
@@ -79,79 +78,85 @@ namespace lfs::rendering {
 
     } // namespace
 
-    std::expected<EnvironmentImage, std::string> loadEnvironmentImage(const std::filesystem::path& environment_path) {
+    std::expected<std::shared_ptr<const EnvironmentImage>, std::string>
+    loadEnvironmentImageShared(const std::filesystem::path& environment_path) {
         const auto resolved_path = resolveEnvironmentPath(environment_path);
         auto& cache = environmentImageCache();
         std::lock_guard lock(cache.mutex);
-        if (cache.image.valid() && cache.image.path == resolved_path) {
+        if (cache.image && cache.image->valid() && cache.image->path == resolved_path) {
             return cache.image;
         }
 
-        cache.image = {};
-        cache.last_error.clear();
+        cache.image.reset();
         if (resolved_path.empty()) {
-            cache.last_error = "Environment map path is empty";
-            return std::unexpected(cache.last_error);
+            return std::unexpected("Environment map path is empty");
         }
         if (!std::filesystem::exists(resolved_path)) {
-            cache.last_error = std::format("Environment map not found: {}", resolved_path.string());
-            return std::unexpected(cache.last_error);
+            return std::unexpected(std::format("Environment map not found: {}", resolved_path.string()));
         }
 
         const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
         std::unique_ptr<OIIO::ImageInput> input(OIIO::ImageInput::open(path_utf8));
         if (!input) {
-            cache.last_error = std::format("Failed to open environment map {}: {}", path_utf8, OIIO::geterror());
-            return std::unexpected(cache.last_error);
+            return std::unexpected(std::format("Failed to open environment map {}: {}",
+                                               path_utf8,
+                                               OIIO::geterror()));
         }
 
         const auto& spec = input->spec();
         if (spec.width <= 0 || spec.height <= 0 || spec.nchannels <= 0) {
             input->close();
-            cache.last_error = std::format("Invalid environment map dimensions for {}", path_utf8);
-            return std::unexpected(cache.last_error);
+            return std::unexpected(std::format("Invalid environment map dimensions for {}", path_utf8));
         }
 
+        const int read_channels = spec.nchannels >= 3 ? 3 : 1;
         std::vector<float> source_pixels(
             static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height) *
-            static_cast<size_t>(spec.nchannels));
-        if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::FLOAT, source_pixels.data())) {
-            cache.last_error = std::format("Failed to read environment map {}: {}", path_utf8, input->geterror());
+            static_cast<size_t>(read_channels));
+        if (!input->read_image(0, 0, 0, read_channels, OIIO::TypeDesc::FLOAT, source_pixels.data())) {
+            const std::string error =
+                std::format("Failed to read environment map {}: {}", path_utf8, input->geterror());
             input->close();
-            return std::unexpected(cache.last_error);
+            return std::unexpected(error);
         }
         input->close();
 
-        EnvironmentImage image{
-            .path = resolved_path,
-            .width = spec.width,
-            .height = spec.height,
-            .pixels = std::vector<float>(
-                static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height) * 3u),
-        };
-        for (int y = 0; y < spec.height; ++y) {
-            for (int x = 0; x < spec.width; ++x) {
-                const size_t src_index =
-                    (static_cast<size_t>(y) * static_cast<size_t>(spec.width) + static_cast<size_t>(x)) *
-                    static_cast<size_t>(spec.nchannels);
-                const size_t dst_index =
-                    (static_cast<size_t>(y) * static_cast<size_t>(spec.width) + static_cast<size_t>(x)) * 3u;
-                if (spec.nchannels >= 3) {
-                    image.pixels[dst_index + 0] = source_pixels[src_index + 0];
-                    image.pixels[dst_index + 1] = source_pixels[src_index + 1];
-                    image.pixels[dst_index + 2] = source_pixels[src_index + 2];
-                } else {
-                    const float value = source_pixels[src_index];
-                    image.pixels[dst_index + 0] = value;
-                    image.pixels[dst_index + 1] = value;
-                    image.pixels[dst_index + 2] = value;
-                }
+        auto image = std::make_shared<EnvironmentImage>();
+        image->path = resolved_path;
+        image->width = spec.width;
+        image->height = spec.height;
+        if (read_channels == 3) {
+            image->pixels = std::move(source_pixels);
+        } else {
+            const size_t pixel_count =
+                static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height);
+            image->pixels.resize(pixel_count * 3u);
+            for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
+                const float value = source_pixels[pixel];
+                image->pixels[pixel * 3u + 0u] = value;
+                image->pixels[pixel * 3u + 1u] = value;
+                image->pixels[pixel * 3u + 2u] = value;
             }
         }
 
         cache.image = image;
         LOG_INFO("Loaded tensor environment map {}", resolved_path.string());
         return image;
+    }
+
+    std::expected<EnvironmentImage, std::string> loadEnvironmentImage(
+        const std::filesystem::path& environment_path) {
+        auto image = loadEnvironmentImageShared(environment_path);
+        if (!image) {
+            return std::unexpected(image.error());
+        }
+        return **image;
+    }
+
+    void releaseEnvironmentImageCache() {
+        auto& cache = environmentImageCache();
+        std::lock_guard lock(cache.mutex);
+        cache.image.reset();
     }
 
     namespace {
@@ -225,7 +230,7 @@ namespace lfs::rendering {
                 return image;
             }
 
-            auto environment = loadEnvironmentImage(request.environment.map_path);
+            auto environment = loadEnvironmentImageShared(request.environment.map_path);
             if (!environment) {
                 return std::unexpected(environment.error());
             }
@@ -239,7 +244,7 @@ namespace lfs::rendering {
                     const auto rotated = envmath::rotateAroundY({world_dir.x, world_dir.y, world_dir.z}, rotation);
                     const auto uv = envmath::equirectUvForDirection(envmath::normalized(rotated));
 
-                    const glm::vec3 hdr = sampleEnvironmentBilinear(*environment, uv.u, uv.v);
+                    const glm::vec3 hdr = sampleEnvironmentBilinear(**environment, uv.u, uv.v);
                     const auto color = envmath::shadeEnvironmentRadiance({hdr.x, hdr.y, hdr.z}, exposure);
 
                     const size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
@@ -265,27 +270,6 @@ namespace lfs::rendering {
                 .far_plane = result.far_plane,
                 .orthographic = result.orthographic,
                 .color_has_alpha = result.color_has_alpha};
-        }
-
-        [[nodiscard]] int readTensorIndex(const Tensor* const tensor,
-                                          const size_t index) {
-            if (!tensor || !tensor->is_valid() || index >= tensor->numel()) {
-                return 0;
-            }
-
-            switch (tensor->dtype()) {
-            case lfs::core::DataType::Float32:
-                return static_cast<int>(std::lround(tensor->ptr<float>()[index]));
-            case lfs::core::DataType::Int32:
-                return tensor->ptr<int>()[index];
-            case lfs::core::DataType::Int64:
-                return static_cast<int>(tensor->ptr<int64_t>()[index]);
-            case lfs::core::DataType::UInt8:
-            case lfs::core::DataType::Bool:
-                return static_cast<int>(tensor->ptr<unsigned char>()[index]);
-            default:
-                return 0;
-            }
         }
 
         [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
@@ -419,146 +403,6 @@ namespace lfs::rendering {
                 request.viewport_pos.y + projected->y * scale_y);
         }
 
-        [[nodiscard]] glm::vec3 readPointColor(const float* const colors,
-                                               const size_t point_index,
-                                               const bool desaturate) {
-            glm::vec3 color(
-                std::clamp(colors[point_index * 3 + 0], 0.0f, 1.0f),
-                std::clamp(colors[point_index * 3 + 1], 0.0f, 1.0f),
-                std::clamp(colors[point_index * 3 + 2], 0.0f, 1.0f));
-
-            if (desaturate) {
-                const float gray = glm::dot(color, glm::vec3(0.299f, 0.587f, 0.114f));
-                color = glm::mix(color, glm::vec3(gray), 0.75f);
-            }
-            return color;
-        }
-
-        [[nodiscard]] bool pointPassesCrop(const glm::vec3& world_pos,
-                                           const PointCloudFilterState& filters,
-                                           bool& desaturate) {
-            desaturate = false;
-            if (!filters.crop_box.has_value()) {
-                return true;
-            }
-
-            const auto& crop = *filters.crop_box;
-            const glm::vec3 local = glm::vec3(crop.transform * glm::vec4(world_pos, 1.0f));
-            const bool inside =
-                local.x >= crop.min.x && local.x <= crop.max.x &&
-                local.y >= crop.min.y && local.y <= crop.max.y &&
-                local.z >= crop.min.z && local.z <= crop.max.z;
-            const bool visible = filters.crop_inverse ? !inside : inside;
-            desaturate = filters.crop_desaturate && !visible;
-            return visible || filters.crop_desaturate;
-        }
-
-        [[nodiscard]] std::optional<glm::vec3> projectPointToPixel(
-            const glm::vec3& world_pos,
-            const PointCloudRenderRequest& request,
-            const glm::mat4& view,
-            const glm::mat4& projection) {
-            const glm::vec4 view_pos4 = view * glm::vec4(world_pos, 1.0f);
-            const glm::vec3 view_pos(view_pos4);
-            const int width = request.frame_view.size.x;
-            const int height = request.frame_view.size.y;
-
-            if (request.render.equirectangular) {
-                const float len = glm::length(view_pos);
-                if (len <= 1e-6f) {
-                    return std::nullopt;
-                }
-                const glm::vec3 dir = view_pos / len;
-                const float u = 0.5f + std::atan2(dir.x, -dir.z) / (2.0f * glm::pi<float>());
-                const float v = 0.5f + std::asin(std::clamp(dir.y, -1.0f, 1.0f)) / glm::pi<float>();
-                const float px = u * static_cast<float>(width - 1);
-                const float py = v * static_cast<float>(height - 1);
-                if (!std::isfinite(px) || !std::isfinite(py) ||
-                    px < 0.0f || px >= static_cast<float>(width) ||
-                    py < 0.0f || py >= static_cast<float>(height)) {
-                    return std::nullopt;
-                }
-                return glm::vec3(px, py, len);
-            }
-
-            const glm::vec4 clip = projection * view_pos4;
-            if (std::abs(clip.w) <= 1e-6f) {
-                return std::nullopt;
-            }
-            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(ndc.z) ||
-                ndc.x < -1.0f || ndc.x > 1.0f ||
-                ndc.y < -1.0f || ndc.y > 1.0f ||
-                ndc.z < 0.0f || ndc.z > 1.0f) {
-                return std::nullopt;
-            }
-
-            const float px = (ndc.x * 0.5f + 0.5f) * static_cast<float>(width - 1);
-            const float py = (ndc.y * 0.5f + 0.5f) * static_cast<float>(height - 1);
-            const float depth = request.frame_view.orthographic ? -view_pos.z : std::max(-view_pos.z, 0.0f);
-            if (depth <= 0.0f && !request.frame_view.orthographic) {
-                return std::nullopt;
-            }
-            return glm::vec3(px, py, depth);
-        }
-
-        [[nodiscard]] int pointRadiusPixels(const PointCloudRenderRequest& request,
-                                            const float depth) {
-            const float voxel = std::max(request.render.voxel_size * request.render.scaling_modifier, 1e-5f);
-            if (request.frame_view.orthographic) {
-                const float pixels_per_world =
-                    static_cast<float>(request.frame_view.size.y) /
-                    std::max(request.frame_view.ortho_scale, 1e-5f);
-                return std::max(1, static_cast<int>(std::ceil(voxel * pixels_per_world * 0.5f)));
-            }
-
-            const float vfov = focalLengthToVFovRad(request.frame_view.focal_length_mm);
-            const float focal_y = lfs::core::fov2focal(vfov, request.frame_view.size.y);
-            return std::max(1, static_cast<int>(std::ceil(voxel * focal_y / std::max(depth, 1e-4f))));
-        }
-
-        void drawSoftwarePoint(std::vector<float>& image,
-                               std::vector<float>& depth,
-                               const int width,
-                               const int height,
-                               const int channels,
-                               const glm::vec3& pixel_depth,
-                               const glm::vec3& color,
-                               const int radius) {
-            const int cx = static_cast<int>(std::lround(pixel_depth.x));
-            const int cy = static_cast<int>(std::lround(pixel_depth.y));
-            const float point_depth = pixel_depth.z;
-            const int r2 = radius * radius;
-
-            for (int yy = cy - radius; yy <= cy + radius; ++yy) {
-                if (yy < 0 || yy >= height) {
-                    continue;
-                }
-                for (int xx = cx - radius; xx <= cx + radius; ++xx) {
-                    if (xx < 0 || xx >= width) {
-                        continue;
-                    }
-                    const int dx = xx - cx;
-                    const int dy = yy - cy;
-                    if (dx * dx + dy * dy > r2) {
-                        continue;
-                    }
-
-                    const size_t pixel_index = static_cast<size_t>(yy) * width + xx;
-                    if (point_depth >= depth[pixel_index]) {
-                        continue;
-                    }
-                    depth[pixel_index] = point_depth;
-                    image[pixel_index] = color.r;
-                    image[static_cast<size_t>(height) * width + pixel_index] = color.g;
-                    image[static_cast<size_t>(2) * height * width + pixel_index] = color.b;
-                    if (channels == 4) {
-                        image[static_cast<size_t>(3) * height * width + pixel_index] = 1.0f;
-                    }
-                }
-            }
-        }
-
         Result<RasterImageResult> renderSoftwarePointCloud(
             const Tensor& positions_source,
             const Tensor& colors_source,
@@ -690,6 +534,7 @@ namespace lfs::rendering {
                 {static_cast<size_t>(1), static_cast<size_t>(height), static_cast<size_t>(width)},
                 lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
+            lfs::core::pin_operands({&positions_cuda, &colors_cuda});
             pcraster::LaunchParams params{};
             params.positions = positions_cuda.ptr<float>();
             params.colors = colors_cuda.ptr<float>();
