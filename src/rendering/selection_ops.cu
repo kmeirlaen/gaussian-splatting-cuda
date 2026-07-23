@@ -4,6 +4,7 @@
 
 #include "selection_ops.hpp"
 
+#include "core/cuda_error.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 
 #include <algorithm>
@@ -37,9 +38,20 @@ namespace lfs::rendering {
             return tensor != nullptr && tensor->is_valid() ? tensor->stream() : nullptr;
         }
 
-        void checkCudaLaunch(const char* const kernel_name) {
-            if (const cudaError_t status = cudaPeekAtLastError(); status != cudaSuccess) {
-                throw std::runtime_error(std::string(kernel_name) + ": " + cudaGetErrorString(status));
+        template <std::size_t N>
+        void copySelectionCountsToHost(const Tensor& counts_scratch,
+                                       std::array<int, N>& host_counts) {
+            const cudaStream_t stream = currentSelectionStream(&counts_scratch);
+            if (const cudaError_t status = cudaMemcpyAsync(host_counts.data(),
+                                                           counts_scratch.ptr<int>(),
+                                                           sizeof(host_counts),
+                                                           cudaMemcpyDeviceToHost,
+                                                           stream);
+                status != cudaSuccess) {
+                throw std::runtime_error(cudaGetErrorString(status));
+            }
+            if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
+                throw std::runtime_error(cudaGetErrorString(status));
             }
         }
 
@@ -686,7 +698,7 @@ namespace lfs::rendering {
         const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
         brushSelectKernel<<<grid_size, kBlockSize, 0, currentSelectionStream()>>>(
             screen_positions, mouse_x, mouse_y, radius * radius, selection_out, n_primitives);
-        checkCudaLaunch("brushSelectKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(), "render.selection.brush");
     }
 
     void rect_select(
@@ -703,7 +715,7 @@ namespace lfs::rendering {
         const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
         rectSelectKernel<<<grid_size, kBlockSize, 0, currentSelectionStream()>>>(
             positions, x0, y0, x1, y1, selection, n_primitives);
-        checkCudaLaunch("rectSelectKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(), "render.selection.rect");
     }
 
     void polygon_select(
@@ -718,7 +730,7 @@ namespace lfs::rendering {
         const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
         polygonSelectKernel<<<grid_size, kBlockSize, 0, currentSelectionStream()>>>(
             positions, polygon, num_vertices, selection, n_primitives);
-        checkCudaLaunch("polygonSelectKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(), "render.selection.polygon");
     }
 
     void set_selection_element(bool* const selection, const int index, const bool value) {
@@ -726,7 +738,58 @@ namespace lfs::rendering {
             return;
         }
         setSelectionElementKernel<<<1, 1, 0, currentSelectionStream()>>>(selection, index, value);
-        checkCudaLaunch("setSelectionElementKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(), "render.selection.set_element");
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
+        const float ortho_scale) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            nullptr, nullptr, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
+        const float ortho_scale,
+        const Tensor* const model_transforms) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            model_transforms, nullptr, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
+        const float ortho_scale,
+        const Tensor* const model_transforms,
+        const Tensor* const transform_indices) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            model_transforms, transform_indices, {});
     }
 
     Tensor project_screen_positions_tensor(
@@ -826,7 +889,7 @@ namespace lfs::rendering {
             prepared_transforms.count,
             visibility_ptr,
             visibility_count);
-        checkCudaLaunch("projectScreenPositionsKernel");
+        LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.project_screen");
         if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
             throw std::runtime_error(std::string("projectScreenPositionsKernel: ") + cudaGetErrorString(status));
         }
@@ -866,13 +929,13 @@ namespace lfs::rendering {
             block_dist_sq.ptr<float>(),
             block_index.ptr<int>(),
             n);
-        checkCudaLaunch("pickProjectedGaussianBlocksKernel");
+        LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.pick_blocks");
         reduceProjectedGaussianPickKernel<<<1, kBlockSize, 0, stream>>>(
             block_dist_sq.ptr<float>(),
             block_index.ptr<int>(),
             result_index.ptr<int>(),
             block_count);
-        checkCudaLaunch("reduceProjectedGaussianPickKernel");
+        LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.pick_reduce");
 
         const auto result_cpu = result_index.cpu().contiguous();
         return result_cpu.ptr<int>()[0];
@@ -987,7 +1050,7 @@ namespace lfs::rendering {
             num_nodes,
             replace_mode,
             group_counts_scratch != nullptr ? group_counts_scratch->ptr<int>() : nullptr);
-        checkCudaLaunch("applySelectionGroupMaskKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&output_mask), "render.selection.apply_group_mask");
     }
 
     void apply_selection_group_indexed_tensor_mask(
@@ -1051,7 +1114,7 @@ namespace lfs::rendering {
                 node_indices_ptr,
                 valid_nodes_ptr,
                 num_nodes);
-            checkCudaLaunch("clearSelectionGroupIndexedMaskKernel");
+            LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.clear_group_indexed_mask");
         }
         applySelectionGroupIndexedMaskKernel<<<grid_size, kBlockSize, 0, stream>>>(
             visible_selection.ptr<bool>(),
@@ -1067,7 +1130,7 @@ namespace lfs::rendering {
             valid_nodes_ptr,
             num_nodes,
             replace_mode);
-        checkCudaLaunch("applySelectionGroupIndexedMaskKernel");
+        LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.apply_group_indexed_mask");
     }
 
     std::array<size_t, 256> count_selection_groups(
@@ -1098,7 +1161,7 @@ namespace lfs::rendering {
             selection_mask.ptr<uint8_t>(),
             n,
             counts_scratch.ptr<int>());
-        checkCudaLaunch("countSelectionGroupsKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&counts_scratch), "render.selection.count_groups");
 
         return read_selection_group_counts(counts_scratch);
     }
@@ -1113,13 +1176,7 @@ namespace lfs::rendering {
         }
 
         std::array<int, kSelectionGroupScratchWords> host_counts{};
-        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
-                                                  counts_scratch.ptr<int>(),
-                                                  sizeof(host_counts),
-                                                  cudaMemcpyDeviceToHost);
-            status != cudaSuccess) {
-            throw std::runtime_error(cudaGetErrorString(status));
-        }
+        copySelectionCountsToHost(counts_scratch, host_counts);
         for (size_t i = 0; i < result.group_counts.size(); ++i) {
             result.group_counts[i] = static_cast<size_t>(std::max(host_counts[i], 0));
         }
@@ -1137,13 +1194,7 @@ namespace lfs::rendering {
         }
 
         std::array<int, kSelectionGroupScratchWords> host_counts{};
-        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
-                                                  counts_scratch.ptr<int>(),
-                                                  sizeof(host_counts),
-                                                  cudaMemcpyDeviceToHost);
-            status != cudaSuccess) {
-            throw std::runtime_error(cudaGetErrorString(status));
-        }
+        copySelectionCountsToHost(counts_scratch, host_counts);
         for (size_t i = 0; i < result.group_deltas.size(); ++i) {
             result.group_deltas[i] = host_counts[i];
         }
@@ -1175,7 +1226,7 @@ namespace lfs::rendering {
             accumulated_mask.ptr<bool>(),
             delta_mask.ptr<bool>(),
             n);
-        checkCudaLaunch("mergeSelectionMaskOrKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&accumulated_mask), "render.selection.merge_mask_or");
     }
 
     void filter_selection_by_node_mask(
@@ -1201,7 +1252,7 @@ namespace lfs::rendering {
             reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>()),
             n,
             num_nodes);
-        checkCudaLaunch("filterSelectionByNodeMaskKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&selection), "render.selection.filter_node_mask");
     }
 
     void filter_selection_by_crop(
@@ -1274,7 +1325,7 @@ namespace lfs::rendering {
             transform_indices_ptr,
             prepared_transforms.count,
             n);
-        checkCudaLaunch("filterSelectionByCropKernel");
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&selection), "render.selection.filter_crop");
     }
 
     namespace config {

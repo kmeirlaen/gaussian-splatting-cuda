@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .depth_view_controls import DepthViewControlsController
+from .gt_compare_controls import GTCompareControlsController
 from .histogram_support import histogram_mode_available
 from .selection_controls import SelectionControlsController
 from .tools import ToolRegistry
@@ -1135,6 +1136,7 @@ class _ViewportToolbarController:
 
     def __init__(self):
         self._gizmo = _GizmoToolbarController()
+        self._gt_compare_controls = GTCompareControlsController()
         self._depth_view_controls = DepthViewControlsController()
         self._viewport_export_controls = ViewportExportControlsController(
             self._on_viewport_export_visibility_changed
@@ -1158,6 +1160,7 @@ class _ViewportToolbarController:
         self._show_transform_space_controls = False
         self._show_transform_pivot_controls = False
         self._gizmo.reset()
+        self._gt_compare_controls.unmount()
         self._depth_view_controls.unmount()
         self._viewport_export_controls.unmount()
         self._selection_controls.unmount()
@@ -1169,6 +1172,7 @@ class _ViewportToolbarController:
         for field in self._RECORD_FIELDS:
             model.bind_record_list(field)
         model.bind_event("toolbar_action", self._on_toolbar_action)
+        self._gt_compare_controls.bind_model(model)
         self._depth_view_controls.bind_model(model)
         self._viewport_export_controls.bind_model(model)
         self._selection_controls.bind_model(model)
@@ -1193,6 +1197,7 @@ class _ViewportToolbarController:
         mount_key = self._mount_key(doc) if can_update_tool_overlays else None
         if mount_key is not None and mount_key != self._mounted_doc_key:
             self._mounted_doc_key = mount_key
+            self._gt_compare_controls.mount(doc)
             self._depth_view_controls.mount(doc)
             self._viewport_export_controls.mount(doc)
             self._record_cache = {name: None for name in self._RECORD_FIELDS}
@@ -1204,6 +1209,9 @@ class _ViewportToolbarController:
         if self._sync_toolbar_state(doc):
             dirty_sources.append("records")
         if can_update_tool_overlays:
+            gt_compare_dirty = self._gt_compare_controls.update(doc)
+            if gt_compare_dirty:
+                dirty_sources.append(f"gt_compare_controls:{gt_compare_dirty}")
             depth_dirty = self._depth_view_controls.update(doc)
             if depth_dirty:
                 dirty_sources.append(f"depth_view_controls:{depth_dirty}")
@@ -1211,6 +1219,11 @@ class _ViewportToolbarController:
             if viewport_export_dirty:
                 dirty_sources.append(f"viewport_export_controls:{viewport_export_dirty}")
             if self._viewport_export_controls.visible:
+                self._hide_tool_overlay(doc, "gt-compare-mode-block")
+                self._hide_tool_overlay(doc, "depth-view-block")
+                self._hide_tool_overlay(doc, "selection-block")
+                self._hide_tool_overlay(doc, "transform-block")
+            elif self._gt_compare_controls.visible:
                 self._hide_tool_overlay(doc, "depth-view-block")
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
@@ -1236,9 +1249,15 @@ class _ViewportToolbarController:
         if doc is None or not hasattr(doc, "get_element_by_id"):
             return
 
+        self._gt_compare_controls.update(doc)
         self._depth_view_controls.update(doc)
         self._viewport_export_controls.update(doc)
         if self._viewport_export_controls.visible:
+            self._hide_tool_overlay(doc, "gt-compare-mode-block")
+            self._hide_tool_overlay(doc, "depth-view-block")
+            self._hide_tool_overlay(doc, "selection-block")
+            self._hide_tool_overlay(doc, "transform-block")
+        elif self._gt_compare_controls.visible:
             self._hide_tool_overlay(doc, "depth-view-block")
             self._hide_tool_overlay(doc, "selection-block")
             self._hide_tool_overlay(doc, "transform-block")

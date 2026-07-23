@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/modal_request.hpp"
+#include "core/source_site.hpp"
 #include "core/splat_simplify_types.hpp"
 #include "visualizer/gui/panel_height_mode.hpp"
 #include "visualizer/gui/panel_space.hpp"
@@ -97,12 +99,22 @@ namespace lfs::python {
     using MainLoopWakeCallback = void (*)();
     LFS_PYTHON_RUNTIME_API void set_main_loop_wake_callback(MainLoopWakeCallback cb);
 
-    using StartupPluginLoadStateCallback = void (*)(bool active, float progress, const char* stage);
-    LFS_PYTHON_RUNTIME_API void set_startup_plugin_load_state_callback(
-        StartupPluginLoadStateCallback cb);
-    LFS_PYTHON_RUNTIME_API void notify_startup_plugin_load_state(bool active,
-                                                                 float progress,
-                                                                 const char* stage);
+    struct StartupPluginLoadStatus {
+        std::string state = "not_started";
+        std::string phase = "idle";
+        std::string plugin;
+        std::string detail;
+        std::size_t attempted = 0;
+        std::size_t total = 0;
+        std::size_t failed = 0;
+        float progress = 0.0f;
+        bool active = false;
+        std::uint64_t revision = 0;
+    };
+
+    LFS_PYTHON_RUNTIME_API void set_startup_plugin_load_status(
+        const StartupPluginLoadStatus& status);
+    LFS_PYTHON_RUNTIME_API StartupPluginLoadStatus get_startup_plugin_load_status();
 
     using CleanupCallback = void (*)();
     using EnsureInitializedCallback = void (*)();
@@ -136,6 +148,23 @@ namespace lfs::python {
 
     // Safe Python error extraction - avoids nanobind::python_error::what() crash on Windows
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
+
+    // Typed Python-error extraction (Phase 9 Section 2.1). Precondition: GIL held
+    // AND PyErr_Occurred(). Consumes and clears the pending Python error. Never
+    // throws; never leaves a Python error pending. The returned Error owns a
+    // formatted traceback string only (in detail()); no PyObject is retained, so
+    // it is safe to outlive interpreter finalization. The raised Python type maps
+    // to an ErrorCode via a closed table; a re-raised lichtfeld.Error round-trips
+    // its own .code/.domain. Formats via CPython calls directly (never
+    // nb::python_error::what(), per the Windows-crash history above).
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Error
+    error_from_python(lfs::core::SourceSite site, lfs::OperationId op = {}) noexcept;
+
+    // Reverse of lfs::to_string(ErrorCode/ErrorDomain). Unknown tokens map to
+    // ErrorCode::Internal / ErrorDomain::Python. Used by error_from_python's
+    // lichtfeld.Error round-trip and by the _testing bindings.
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::ErrorCode error_code_from_string(std::string_view token) noexcept;
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::ErrorDomain error_domain_from_string(std::string_view token) noexcept;
 
     LFS_PYTHON_RUNTIME_API void invoke_python_cleanup();
     LFS_PYTHON_RUNTIME_API void shutdown_python_ui_resources();
@@ -605,6 +634,7 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_ui_texture_service(CreateTextureFn create, DeleteTextureFn del,
                                                        MaxTextureSizeFn max_size);
+    LFS_PYTHON_RUNTIME_API void require_ui_texture_creation_thread();
     LFS_PYTHON_RUNTIME_API TextureResult create_ui_texture(const unsigned char* data, int w, int h, int channels);
     LFS_PYTHON_RUNTIME_API void delete_ui_texture(uint64_t texture_id);
     LFS_PYTHON_RUNTIME_API int get_max_texture_size();

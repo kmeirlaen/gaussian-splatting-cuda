@@ -119,8 +119,14 @@ namespace lfs::vis {
                                           bool select_new_node = true);
         size_t consolidateNodeModels();
 
+        [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;
+        [[nodiscard]] std::expected<void, std::string> removePLYWithResult(const std::string& name, bool keep_children = false);
+        [[nodiscard]] std::expected<void, std::string> removeNodesWithResult(const std::vector<std::string>& names,
+                                                                             bool keep_children = false);
+        size_t publishLiveCameraCount();
         void removePLY(const std::string& name, bool keep_children = false);
         void setPLYVisibility(const std::string& name, bool visible);
+        [[nodiscard]] std::expected<void, std::string> removeNodeWithResult(core::NodeId id, bool keep_children = false);
         void removeNode(core::NodeId id, bool keep_children = false);
         void setNodeVisibility(core::NodeId id, bool visible);
         void setNodeVisibilityTransient(core::NodeId id, bool visible);
@@ -315,7 +321,7 @@ namespace lfs::vis {
             std::vector<std::string> removed_node_names;
         };
 
-        void resetToEmptyState(bool trainer_already_cleared = false);
+        [[nodiscard]] bool resetToEmptyState(bool trainer_already_cleared = false);
         enum class TrainingRemovalImpact {
             None,
             TrainingModel,

@@ -21,10 +21,10 @@ from lfs_plugins.tool_defs.builtin import (
 class MockContext:
     """Mock context for poll testing."""
 
-    def __init__(self, has_scene=True, num_gaussians=1000, can_transform=False):
+    def __init__(self, has_scene=True, num_gaussians=1000, can_transform=None):
         self.has_scene = has_scene
         self.num_gaussians = num_gaussians
-        self.can_transform = can_transform
+        self.can_transform = has_scene if can_transform is None else can_transform
 
 
 class NodeTypeStub:
@@ -281,17 +281,17 @@ class TestToolPolling:
         _install_scene_stub(monkeypatch, ["model"], {"model": _node("SPLAT")})
 
         tool = get_tool_by_id("builtin.cropbox")
-        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0)) is True
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
 
     def test_cropbox_accepts_selected_crop_volume_nodes(self, monkeypatch):
         """Crop tool should activate for existing crop volume node selections."""
         tool = get_tool_by_id("builtin.cropbox")
 
         _install_scene_stub(monkeypatch, ["crop"], {"crop": _node("CROPBOX")})
-        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0)) is True
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
 
         _install_scene_stub(monkeypatch, ["ellipsoid"], {"ellipsoid": _node("ELLIPSOID")})
-        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0)) is True
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
 
     def test_cropbox_accepts_dataset_with_model_child(self, monkeypatch):
         """Crop tool should activate for dataset selections that contain a model target."""
@@ -306,14 +306,14 @@ class TestToolPolling:
         )
 
         tool = get_tool_by_id("builtin.cropbox")
-        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0)) is True
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
 
     def test_cropbox_rejects_loaded_scene_without_target(self, monkeypatch):
         """Crop tool should not activate from loaded gaussians alone."""
         _install_scene_stub(monkeypatch, [], {})
 
         tool = get_tool_by_id("builtin.cropbox")
-        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=100)) is False
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=100, can_transform=False)) is False
 
     def test_cropbox_requires_scene(self, monkeypatch):
         """Crop tool should keep the no-scene guard before checking selection."""

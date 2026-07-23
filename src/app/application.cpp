@@ -3,10 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/headless_run_coordinator.hpp"
 #include "control/command_api.hpp"
 #include "core/checkpoint_format.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
@@ -36,11 +39,11 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include <cmath>
-#include <cstdlib>
+#include <condition_variable>
 #include <cuda_runtime.h>
 #include <future>
+#include <mutex>
 #include <rasterization_api.h>
-#include <string_view>
 
 #ifdef WIN32
 #include <windows.h>
@@ -51,24 +54,6 @@ namespace lfs::app {
     namespace {
 
         bool checkCudaDriverVersion();
-
-        lfs::vis::GraphicsBackend viewerGraphicsBackendFromEnv() {
-            const char* const value = std::getenv("LFS_GRAPHICS_BACKEND");
-            if (!value || !*value)
-                return lfs::vis::GraphicsBackend::Vulkan;
-
-            const std::string_view backend(value);
-            if (backend == "vulkan" || backend == "Vulkan" || backend == "VK" || backend == "vk") {
-                LOG_INFO("Viewer graphics backend requested via LFS_GRAPHICS_BACKEND=vulkan");
-                return lfs::vis::GraphicsBackend::Vulkan;
-            }
-            if (backend == "opengl" || backend == "OpenGL" || backend == "GL" || backend == "gl") {
-                LOG_WARN("Viewer graphics backend requested via LFS_GRAPHICS_BACKEND=opengl; OpenGL is no longer an active viewer backend, using Vulkan");
-                return lfs::vis::GraphicsBackend::Vulkan;
-            }
-            LOG_WARN("Unknown LFS_GRAPHICS_BACKEND='{}'; using Vulkan", backend);
-            return lfs::vis::GraphicsBackend::Vulkan;
-        }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
             LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params.resume_checkpoint));
@@ -129,6 +114,7 @@ namespace lfs::app {
 
             checkCudaDriverVersion();
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
+            HeadlessRunCoordinator coordinator;
 
             {
                 core::Scene scene;
@@ -170,7 +156,7 @@ namespace lfs::app {
 
                 core::Tensor::trim_memory_pool();
 
-                {
+                try {
                     tcp::ResponderServer responder(params->server.tcp_server_connection_port, manager);
                     tcp::PublisherServer publisher(params->server.tcp_broadcast_connection_port, manager);
 
@@ -179,28 +165,81 @@ namespace lfs::app {
                     LOG_INFO("Responder server listening on {}", responder.getEndpoint());
                     LOG_INFO("Publisher server listening on {}", publisher.getEndpoint());
 
-                    std::promise<core::events::state::TrainingCompleted> training_done;
-                    core::events::state::TrainingCompleted::when(
-                        [&training_done](const core::events::state::TrainingCompleted& evt) {
-                            training_done.set_value(evt);
+                    std::mutex completion_mutex;
+                    std::condition_variable completion_cv;
+                    std::optional<core::events::state::TrainingCompleted> completion;
+                    lfs::event::ScopedHandler completion_subscription;
+                    completion_subscription.subscribe<core::events::state::TrainingCompleted>(
+                        [&](const core::events::state::TrainingCompleted& event) {
+                            {
+                                std::lock_guard lock(completion_mutex);
+                                if (completion) {
+                                    return;
+                                }
+                                completion = event;
+                            }
+                            completion_cv.notify_all();
                         });
 
-                    manager->startTraining();
-                    training_done.get_future().wait();
-                    manager->waitForCompletion();
+                    if (!manager->startTraining()) {
+                        throw std::runtime_error("Failed to start TCP headless training");
+                    }
+
+                    bool stop_requested = false;
+                    std::optional<std::chrono::steady_clock::time_point> stop_deadline;
+                    std::string completion_error;
+                    std::unique_lock completion_lock(completion_mutex);
+                    while (!completion) {
+                        completion_cv.wait_for(completion_lock, std::chrono::milliseconds(100));
+                        if (completion) {
+                            break;
+                        }
+
+                        if (coordinator.interrupted() && !stop_requested) {
+                            stop_requested = true;
+                            stop_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                            completion_lock.unlock();
+                            LOG_INFO("Interrupt signal received, requesting TCP training stop");
+                            manager->stopTraining();
+                            completion_lock.lock();
+                        }
+
+                        if (manager->isFinished()) {
+                            completion_error = "Training reached a terminal state without a completion event";
+                            break;
+                        }
+                        if (stop_deadline && std::chrono::steady_clock::now() >= *stop_deadline) {
+                            completion_error = "Timed out waiting for interrupted TCP training to save and stop";
+                            break;
+                        }
+                    }
+                    completion_lock.unlock();
+
+                    if (!manager->waitForCompletion()) {
+                        throw std::runtime_error("Training worker did not finish after terminal event");
+                    }
+
+                    if (!completion_error.empty()) {
+                        throw std::runtime_error(completion_error);
+                    }
+                    if (!completion) {
+                        throw std::runtime_error("TCP training completion was not observed");
+                    }
 
                     publisher.stop();
                     responder.stop();
                     responder.join();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Headless TCP lifecycle failed: {}", e.what());
+                    return 1;
                 }
 
                 if (manager->getStateMachine().getFinishReason() == vis::FinishReason::Error) {
                     LOG_ERROR("Training error: {}", manager->getLastError());
                     if (!params->python_scripts.empty()) {
-                        core::Tensor::shutdown_memory_pool();
-                        core::PinnedMemoryAllocator::instance().shutdown();
+                        core::teardown_gpu_before_exit();
                         python::finalize();
-                        std::_Exit(1);
+                        core::flush_and_exit(1);
                     }
                     return 1;
                 }
@@ -208,14 +247,14 @@ namespace lfs::app {
                 LOG_INFO("Headless with TCP training completed");
             }
 
-            core::Tensor::shutdown_memory_pool();
-            core::PinnedMemoryAllocator::instance().shutdown();
+            core::teardown_gpu_before_exit();
 
+            const int exit_code = coordinator.interrupted() ? coordinator.interrupted_exit_code() : 0;
             if (!params->python_scripts.empty()) {
                 python::finalize();
-                std::_Exit(0);
+                core::flush_and_exit(exit_code);
             }
-            return 0;
+            return exit_code;
         }
 
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
@@ -226,6 +265,7 @@ namespace lfs::app {
 
             checkCudaDriverVersion();
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
+            HeadlessRunCoordinator coordinator;
 
             {
                 core::Scene scene;
@@ -258,16 +298,17 @@ namespace lfs::app {
 
                     core::Tensor::trim_memory_pool();
 
-                    if (const auto result = trainer->train(); !result) {
-                        LOG_ERROR("Training error: {}", result.error());
+                    if (const auto result = trainer->train(coordinator.stop_token()); !result) {
+                        LOG_ERROR("Training error: {}", lfs::format_for_developer(result.error()));
                         if (!params->python_scripts.empty()) {
-                            core::Tensor::shutdown_memory_pool();
-                            core::PinnedMemoryAllocator::instance().shutdown();
+                            core::teardown_gpu_before_exit();
                             python::finalize();
-                            std::_Exit(1);
+                            core::flush_and_exit(1);
                         }
                         return 1;
                     }
+                    trainer->shutdown();
+                    static_cast<void>(trainer.release());
                 } else {
                     LOG_INFO("Starting headless training...");
 
@@ -295,29 +336,32 @@ namespace lfs::app {
 
                     core::Tensor::trim_memory_pool();
 
-                    if (const auto result = trainer->train(); !result) {
-                        LOG_ERROR("Training error: {}", result.error());
+                    if (const auto result = trainer->train(coordinator.stop_token()); !result) {
+                        LOG_ERROR("Training error: {}", lfs::format_for_developer(result.error()));
                         if (!params->python_scripts.empty()) {
-                            core::Tensor::shutdown_memory_pool();
-                            core::PinnedMemoryAllocator::instance().shutdown();
+                            core::teardown_gpu_before_exit();
                             python::finalize();
-                            std::_Exit(1);
+                            core::flush_and_exit(1);
                         }
                         return 1;
                     }
+                    trainer->shutdown();
+                    static_cast<void>(trainer.release());
                 }
 
                 LOG_INFO("Headless training completed");
+                core::teardown_gpu_before_exit();
+                core::flush_and_exit(0);
             }
 
-            core::Tensor::shutdown_memory_pool();
-            core::PinnedMemoryAllocator::instance().shutdown();
+            core::teardown_gpu_before_exit();
 
+            const int exit_code = coordinator.interrupted() ? coordinator.interrupted_exit_code() : 0;
             if (!params->python_scripts.empty()) {
                 python::finalize();
-                std::_Exit(0);
+                core::flush_and_exit(exit_code);
             }
-            return 0;
+            return exit_code;
         }
 
         // Renders a sequencer camera path against a trained scene to a video file, headless.
@@ -434,7 +478,8 @@ namespace lfs::app {
                 const auto write_result = encoder.writeFrameGpu(image_hwc.data_ptr(), cfg.width, cfg.height, nullptr);
                 if (!write_result) {
                     LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
-                    encoder.close();
+                    if (const auto close_result = encoder.close(); !close_result)
+                        LOG_WARN("Failed to finalize partial video: {}", close_result.error());
                     return 1;
                 }
                 LOG_INFO("Encoded frame {}/{}", frame + 1, total_frames);
@@ -526,7 +571,7 @@ namespace lfs::app {
                 return std::make_unique<lfs::io::video::VideoEncoder>();
             });
 
-            const auto graphics_backend = viewerGraphicsBackendFromEnv();
+            constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
             auto viewer = vis::Visualizer::create({
                 .title = "LichtFeld Studio",
                 .width = 1280,
@@ -586,10 +631,9 @@ namespace lfs::app {
 
             viewer.reset();
 
-            core::Tensor::shutdown_memory_pool();
-            core::PinnedMemoryAllocator::instance().shutdown();
+            core::teardown_gpu_before_exit();
 
-            std::_Exit(0);
+            core::flush_and_exit(0);
         }
 
 #ifdef WIN32
@@ -628,7 +672,11 @@ namespace lfs::app {
         });
 
         if (params->render_path) {
-            return runHeadlessRender(std::move(params));
+            const int result = runHeadlessRender(std::move(params));
+            if (result == 0) {
+                core::teardown_gpu_before_exit();
+            }
+            return result;
         }
 
         if (params->optimization.headless && params->server.tcp_connection) {
