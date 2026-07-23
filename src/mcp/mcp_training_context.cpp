@@ -752,7 +752,7 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "plugin.invoke",
-                .description = "Invoke a plugin capability by name. Use plugin.list to see available capabilities.",
+                .description = "Invoke a plugin capability by name. Use plugin_list to see available capabilities.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
