@@ -1317,7 +1317,7 @@ TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresNodeVisibilityAndEnabledSta
     EXPECT_TRUE(cropbox_node->cropbox->enabled);
 }
 
-TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresEnabledState) {
+TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresBoundsAndTransform) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     lfs::vis::services().set(scene_manager.get());
@@ -1337,22 +1337,44 @@ TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresEnabledState) {
     auto* cropbox_node = scene_manager->getScene().getMutableNode("model_cropbox");
     ASSERT_NE(cropbox_node, nullptr);
     ASSERT_NE(cropbox_node->cropbox, nullptr);
+    const glm::vec3 original_min(-2.0f, -3.0f, -4.0f);
+    const glm::vec3 original_max(2.0f, 3.0f, 4.0f);
+    const auto original_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f));
+    cropbox_node->cropbox->min = original_min;
+    cropbox_node->cropbox->max = original_max;
+    cropbox_node->cropbox->inverse = true;
     cropbox_node->cropbox->enabled = true;
-    scene_manager->setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f)));
+    scene_manager->setNodeTransform(cropbox_node->name, original_transform);
 
     auto reset_result = lfs::vis::cap::resetCropBox(*scene_manager, rendering_manager.get(), cropbox_id);
     ASSERT_TRUE(reset_result) << reset_result.error();
     settings = rendering_manager->getSettings();
-    EXPECT_FALSE(settings.use_crop_box);
-    EXPECT_FALSE(cropbox_node->cropbox->enabled);
+    EXPECT_TRUE(settings.use_crop_box);
+    EXPECT_TRUE(cropbox_node->cropbox->enabled);
+    EXPECT_EQ(cropbox_node->cropbox->min, glm::vec3(-1.0f));
+    EXPECT_EQ(cropbox_node->cropbox->max, glm::vec3(1.0f));
+    EXPECT_FALSE(cropbox_node->cropbox->inverse);
+    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), glm::mat4(1.0f));
 
     auto undo_result = lfs::vis::op::undoHistory().undo();
     EXPECT_TRUE(undo_result.success);
     settings = rendering_manager->getSettings();
     EXPECT_TRUE(settings.use_crop_box);
     EXPECT_TRUE(cropbox_node->cropbox->enabled);
-    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name),
-              glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f)));
+    EXPECT_EQ(cropbox_node->cropbox->min, original_min);
+    EXPECT_EQ(cropbox_node->cropbox->max, original_max);
+    EXPECT_TRUE(cropbox_node->cropbox->inverse);
+    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), original_transform);
+
+    auto redo_result = lfs::vis::op::undoHistory().redo();
+    EXPECT_TRUE(redo_result.success);
+    settings = rendering_manager->getSettings();
+    EXPECT_TRUE(settings.use_crop_box);
+    EXPECT_TRUE(cropbox_node->cropbox->enabled);
+    EXPECT_EQ(cropbox_node->cropbox->min, glm::vec3(-1.0f));
+    EXPECT_EQ(cropbox_node->cropbox->max, glm::vec3(1.0f));
+    EXPECT_FALSE(cropbox_node->cropbox->inverse);
+    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), glm::mat4(1.0f));
 }
 
 TEST_F(UndoHistoryTest, TopologyUndoRestoresSoftDeletedMasks) {

@@ -1161,7 +1161,6 @@ namespace lfs::vis::gui {
                 auto settings = rm->getSettings();
                 settings.show_crop_box = cropbox_node->visible;
                 settings.use_crop_box = true;
-                settings.desaturate_cropping = true;
                 rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
             }
 
@@ -1207,7 +1206,6 @@ namespace lfs::vis::gui {
                 auto settings = rm->getSettings();
                 settings.show_ellipsoid = ellipsoid_node->visible;
                 settings.use_ellipsoid = true;
-                settings.desaturate_cropping = true;
                 rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
             }
 

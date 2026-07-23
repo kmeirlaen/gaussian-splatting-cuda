@@ -1076,8 +1076,8 @@ namespace lfs::vis {
         ASSERT_TRUE(request.filters.crop_region.has_value());
         ASSERT_EQ(request.filters.crop_regions.size(), 2u);
         EXPECT_NE(request.filters.crop_regions[0].parent_node_index, request.filters.crop_regions[1].parent_node_index);
-        EXPECT_TRUE(request.filters.crop_regions[0].desaturate);
-        EXPECT_TRUE(request.filters.crop_regions[1].desaturate);
+        EXPECT_FALSE(request.filters.crop_regions[0].desaturate);
+        EXPECT_FALSE(request.filters.crop_regions[1].desaturate);
     }
 
     TEST_F(SceneManagerRenderStateTest, LiveCropboxPreviewOverridesOnlyEditedParent) {
@@ -1581,7 +1581,7 @@ namespace lfs::vis {
         EXPECT_EQ(request.filters.crop_ellipsoid->transform,
                   glm::inverse(scene_state.ellipsoids.front().world_transform));
         EXPECT_TRUE(request.filters.crop_inverse);
-        EXPECT_TRUE(request.filters.crop_desaturate);
+        EXPECT_FALSE(request.filters.crop_desaturate);
     }
 
     TEST_F(SceneManagerRenderStateTest, PointCloudRequestIgnoresDisabledSelectedEllipsoidCrop) {
