@@ -31,7 +31,7 @@ Pull narrower resources only when needed:
 
 - Prefer the bridge-backed `.mcp.json` entry when you want Codex to start LichtFeld for you. Use the raw HTTP endpoint only if LichtFeld is already running.
 - Prefer resources for discovery and current state; use tools for mutations.
-- Check tool metadata before invoking: `category`, `kind`, `runtime`, `thread_affinity`, `destructive`, `long_running`, `user_visible`.
+- Check tool metadata before invoking. `annotations` contains only the standard MCP hints `readOnlyHint`, `destructiveHint`, and `idempotentHint`. LichtFeld metadata is under `_meta`, using keys such as `app.lichtfeld/category`, `app.lichtfeld/kind`, `app.lichtfeld/runtime`, `app.lichtfeld/thread_affinity`, `app.lichtfeld/long_running`, and `app.lichtfeld/user_visible`.
 - For long-running operations, pair the mutating call with `runtime_job_describe`, `runtime_job_wait`, or `runtime_events_tail` instead of sleeping.
 - Do not guess operator ids, menu paths, panel ids, or UI tool ids. Read `operators/registry`, `ui/tools`, or `ui/menus` first.
 - After selection writes, confirm with `selection_get` or `lichtfeld://selection/current`.

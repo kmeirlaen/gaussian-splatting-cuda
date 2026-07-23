@@ -14,6 +14,10 @@ This branch exposes a broad MCP surface for LichtFeld Studio. The goal of this s
 - Prefer targeted resources over code reading.
 - Fall back to source only when the resource and tool metadata still leave ambiguity.
 
+## Tool Metadata
+
+In `tools/list`, `annotations` contains only the standard MCP hints `readOnlyHint`, `destructiveHint`, and `idempotentHint`. LichtFeld-specific metadata lives under `_meta` with namespaced keys: `app.lichtfeld/category`, `app.lichtfeld/kind`, `app.lichtfeld/runtime`, `app.lichtfeld/thread_affinity`, `app.lichtfeld/long_running`, and `app.lichtfeld/user_visible`.
+
 ## First Resources To Read
 
 Read these first in most sessions:
