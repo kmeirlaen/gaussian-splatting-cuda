@@ -9,14 +9,10 @@
 
 namespace lfs::mcp {
 
-    namespace {
-
-        std::string normalize_tool_name(std::string name) {
-            std::replace(name.begin(), name.end(), '.', '_');
-            return name;
-        }
-
-    } // namespace
+    std::string normalize_tool_name(std::string name) {
+        std::replace(name.begin(), name.end(), '.', '_');
+        return name;
+    }
 
     RequestId RequestId::from_json(const json& request_object) {
         if (!request_object.contains("id")) {
