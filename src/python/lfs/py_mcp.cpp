@@ -4,9 +4,11 @@
 #include "py_mcp.hpp"
 
 #include "core/base64.hpp"
+#include "core/error_envelope.hpp"
 #include "core/logger.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "py_error.hpp"
 
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -151,8 +153,14 @@ namespace lfs::python {
                     nb::dict py_args = nb::cast<nb::dict>(json_to_python(args));
                     nb::object result = callback(**py_args);
                     return python_value_to_json(result);
+                } catch (nb::python_error& e) {
+                    const lfs::Error error = contain_python_callback(e, PyCallbackPolicy::FailOwner);
+                    std::string message = std::string("Python tool error: ") + std::string(error.user_message());
+                    return mcp::json{{"error", core::to_wire_envelope(error)}, {"error_message", std::move(message)}};
                 } catch (const std::exception& e) {
-                    return mcp::json{{"error", std::string("Python tool error: ") + e.what()}};
+                    const lfs::Error error = contain_cxx_callback(e.what(), PyCallbackPolicy::FailOwner);
+                    std::string message = std::string("Python tool error: ") + std::string(error.user_message());
+                    return mcp::json{{"error", core::to_wire_envelope(error)}, {"error_message", std::move(message)}};
                 }
             };
         }
@@ -367,7 +375,8 @@ namespace lfs::python {
                         throw nb::value_error("call_tool args must be a dict/object");
                     }
                 }
-                return json_to_python(mcp::ToolRegistry::instance().call_tool(name, json_args));
+                return json_to_python(
+                    mcp::ToolRegistry::instance().call_tool(name, json_args, lfs::OperationId::generate()));
             },
             nb::arg("name"), nb::arg("args") = nb::none(),
             "Invoke a registered shared capability/tool");

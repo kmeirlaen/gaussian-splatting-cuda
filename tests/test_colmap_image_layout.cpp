@@ -184,12 +184,49 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    const auto& cameras = std::get<0>(*result);
+    const auto& cameras = std::get<0>(result->value);
 
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_EQ(cameras[0]->image_name(), "frame_0001.png");
     EXPECT_TRUE(fs::equivalent(cameras[0]->image_path(), nested_image));
     EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), nested_mask));
+}
+
+TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedColmapIds) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "0 PINHOLE 1 1 1 1 0.5 0.5\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "0 1 0 0 0 0 0 0 0 frame_0.png\n");
+    write_png(dataset_dir / "images" / "frame_0.png");
+
+    auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<0>(result->value);
+
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras[0]->image_name(), "frame_0.png");
+}
+
+TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedPoint3DIds) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    write_text_file(dataset_dir / "points3D.txt",
+                    "0 0 0 0 255 0 0 0.1 0 0\n");
+
+    const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
+        dataset_dir,
+        lfs::io::LoadOptions{});
+
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->value.point_cloud.size(), 1u);
+    EXPECT_EQ(result->value.total_points, 1u);
 }
 
 TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
@@ -207,10 +244,11 @@ TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
         dataset_dir,
         lfs::io::LoadOptions{.min_track_length = 3});
 
-    EXPECT_TRUE(result.track_filter_applied);
-    EXPECT_EQ(result.total_points, 3u);
-    EXPECT_EQ(result.points_after_filtering, 1u);
-    EXPECT_EQ(result.point_cloud.size(), 1u);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->value.track_filter_applied);
+    EXPECT_EQ(result->value.total_points, 3u);
+    EXPECT_EQ(result->value.points_after_filtering, 1u);
+    EXPECT_EQ(result->value.point_cloud.size(), 1u);
 }
 
 TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
@@ -226,7 +264,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    const auto& cameras = std::get<0>(*result);
+    const auto& cameras = std::get<0>(result->value);
 
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_TRUE(cameras[0]->has_depth());
@@ -244,6 +282,31 @@ TEST_F(ColmapImageLayoutTest, DepthDirCacheResolvesDepthsFolderAndDepthExtension
 
     ASSERT_TRUE(result.found());
     EXPECT_TRUE(fs::equivalent(result.path, depth_path));
+}
+
+TEST_F(ColmapImageLayoutTest, DepthDirCacheFallsBackToTrailingFrameNumber) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path depth_path = dataset_dir / "depth" / "DEPTH_0042.png";
+
+    write_png(depth_path);
+
+    const lfs::io::DepthDirCache cache(dataset_dir);
+    const auto result = cache.lookup("RENDER_0042.png");
+
+    ASSERT_TRUE(result.found());
+    EXPECT_TRUE(fs::equivalent(result.path, depth_path));
+}
+
+TEST_F(ColmapImageLayoutTest, DepthDirCacheFrameNumberFallbackSkipsAmbiguousMatches) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    write_png(dataset_dir / "depth" / "DEPTH_0042.png");
+    write_png(dataset_dir / "depth" / "CONF_0042.png");
+
+    const lfs::io::DepthDirCache cache(dataset_dir);
+    const auto result = cache.lookup("RENDER_0042.png");
+
+    EXPECT_FALSE(result.found());
+    EXPECT_FALSE(result.ambiguous());
 }
 
 TEST_F(ColmapImageLayoutTest, ResolvesDuplicateNestedImagesAndMasksByRelativePath) {
@@ -265,7 +328,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDuplicateNestedImagesAndMasksByRelativePat
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    auto& [cameras, scene_center] = *result;
+    auto& [cameras, scene_center] = result->value;
     (void)scene_center;
 
     ASSERT_EQ(cameras.size(), 2u);
@@ -288,12 +351,9 @@ TEST_F(ColmapImageLayoutTest, FailsWhenDuplicateNestedImagesAreReferencedByBasen
     write_png(image_a);
     write_png(image_b);
 
-    auto result =
-        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    const auto result = lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
-    EXPECT_NE(result.error().message.find("basename only"), std::string::npos);
-    EXPECT_NE(result.error().message.find("relative image path"), std::string::npos);
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::CORRUPTED_DATA);
 }
 
 TEST_F(ColmapImageLayoutTest, ValidationFailsWhenDuplicateBasenameWasCollapsedInMetadata) {
@@ -598,4 +658,60 @@ TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {
     EXPECT_FALSE(fs::exists(output_dir / "cameras.bin"));
     EXPECT_FALSE(fs::exists(output_dir / "images.bin"));
     EXPECT_FALSE(fs::exists(output_dir / "points3D.bin"));
+}
+
+TEST_F(ColmapImageLayoutTest, WriteBackStagesAndPublishesOneValidatedGeneration) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
+    }
+
+    const fs::path sparse_dir = temp_dir_ / "sparse";
+    write_text_file(sparse_dir / "cameras.txt",
+                    "1 PINHOLE 640 480 500 500 320 240\n");
+    write_text_file(sparse_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+                    "\n");
+    write_text_file(sparse_dir / "rigs.bin", "auxiliary sparse metadata\n");
+
+    auto cameras_result = lfs::io::read_colmap_cameras_only(sparse_dir);
+    ASSERT_TRUE(cameras_result.has_value()) << cameras_result.error().format();
+    auto [cameras, scene_center] = std::move(*cameras_result);
+    (void)scene_center;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    const glm::mat4 transform = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
+    const std::vector<lfs::io::ColmapCameraWriteData> camera_data{
+        lfs::io::ColmapCameraWriteData{
+            .camera = cameras[0],
+            .data_world_transform = transform,
+        },
+    };
+
+    const auto write_result = lfs::io::write_colmap_reconstruction(
+        sparse_dir,
+        sparse_dir,
+        camera_data,
+        nullptr,
+        glm::mat4(1.0f),
+        lfs::io::ColmapWriteOptions{.format = lfs::io::ColmapWriteFormat::Text});
+    ASSERT_TRUE(write_result.has_value()) << write_result.error().format();
+
+    const auto reopened = lfs::io::read_colmap_cameras_only(sparse_dir);
+    ASSERT_TRUE(reopened.has_value()) << reopened.error().format();
+    EXPECT_EQ(std::get<0>(*reopened).size(), 1u);
+
+    std::ifstream images_stream(sparse_dir / "images.txt");
+    const std::string images_text{std::istreambuf_iterator<char>(images_stream),
+                                  std::istreambuf_iterator<char>()};
+    EXPECT_NE(images_text.find(" -1 -2 -3 1 frame_0001.png"), std::string::npos);
+
+    std::ifstream auxiliary_stream(sparse_dir / "rigs.bin");
+    const std::string auxiliary_text{std::istreambuf_iterator<char>(auxiliary_stream),
+                                     std::istreambuf_iterator<char>()};
+    EXPECT_EQ(auxiliary_text, "auxiliary sparse metadata\n");
+
+    for (const auto& entry : fs::directory_iterator(temp_dir_)) {
+        EXPECT_FALSE(entry.path().filename().string().starts_with("sparse."))
+            << "staging generation was not cleaned up: " << entry.path();
+    }
 }

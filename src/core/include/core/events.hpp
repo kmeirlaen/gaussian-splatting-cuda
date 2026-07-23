@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
@@ -167,7 +168,7 @@ namespace lfs::core {
             EVENT(TrainingProgress, int iteration; float loss; int num_gaussians; bool is_refining = false;);
             EVENT(TrainingPaused, int iteration;);
             EVENT(TrainingResumed, int iteration;);
-            EVENT(TrainingCompleted, int iteration; float final_loss; float elapsed_seconds; bool success; bool user_stopped; std::optional<std::string> error;);
+            EVENT(TrainingCompleted, int iteration; float final_loss; float elapsed_seconds; bool success; bool user_stopped; std::optional<std::string> error; bool resource_exhausted = false; std::optional<core::WireError> error_info;);
             EVENT(TrainingStopped, int iteration; bool user_requested;);
 
             // Scene state
@@ -237,8 +238,13 @@ namespace lfs::core {
                   float ram_percent;);
             EVENT(FrameRendered, float render_ms; float fps; int num_gaussians;);
             EVENT(KeyframeListChanged, size_t count;);
+            EVENT(VramPressure,
+                  std::string domain;
+                  size_t requested_bytes;
+                  size_t freed_bytes;
+                  bool recovered;);
 
-            EVENT(ExportFailed, std::string error;);
+            EVENT(ExportFailed, std::string error; bool cancelled = false; std::optional<core::WireError> error_info;);
             EVENT(VideoExportCompleted, std::filesystem::path path; int total_frames;);
             EVENT(VideoExportFailed, std::string error;);
             EVENT(Mesh2SplatCompleted, std::string source_name; std::string node_name; size_t num_gaussians;);
@@ -246,6 +252,7 @@ namespace lfs::core {
 
             // CUDA version check
             EVENT(CudaVersionUnsupported, int major; int minor; int min_major; int min_minor;);
+            EVENT(CudaUnavailable, std::string message;);
         } // namespace state
 
         // ============================================================================
