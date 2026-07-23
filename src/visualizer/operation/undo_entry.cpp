@@ -895,6 +895,27 @@ namespace lfs::vis::op {
             return names;
         }
 
+        bool snapshotTreeHasCamera(const SceneGraphNodeSnapshot& node) {
+            if (node.type == lfs::core::NodeType::CAMERA || node.camera.has_value()) {
+                return true;
+            }
+            for (const auto& child : node.children) {
+                if (snapshotTreeHasCamera(child)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool stateHasCamera(const SceneGraphStateSnapshot& state) {
+            for (const auto& root : state.roots) {
+                if (snapshotTreeHasCamera(root)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         size_t estimateSnapshotBytes(const SceneGraphNodeSnapshot& snapshot) {
             size_t total = 0;
             if (snapshot.model) {
@@ -2231,6 +2252,10 @@ namespace lfs::vis::op {
 
         if (desired.selected_node_names) {
             restoreNodeSelection(scene_, *desired.selected_node_names);
+        }
+
+        if (stateHasCamera(desired) || stateHasCamera(current)) {
+            scene_.publishLiveCameraCount();
         }
     }
 

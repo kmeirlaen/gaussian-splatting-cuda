@@ -1993,10 +1993,24 @@ namespace lfs::vis::gui {
         auto* scene_manager = services().sceneOrNull();
         if (!scene_manager)
             return;
-        for (const core::NodeId id : deleteEnabledSelectedNodeIds()) {
-            if (const auto result = scene_manager->canRemoveNode(id); !result)
+
+        const auto ids = deleteEnabledSelectedNodeIds();
+        if (ids.empty())
+            return;
+
+        std::vector<std::string> names;
+        names.reserve(ids.size());
+        for (const core::NodeId id : ids) {
+            const auto* node = scene_manager->getScene().getNodeById(id);
+            if (!node)
                 continue;
-            cmd::RemoveNodeById{.node_id = static_cast<int32_t>(id), .keep_children = false}.emit();
+            names.push_back(node->name);
+        }
+        if (names.empty())
+            return;
+
+        if (const auto result = scene_manager->removeNodesWithResult(names, /*keep_children=*/false); !result) {
+            LOG_WARN("{}", result.error());
         }
     }
 
@@ -2150,10 +2164,6 @@ namespace lfs::vis::gui {
                         "Export COLMAP sparse...",
                         prefixedAction("export_colmap")));
                 }
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id)),
-                    !items.empty()));
                 break;
             case core::NodeType::CROPBOX:
                 items.push_back(makeAction(tr("common.apply"), prefixedAction("apply_cropbox")));
@@ -2165,10 +2175,6 @@ namespace lfs::vis::gui {
                     tr("scene.fit_to_scene_trimmed"),
                     prefixedAction("fit_cropbox:1")));
                 items.push_back(makeAction(tr("scene.reset_crop"), prefixedAction("reset_cropbox")));
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id)),
-                    true));
                 break;
             case core::NodeType::ELLIPSOID:
                 items.push_back(makeAction(tr("common.apply"), prefixedAction("apply_ellipsoid")));
@@ -2180,10 +2186,6 @@ namespace lfs::vis::gui {
                     tr("scene.fit_to_scene_trimmed"),
                     prefixedAction("fit_ellipsoid:1")));
                 items.push_back(makeAction(tr("scene.reset_crop"), prefixedAction("reset_ellipsoid")));
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id)),
-                    true));
                 break;
             default:
                 break;

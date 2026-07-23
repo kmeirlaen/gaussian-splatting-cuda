@@ -31,6 +31,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/model_renderability.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -1411,9 +1412,7 @@ namespace lfs::vis {
             .emit();
 
         if (removes_camera_nodes) {
-            if (auto* gui = services().guiOrNull()) {
-                gui->asyncTasks().setImportNumImages(scene_.getAllCameras().size());
-            }
+            publishLiveCameraCount();
         }
 
         if (scene_.getNodeCount() == 0) {
@@ -1433,6 +1432,18 @@ namespace lfs::vis {
 
     std::expected<void, std::string> SceneManager::removePLYWithResult(const std::string& name, const bool keep_children) {
         return removeNodeImpl(name, keep_children, HistoryMode::Record);
+    }
+
+    size_t SceneManager::publishLiveCameraCount() {
+        const size_t count = scene_.getAllCameras().size();
+        if (auto* gui = services().guiOrNull()) {
+            gui->asyncTasks().setImportNumImages(count);
+        } else {
+            auto state = app_store().import_overlay_state.get();
+            state.num_images = static_cast<std::uint64_t>(count);
+            app_store().import_overlay_state.set(std::move(state));
+        }
+        return count;
     }
 
     std::expected<void, std::string> SceneManager::removeNodesWithResult(const std::vector<std::string>& names,

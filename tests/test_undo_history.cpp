@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
-#include "core/camera.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -15,11 +15,13 @@
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 #include <algorithm>
 #include <any>
 #include <condition_variable>
+#include <filesystem>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -266,6 +268,25 @@ namespace {
         return std::vector<float>(
             flat.begin() + static_cast<ptrdiff_t>(row * stride),
             flat.begin() + static_cast<ptrdiff_t>((row + 1) * stride));
+    }
+
+    std::shared_ptr<lfs::core::Camera> make_test_camera(const std::string& image_name, const int uid) {
+        return std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU),
+            Tensor::zeros({3}, Device::CPU),
+            100.0f,
+            100.0f,
+            32.0f,
+            32.0f,
+            Tensor{},
+            Tensor{},
+            lfs::core::CameraModelType::PINHOLE,
+            image_name,
+            std::filesystem::path{},
+            std::filesystem::path{},
+            64,
+            64,
+            uid);
     }
 
 } // namespace
@@ -1855,8 +1876,10 @@ TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
     const auto cameras_id = scene.addGroup("Cameras");
     const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
     const auto val_group_id = scene.addCameraGroup("Validation", cameras_id, 1);
-    const auto train_camera_id = scene.addCamera("train.png", train_group_id, std::make_shared<lfs::core::Camera>());
-    const auto val_camera_id = scene.addCamera("val.png", val_group_id, std::make_shared<lfs::core::Camera>());
+    const auto train_camera_id =
+        scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    const auto val_camera_id =
+        scene.addCamera("val.png", val_group_id, make_test_camera("val.png", 2));
     scene.setCameraTrainingEnabled(val_camera_id, false);
     scene.setTrainingModelNode("Model");
     scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
@@ -1884,6 +1907,80 @@ TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
     const auto unrelated_result = scene_manager->removeNodeWithResult(unrelated_id);
     EXPECT_TRUE(unrelated_result);
     EXPECT_EQ(scene.getNodeById(unrelated_id), nullptr);
+}
+
+TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto free_id = scene.addSplat("free", make_test_splat({1.0f, 0.0f, 0.0f}));
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    scene.setTrainingModelNode("Model");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    const auto blocked = scene_manager->removeNodesWithResult({"free", "Model"}, false);
+    EXPECT_FALSE(blocked);
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+    EXPECT_NE(scene.getNodeById(free_id), nullptr);
+
+    const auto parent_id = scene.addGroup("parent");
+    const auto child_id = scene.addSplat("child", make_test_splat({2.0f, 0.0f, 0.0f}), parent_id);
+    ASSERT_NE(scene.getNodeById(parent_id), nullptr);
+    ASSERT_NE(scene.getNodeById(child_id), nullptr);
+
+    const auto cascaded = scene_manager->removeNodesWithResult({"parent", "child"}, false);
+    EXPECT_TRUE(cascaded) << (cascaded ? "" : cascaded.error());
+    EXPECT_EQ(scene.getNodeById(parent_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(child_id), nullptr);
+}
+
+TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 2);
+    const auto cam_a = scene.addCamera("a.png", train_group_id, make_test_camera("a.png", 1));
+    const auto cam_b = scene.addCamera("b.png", train_group_id, make_test_camera("b.png", 2));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    ASSERT_EQ(scene_manager->publishLiveCameraCount(), 2u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 2u);
+
+    const auto* cam_a_node = scene.getNodeById(cam_a);
+    ASSERT_NE(cam_a_node, nullptr);
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(cam_a));
+    EXPECT_EQ(scene.getNodeById(cam_a), nullptr);
+    EXPECT_NE(scene.getNodeById(cam_b), nullptr);
+    EXPECT_EQ(scene.getAllCameras().size(), 1u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().canUndo());
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_NE(scene.getNode("a.png"), nullptr);
+    EXPECT_EQ(scene.getAllCameras().size(), 2u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 2u);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().canRedo());
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(scene.getNode("a.png"), nullptr);
+    EXPECT_EQ(scene.getAllCameras().size(), 1u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
 }
 
 TEST_F(UndoHistoryTest, RenameNodeCreatesUndoableSceneGraphEntry) {

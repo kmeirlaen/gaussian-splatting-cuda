@@ -123,6 +123,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> removePLYWithResult(const std::string& name, bool keep_children = false);
         [[nodiscard]] std::expected<void, std::string> removeNodesWithResult(const std::vector<std::string>& names,
                                                                              bool keep_children = false);
+        size_t publishLiveCameraCount();
         void removePLY(const std::string& name, bool keep_children = false);
         void setPLYVisibility(const std::string& name, bool visible);
         [[nodiscard]] std::expected<void, std::string> removeNodeWithResult(core::NodeId id, bool keep_children = false);

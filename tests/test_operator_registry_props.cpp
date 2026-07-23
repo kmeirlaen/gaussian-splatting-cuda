@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
-#include "core/camera.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -219,7 +219,10 @@ TEST_F(OperatorRegistryPropsTest, DeleteOperatorDeletesMultipleSelectedNodes) {
 
     const auto resolved = props.get<std::vector<std::string>>("resolved_node_names");
     ASSERT_TRUE(resolved.has_value());
-    EXPECT_EQ(*resolved, (std::vector<std::string>{"delete_a", "delete_b"}));
+    ASSERT_EQ(resolved->size(), 2u);
+    std::vector<std::string> sorted = *resolved;
+    std::sort(sorted.begin(), sorted.end());
+    EXPECT_EQ(sorted, (std::vector<std::string>{"delete_a", "delete_b"}));
 }
 
 TEST_F(OperatorRegistryPropsTest, DeleteOperatorRejectsMixedTrainingBatchWithoutPartialRemoval) {
