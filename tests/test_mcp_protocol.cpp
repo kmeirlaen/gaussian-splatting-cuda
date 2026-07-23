@@ -8,6 +8,7 @@
 #include <cctype>
 
 #include "config.h"
+#include "core/event_bridge/command_center_bridge.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_server.hpp"
@@ -55,6 +56,46 @@ namespace lfs::mcp {
             return true;
         }
 
+        std::string command_tool_name(const training::OperationInfo& operation) {
+            std::string target;
+            switch (operation.target) {
+            case training::CommandTarget::Model:
+                target = "model";
+                break;
+            case training::CommandTarget::Optimizer:
+                target = "optimizer";
+                break;
+            case training::CommandTarget::Session:
+                target = "session";
+                break;
+            }
+            return target + "." + operation.name;
+        }
+
+        class ScopedCommandCenterToolGeneration {
+        public:
+            ScopedCommandCenterToolGeneration()
+                : previous_(event::CommandCenterBridge::instance().get()) {
+                auto& command_center = training::CommandCenter::instance();
+                for (const auto& operation : command_center.operations()) {
+                    tool_names_.push_back(command_tool_name(operation));
+                }
+                event::CommandCenterBridge::instance().set(&command_center);
+                ToolRegistry::instance().generate_from_command_center();
+            }
+
+            ~ScopedCommandCenterToolGeneration() {
+                for (const auto& name : tool_names_) {
+                    ToolRegistry::instance().unregister_tool(name);
+                }
+                event::CommandCenterBridge::instance().set(previous_);
+            }
+
+        private:
+            training::CommandCenter* previous_;
+            std::vector<std::string> tool_names_;
+        };
+
     } // namespace
 
     TEST(McpProtocolTest, ToolJsonKeepsStandardAnnotationsAndMovesLichtFeldMetadataToMeta) {
@@ -71,14 +112,18 @@ namespace lfs::mcp {
                 .long_running = true,
             }});
 
+        EXPECT_EQ(payload["name"], "test_describe");
+
         ASSERT_TRUE(payload.contains("annotations"));
         const auto& annotations = payload["annotations"];
+        ASSERT_TRUE(annotations.is_object());
+        EXPECT_EQ(annotations.size(), 3);
+        EXPECT_TRUE(annotations.contains("readOnlyHint"));
+        EXPECT_TRUE(annotations.contains("destructiveHint"));
+        EXPECT_TRUE(annotations.contains("idempotentHint"));
         EXPECT_TRUE(annotations["readOnlyHint"].get<bool>());
         EXPECT_TRUE(annotations["idempotentHint"].get<bool>());
         EXPECT_FALSE(annotations["destructiveHint"].get<bool>());
-        for (const auto& item : annotations.items()) {
-            EXPECT_EQ(item.key().find("x-lfs-"), std::string::npos) << item.key();
-        }
 
         ASSERT_TRUE(payload.contains("_meta"));
         const auto& meta = payload["_meta"];
@@ -326,6 +371,175 @@ namespace lfs::mcp {
         EXPECT_EQ((*normalized_call_response.result)["structuredContent"]["value"], 11);
         ASSERT_TRUE((*normalized_call_response.result).contains("content"));
         ASSERT_TRUE((*normalized_call_response.result).contains("structuredContent"));
+    }
+
+    TEST(McpProtocolTest, ToolRegistryUnregisterAcceptsDottedAndNormalizedNames) {
+        static constexpr const char* dotted_tool_name = "test.unregister_forms";
+        static constexpr const char* normalized_tool_name = "test_unregister_forms";
+        ScopedToolRegistration cleanup(dotted_tool_name);
+
+        const auto register_test_tool = [] {
+            ToolRegistry::instance().register_tool(
+                McpTool{
+                    .name = dotted_tool_name,
+                    .description = "Unregister name forms test",
+                    .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+                [](const json&) -> json { return json{{"marker", "registered"}}; });
+        };
+        const auto is_registered = [] {
+            const auto tools = ToolRegistry::instance().list_tools();
+            return std::any_of(tools.begin(), tools.end(), [](const McpTool& tool) {
+                return normalize_tool_name(tool.name) == normalized_tool_name;
+            });
+        };
+
+        register_test_tool();
+        ASSERT_TRUE(is_registered());
+        ToolRegistry::instance().unregister_tool(dotted_tool_name);
+        EXPECT_FALSE(is_registered());
+
+        register_test_tool();
+        ASSERT_TRUE(is_registered());
+        ToolRegistry::instance().unregister_tool(normalized_tool_name);
+        EXPECT_FALSE(is_registered());
+    }
+
+    TEST(McpProtocolTest, ToolRegistryRejectsNormalizedNameCollisions) {
+        static constexpr const char* dotted_tool_name = "foo.bar";
+        static constexpr const char* normalized_tool_name = "foo_bar";
+        ScopedToolRegistration cleanup(dotted_tool_name);
+
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = dotted_tool_name,
+                .description = "First collision candidate",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [](const json&) -> json { return json{{"marker", "first"}}; });
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = normalized_tool_name,
+                .description = "Second collision candidate",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [](const json&) -> json { return json{{"marker", "second"}}; });
+
+        const auto tools = ToolRegistry::instance().list_tools();
+        const auto matching_tool = std::find_if(tools.begin(), tools.end(), [](const McpTool& tool) {
+            return normalize_tool_name(tool.name) == normalized_tool_name;
+        });
+        ASSERT_NE(matching_tool, tools.end());
+        EXPECT_EQ(matching_tool->name, dotted_tool_name);
+        EXPECT_EQ(
+            std::count_if(tools.begin(), tools.end(), [](const McpTool& tool) {
+                return normalize_tool_name(tool.name) == normalized_tool_name;
+            }),
+            1);
+
+        EXPECT_EQ(ToolRegistry::instance().call_tool(dotted_tool_name, json::object())["marker"], "first");
+        EXPECT_EQ(ToolRegistry::instance().call_tool(normalized_tool_name, json::object())["marker"], "first");
+    }
+
+    TEST(McpProtocolTest, ToolRegistryListNameRoundTripsThroughBothUnregisterForms) {
+        static constexpr const char* dotted_tool_name = "test.registry_roundtrip";
+        static constexpr const char* normalized_tool_name = "test_registry_roundtrip";
+        ScopedToolRegistration cleanup(dotted_tool_name);
+
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(JsonRpcRequest{
+                                              .id = int64_t{1},
+                                              .method = "initialize",
+                                              .params = json::object()})
+                        .result.has_value());
+
+        int64_t request_id = 2;
+        for (const std::string unregister_name : {dotted_tool_name, normalized_tool_name}) {
+            ToolRegistry::instance().register_tool(
+                McpTool{
+                    .name = dotted_tool_name,
+                    .description = "Registry round-trip test",
+                    .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+                [](const json&) -> json { return json{{"success", true}}; });
+
+            const auto list_response = server.handle_request(JsonRpcRequest{
+                .id = request_id++,
+                .method = "tools/list",
+                .params = json::object()});
+            ASSERT_TRUE(list_response.result.has_value());
+            const auto& listed_tools = (*list_response.result)["tools"];
+            EXPECT_NE(
+                std::find_if(listed_tools.begin(), listed_tools.end(), [](const json& tool) {
+                    return tool.value("name", "") == normalized_tool_name;
+                }),
+                listed_tools.end());
+
+            ToolRegistry::instance().unregister_tool(unregister_name);
+
+            const auto after_unregister = server.handle_request(JsonRpcRequest{
+                .id = request_id++,
+                .method = "tools/list",
+                .params = json::object()});
+            ASSERT_TRUE(after_unregister.result.has_value());
+            const auto& remaining_tools = (*after_unregister.result)["tools"];
+            EXPECT_EQ(
+                std::find_if(remaining_tools.begin(), remaining_tools.end(), [](const json& tool) {
+                    return tool.value("name", "") == normalized_tool_name;
+                }),
+                remaining_tools.end());
+        }
+    }
+
+    TEST(McpProtocolTest, ToolRegistryRejectsInvalidNormalizedNames) {
+        const std::string invalid_character_name = "test/invalid";
+        const std::string overlong_name(65, 'x');
+        ScopedToolRegistration cleanup_invalid_character(invalid_character_name);
+        ScopedToolRegistration cleanup_overlong(overlong_name);
+
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = invalid_character_name,
+                .description = "Invalid character test",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [](const json&) -> json { return json{{"success", true}}; });
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = overlong_name,
+                .description = "Overlong name test",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [](const json&) -> json { return json{{"success", true}}; });
+
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(JsonRpcRequest{
+                                              .id = int64_t{1},
+                                              .method = "initialize",
+                                              .params = json::object()})
+                        .result.has_value());
+        const auto list_response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{2},
+            .method = "tools/list",
+            .params = json::object()});
+        ASSERT_TRUE(list_response.result.has_value());
+        const auto& listed_tools = (*list_response.result)["tools"];
+        EXPECT_EQ(
+            std::find_if(listed_tools.begin(), listed_tools.end(), [&](const json& tool) {
+                return tool.value("name", "") == normalize_tool_name(invalid_character_name);
+            }),
+            listed_tools.end());
+        EXPECT_EQ(
+            std::find_if(listed_tools.begin(), listed_tools.end(), [&](const json& tool) {
+                return tool.value("name", "") == normalize_tool_name(overlong_name);
+            }),
+            listed_tools.end());
+    }
+
+    TEST(McpProtocolTest, CommandCenterZeroArgumentToolHasObjectPropertiesBeforeSerialization) {
+        ScopedCommandCenterToolGeneration generated_tools;
+
+        const auto tools = ToolRegistry::instance().list_tools();
+        const auto pause_tool = std::find_if(tools.begin(), tools.end(), [](const McpTool& tool) {
+            return tool.name == "session.pause";
+        });
+        ASSERT_NE(pause_tool, tools.end());
+        EXPECT_TRUE(pause_tool->input_schema.properties.is_object());
+        EXPECT_TRUE(pause_tool->input_schema.properties.empty());
     }
 
     TEST(McpProtocolTest, ResourceReadUsesMostSpecificPrefixHandler) {
