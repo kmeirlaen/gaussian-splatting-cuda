@@ -11,7 +11,56 @@
 
 #include <glm/gtc/matrix_inverse.hpp>
 
+#include <cmath>
+
 namespace lfs::training {
+
+    std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_geom(
+        const core::Scene& scene) {
+        const auto training_model_name = scene.getTrainingModelNodeName();
+        if (training_model_name.empty()) {
+            return std::nullopt;
+        }
+
+        const auto* training_node = scene.getNode(training_model_name);
+        if (!training_node) {
+            return std::nullopt;
+        }
+
+        const core::NodeId cropbox_id = scene.getCropBoxForSplat(training_node->id);
+        if (cropbox_id == core::NULL_NODE) {
+            return std::nullopt;
+        }
+
+        const auto* cropbox = scene.getCropBoxData(cropbox_id);
+        if (!cropbox || !cropbox->enabled) {
+            return std::nullopt;
+        }
+
+        const glm::mat4 world_to_cropbox =
+            glm::inverse(scene.getWorldTransform(cropbox_id));
+        return TrainingCropBoxGeometry{
+            .min = cropbox->min,
+            .max = cropbox->max,
+            .world_to_cropbox = world_to_cropbox,
+            .model_to_cropbox =
+                world_to_cropbox * scene.getWorldTransform(training_node->id),
+            .inverse = cropbox->inverse};
+    }
+
+    std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_loss_geom(
+        const core::Scene& scene,
+        const float outside_weight) {
+        LFS_ASSERT_MSG(
+            std::isfinite(outside_weight) &&
+                outside_weight >= 0.0f &&
+                outside_weight <= 1.0f,
+            "crop box loss weight must be finite and within [0, 1]");
+        if (outside_weight == 1.0f) {
+            return std::nullopt;
+        }
+        return resolve_training_cropbox_geom(scene);
+    }
 
     std::optional<core::Tensor> compute_cropbox_remove_mask(
         const core::Tensor& means,
@@ -51,39 +100,21 @@ namespace lfs::training {
     std::optional<core::Tensor> compute_training_cropbox_remove_mask(
         const core::Scene& scene,
         const core::SplatData& model) {
-        const auto training_model_name = scene.getTrainingModelNodeName();
-        if (training_model_name.empty()) {
-            return std::nullopt;
-        }
-
-        const auto* training_node = scene.getNode(training_model_name);
-        if (!training_node) {
-            return std::nullopt;
-        }
-
-        const core::NodeId cropbox_id = scene.getCropBoxForSplat(training_node->id);
-        if (cropbox_id == core::NULL_NODE) {
-            return std::nullopt;
-        }
-
-        const auto* cropbox = scene.getCropBoxData(cropbox_id);
-        if (!cropbox || !cropbox->enabled) {
+        const auto geometry = resolve_training_cropbox_geom(scene);
+        if (!geometry) {
             return std::nullopt;
         }
 
         const auto& deleted = model.deleted();
         const core::Tensor* const deleted_mask =
             model.has_deleted_mask() && deleted.is_valid() ? &deleted : nullptr;
-        const glm::mat4 model_to_cropbox =
-            glm::inverse(scene.getWorldTransform(cropbox_id)) *
-            scene.getWorldTransform(training_node->id);
 
         return compute_cropbox_remove_mask(
             model.means(),
-            cropbox->min,
-            cropbox->max,
-            model_to_cropbox,
-            cropbox->inverse,
+            geometry->min,
+            geometry->max,
+            geometry->model_to_cropbox,
+            geometry->inverse,
             deleted_mask);
     }
 

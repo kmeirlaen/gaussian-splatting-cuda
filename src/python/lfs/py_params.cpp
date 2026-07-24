@@ -79,6 +79,10 @@ namespace lfs::python {
                         "cropbox_lr_scale", "Rejected splat LR scale", 0.1f, 0.0f, 1.0f,
                         "Scales Adam steps and refinement signals for rejected splats; strategy noise, decay, and resets remain active")
             .flags(PROP_LIVE_UPDATE)
+            .float_prop(&OptimizationParameters::cropbox_loss_weight,
+                        "cropbox_loss_weight", "Outside ROI loss weight", 0.1f, 0.0f, 1.0f,
+                        "Scales pixel losses for camera rays outside the active crop box")
+            .flags(PROP_LIVE_UPDATE)
 
             // Loss parameters
             .float_prop(&OptimizationParameters::lambda_dssim,
@@ -1129,6 +1133,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().cropbox_lr_scale; },
                 [](PyOptimizationParams& self, float v) { self.set("cropbox_lr_scale", nb::cast(v)); },
                 "Scales Adam steps and refinement signals for rejected splats; strategy noise, decay, and resets remain active")
+            .def_prop_rw(
+                "cropbox_loss_weight",
+                [](PyOptimizationParams& self) { return self.params().cropbox_loss_weight; },
+                [](PyOptimizationParams& self, float v) { self.set("cropbox_loss_weight", nb::cast(v)); },
+                "Scales pixel losses for camera rays outside the active crop box")
             .def_prop_rw(
                 "lambda_dssim",
                 [](PyOptimizationParams& self) { return self.params().lambda_dssim; },

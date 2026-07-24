@@ -198,6 +198,25 @@ class TestOptimizationParams:
         finally:
             params.cropbox_lr_scale = original
 
+    def test_cropbox_loss_weight_property(self, lf):
+        """Crop-box loss weighting should be exposed as a live bounded float."""
+        params = lf.optimization_params()
+        info = params.prop_info("cropbox_loss_weight")
+
+        assert info["name"] == "Outside ROI loss weight"
+        assert info["type"] == "float"
+        assert info["min"] == pytest.approx(0.0)
+        assert info["max"] == pytest.approx(1.0)
+        assert info["default"] == pytest.approx(0.1)
+        assert info["live_update"] is True
+
+        original = params.cropbox_loss_weight
+        try:
+            params.cropbox_loss_weight = 0.4
+            assert params.cropbox_loss_weight == pytest.approx(0.4)
+        finally:
+            params.cropbox_loss_weight = original
+
     def test_prop_info_needs_restart(self, lf):
         """prop_info should indicate needs_restart for certain properties."""
         params = lf.optimization_params()

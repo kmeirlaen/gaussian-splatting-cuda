@@ -63,6 +63,7 @@ def draw_cropbox_controls(layout):
         layout.separator()
         layout.label("Training")
         layout.prop(params, "cropbox_lr_scale")
+        layout.prop(params, "cropbox_loss_weight")
 
     layout.separator()
     layout.label("Appearance")

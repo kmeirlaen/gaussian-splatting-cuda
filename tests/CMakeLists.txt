@@ -139,6 +139,8 @@ set(TEST_FILES
     test_densification_tensor_ops.cpp
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
+    test_roi_weight_map.cpp
+    test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
     test_atomic_output.cpp
     test_training_terminal_state.cpp

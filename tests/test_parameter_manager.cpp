@@ -208,6 +208,13 @@ namespace {
         EXPECT_NE(params.validate().find("cropbox_lr_scale"), std::string::npos);
         params.cropbox_lr_scale = 1.1f;
         EXPECT_NE(params.validate().find("cropbox_lr_scale"), std::string::npos);
+        params = {};
+        params.cropbox_loss_weight = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
+        params.cropbox_loss_weight = -0.1f;
+        EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
+        params.cropbox_loss_weight = 1.1f;
+        EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
     }
 
     TEST(ParameterValidationTest, CropBoxLrScaleJsonIsBackwardCompatible) {
@@ -223,6 +230,22 @@ namespace {
         json.erase("cropbox_lr_scale");
         EXPECT_FLOAT_EQ(
             lfs::core::param::OptimizationParameters::from_json(json).cropbox_lr_scale,
+            0.1f);
+    }
+
+    TEST(ParameterValidationTest, CropBoxLossWeightJsonIsBackwardCompatible) {
+        lfs::core::param::OptimizationParameters params;
+        params.cropbox_loss_weight = 0.45f;
+        auto json = params.to_json();
+
+        EXPECT_FLOAT_EQ(json.at("cropbox_loss_weight").get<float>(), 0.45f);
+        EXPECT_FLOAT_EQ(
+            lfs::core::param::OptimizationParameters::from_json(json).cropbox_loss_weight,
+            0.45f);
+
+        json.erase("cropbox_loss_weight");
+        EXPECT_FLOAT_EQ(
+            lfs::core::param::OptimizationParameters::from_json(json).cropbox_loss_weight,
             0.1f);
     }
 

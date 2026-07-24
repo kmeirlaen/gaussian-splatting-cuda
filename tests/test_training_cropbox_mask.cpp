@@ -248,6 +248,22 @@ TEST(TrainingCropBoxMask, DisabledCropBoxReturnsNulloptWithoutMutation) {
     expect_cropbox_scene_unchanged(scene, *model, before);
 }
 
+TEST(TrainingCropBoxMask, LossGeometryIsInactiveWithoutCropOrAtUnitWeight) {
+    lfs::core::Scene no_crop_scene;
+    EXPECT_FALSE(
+        lfs::training::resolve_training_cropbox_loss_geom(no_crop_scene, 0.1f)
+            .has_value());
+
+    lfs::core::Scene active_scene;
+    add_training_model_with_translated_cropbox(active_scene, false);
+    EXPECT_TRUE(
+        lfs::training::resolve_training_cropbox_loss_geom(active_scene, 0.1f)
+            .has_value());
+    EXPECT_FALSE(
+        lfs::training::resolve_training_cropbox_loss_geom(active_scene, 1.0f)
+            .has_value());
+}
+
 TEST(TrainingCropBoxMask, WiderMeansUseFirstThreeColumnsForCropMask) {
     const auto means = lfs::core::Tensor::from_vector(
         std::vector<float>{
