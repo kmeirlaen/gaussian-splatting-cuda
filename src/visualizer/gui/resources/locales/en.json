@@ -748,6 +748,7 @@
     "mirror": "Mirror",
     "align_3point": "3-Point Align",
     "crop_box": "Crop Box",
+    "enable_crop_box": "Enable Crop Box",
     "ellipsoid": "Ellipsoid",
     "brush_selection": "Brush selection",
     "rect_selection": "Rectangle selection",

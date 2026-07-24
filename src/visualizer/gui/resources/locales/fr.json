@@ -742,6 +742,7 @@
     "mirror": "Miroir",
     "align_3point": "Alignement 3 Points",
     "crop_box": "Boîte de Recadrage",
+    "enable_crop_box": "Activer la boîte de recadrage",
     "brush_selection": "Sélection au pinceau",
     "rect_selection": "Sélection rectangle",
     "polygon_selection": "Sélection polygone",

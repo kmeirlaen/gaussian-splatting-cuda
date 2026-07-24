@@ -742,6 +742,7 @@
     "mirror": "Spiegelen",
     "align_3point": "3-Punts Uitlijning",
     "crop_box": "Bijsnijvak",
+    "enable_crop_box": "Bijsnijvak inschakelen",
     "brush_selection": "Penseel selectie",
     "rect_selection": "Rechthoek selectie",
     "polygon_selection": "Polygoon selectie",

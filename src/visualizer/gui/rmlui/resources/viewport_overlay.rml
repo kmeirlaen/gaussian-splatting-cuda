@@ -144,7 +144,7 @@
             <div id="primary-crop-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_crop_toolbar">
                 <div class="icon-btn"
-                     data-for="button : crop_object_buttons"
+                     data-for="button : crop_enable_buttons"
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
@@ -155,9 +155,26 @@
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
                 </div>
-                <div class="toolbar-separator"></div>
+                <div class="toolbar-separator hidden"
+                     data-class-hidden="!show_crop_enable_separator"></div>
+                <div class="icon-btn"
+                     data-for="button : crop_object_buttons"
+                     data-class-hidden="!show_crop_edit_controls"
+                     data-attr-id="button.button_id"
+                     data-class-selected="button.selected"
+                     data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-class-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                </div>
+                <div class="toolbar-separator"
+                     data-class-hidden="!show_crop_edit_controls"></div>
                 <div class="icon-btn"
                      data-for="button : crop_transform_buttons"
+                     data-class-hidden="!show_crop_edit_controls"
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
@@ -168,9 +185,11 @@
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
                 </div>
-                <div class="toolbar-separator"></div>
+                <div class="toolbar-separator"
+                     data-class-hidden="!show_crop_edit_controls"></div>
                 <div class="icon-btn"
                      data-for="button : crop_action_buttons"
+                     data-class-hidden="!show_crop_edit_controls"
                      data-attr-id="button.button_id"
                      data-attr-data-action="button.action_id"
                      data-attr-data-shortcut="button.shortcut_text"
@@ -322,7 +341,7 @@
             <div id="secondary-crop-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_crop_toolbar">
                 <div class="icon-btn"
-                     data-for="button : crop_object_buttons"
+                     data-for="button : crop_enable_buttons"
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
@@ -333,9 +352,26 @@
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
                 </div>
-                <div class="toolbar-separator"></div>
+                <div class="toolbar-separator hidden"
+                     data-class-hidden="!show_crop_enable_separator"></div>
+                <div class="icon-btn"
+                     data-for="button : crop_object_buttons"
+                     data-class-hidden="!show_crop_edit_controls"
+                     data-attr-id="button.button_id"
+                     data-class-selected="button.selected"
+                     data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-class-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                </div>
+                <div class="toolbar-separator"
+                     data-class-hidden="!show_crop_edit_controls"></div>
                 <div class="icon-btn"
                      data-for="button : crop_transform_buttons"
+                     data-class-hidden="!show_crop_edit_controls"
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
@@ -346,9 +382,11 @@
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
                 </div>
-                <div class="toolbar-separator"></div>
+                <div class="toolbar-separator"
+                     data-class-hidden="!show_crop_edit_controls"></div>
                 <div class="icon-btn"
                      data-for="button : crop_action_buttons"
+                     data-class-hidden="!show_crop_edit_controls"
                      data-attr-id="button.button_id"
                      data-attr-data-action="button.action_id"
                      data-attr-data-shortcut="button.shortcut_text"

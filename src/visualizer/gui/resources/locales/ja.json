@@ -742,6 +742,7 @@
     "mirror": "ミラー",
     "align_3point": "3点整列",
     "crop_box": "クロップボックス",
+    "enable_crop_box": "クロップボックスを有効化",
     "brush_selection": "ブラシ選択",
     "rect_selection": "矩形選択",
     "polygon_selection": "ポリゴン選択",

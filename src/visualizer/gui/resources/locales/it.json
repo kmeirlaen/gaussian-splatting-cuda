@@ -742,6 +742,7 @@
     "mirror": "Specchia",
     "align_3point": "Allineamento 3 Punti",
     "crop_box": "Scatola di Ritaglio",
+    "enable_crop_box": "Attiva scatola di ritaglio",
     "brush_selection": "Selezione pennello",
     "rect_selection": "Selezione rettangolo",
     "polygon_selection": "Selezione poligono",

@@ -248,6 +248,7 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "transform_tool_buttons" in model.bound_record_lists
     assert "mirror_group_buttons" in model.bound_record_lists
     assert "crop_group_buttons" in model.bound_record_lists
+    assert "crop_enable_buttons" in model.bound_record_lists
     assert "crop_object_buttons" in model.bound_record_lists
     assert "crop_transform_buttons" in model.bound_record_lists
     assert "crop_action_buttons" in model.bound_record_lists
@@ -256,6 +257,8 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
     assert "show_crop_toolbar" in model.bound_funcs
+    assert "show_crop_edit_controls" in model.bound_funcs
+    assert "show_crop_enable_separator" in model.bound_funcs
     assert "show_selection_volume_gizmos" in model.bound_funcs
     assert "toolbar_action" in model.bound_events
     assert "selection_tool_label" not in model.bound_funcs
@@ -706,6 +709,127 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     assert state.calls[-1] == ("delete_crop_tool_volume",)
 
 
+def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
+    toolbar_module, monkeypatch
+):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(
+        active_tool="builtin.cropbox",
+        content_type="dataset",
+        operator_calls=[],
+    )
+    cropbox = SimpleNamespace(enabled=True)
+    crop_node = SimpleNamespace(
+        id=7,
+        name="bicycle_cropbox",
+        type=SimpleNamespace(name="CROPBOX"),
+        children=(),
+        cropbox=lambda: cropbox,
+    )
+    scene = SimpleNamespace(
+        get_node=lambda name: crop_node if name == crop_node.name else None,
+        get_node_by_id=lambda node_id: crop_node if node_id == crop_node.id else None,
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        icon="cropbox",
+        label="Crop",
+        shortcut="",
+        group="utility",
+        submodes=(),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+
+    def invoke(operator_id, **kwargs):
+        state.operator_calls.append((operator_id, kwargs))
+        cropbox.enabled = kwargs["enabled"]
+
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(
+        lf_stub, "get_selected_node_names", lambda: [crop_node.name], raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_content_type", lambda: state.content_type, raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_shape", lambda: "box", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gizmo_type", lambda: "translate", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "ops", SimpleNamespace(invoke=invoke), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False
+    )
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(
+            lambda tool_id: crop_tool if tool_id == "builtin.cropbox" else None
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "clear_active",
+        staticmethod(lambda: setattr(state, "active_tool", "")),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+    snapshot = controller.snapshot()
+
+    assert snapshot["show_crop_toolbar"] is True
+    assert snapshot["show_crop_edit_controls"] is True
+    assert snapshot["show_crop_enable_separator"] is True
+    assert snapshot["crop_enable_buttons"] == [
+        {
+            "button_id": "crop-enabled",
+            "action": "crop_toggle_enabled",
+            "value": "",
+            "icon_src": "../icon/scene/visible.png",
+            "tooltip_key": "toolbar.enable_crop_box",
+            "tooltip_text": "Enable Crop Box",
+            "action_id": "",
+            "shortcut_text": "",
+            "selected": True,
+            "enabled": True,
+            "opacity": "1",
+        }
+    ]
+
+    controller.dispatch("crop_toggle_enabled", "")
+
+    assert state.operator_calls == [
+        (
+            "crop_box.set",
+            {"node": "bicycle_cropbox", "enabled": False},
+        )
+    ]
+    assert controller.snapshot()["crop_enable_buttons"][0]["selected"] is False
+
+    for trainer_state in module._TOOLBAR_HIDDEN_STATES:
+        module.RuntimeState.trainer_state.value = trainer_state
+        snapshot = controller.snapshot()
+
+        assert snapshot["show_crop_toolbar"] is True
+        assert snapshot["show_crop_edit_controls"] is False
+        assert snapshot["show_crop_enable_separator"] is False
+        assert snapshot["crop_enable_buttons"][0]["selected"] is False
+        assert snapshot["crop_object_buttons"] == []
+        assert snapshot["crop_transform_buttons"] == []
+        assert snapshot["crop_action_buttons"] == []
+
+    module.RuntimeState.trainer_state.value = "idle"
+    state.content_type = "splat_files"
+    snapshot = controller.snapshot()
+
+    assert snapshot["show_crop_toolbar"] is False
+    assert snapshot["crop_enable_buttons"] == []
+
+
 def test_crop_tool_activation_creates_explicitly_but_snapshot_is_passive(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
@@ -1044,6 +1168,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : pivot_buttons"') == 1
     assert rml.count('data-for="button : mirror_group_buttons"') == 2
     assert rml.count('data-for="button : crop_group_buttons"') == 2
+    assert rml.count('data-for="button : crop_enable_buttons"') == 2
     assert rml.count('data-for="button : crop_object_buttons"') == 2
     assert rml.count('data-for="button : crop_transform_buttons"') == 2
     assert rml.count('data-for="button : crop_action_buttons"') == 2
@@ -1068,7 +1193,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     for toolbar_markup in (primary_left, secondary_left):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
         assert 'data-for="button : utility_primary_buttons"' not in toolbar_markup
-    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 25
+    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 27
     assert "data-attr-data-tooltip" not in rml
     assert 'data-attr-title="button.tooltip_text"' in rml
     assert rml.count('data-for="button : selection_mode_buttons"') == 1
@@ -1123,6 +1248,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
             "mirror",
             "align_3point",
             "crop_box",
+            "enable_crop_box",
             "ellipsoid",
             "brush_selection",
             "rect_selection",
@@ -1173,6 +1299,9 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
                 assert not any(fragment in value for fragment in forbidden_shortcut_fragments), (
                     f"{locale_path.name} toolbar.{key} still contains a hardcoded shortcut: {value}"
                 )
+        assert data.get("toolbar", {}).get(
+            "enable_crop_box"
+        ), f"{locale_path.name} missing toolbar.enable_crop_box"
         for key in selection_tooltip_keys:
             assert data.get("tooltip", {}).get(key), f"{locale_path.name} missing tooltip.{key}"
         for key in (*transform_tooltip_keys, *transform_dynamic_tooltip_keys):

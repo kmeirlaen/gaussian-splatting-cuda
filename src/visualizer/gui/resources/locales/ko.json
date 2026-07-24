@@ -742,6 +742,7 @@
     "mirror": "미러",
     "align_3point": "3점 정렬",
     "crop_box": "자르기 상자",
+    "enable_crop_box": "자르기 상자 활성화",
     "brush_selection": "브러시 선택",
     "rect_selection": "사각형 선택",
     "polygon_selection": "다각형 선택",

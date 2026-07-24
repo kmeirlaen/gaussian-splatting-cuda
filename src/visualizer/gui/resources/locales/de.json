@@ -742,6 +742,7 @@
     "mirror": "Spiegeln",
     "align_3point": "3-Punkt Ausrichtung",
     "crop_box": "Zuschneidebox",
+    "enable_crop_box": "Zuschneidebox aktivieren",
     "brush_selection": "Pinselauswahl",
     "rect_selection": "Rechteckauswahl",
     "polygon_selection": "Polygonauswahl",

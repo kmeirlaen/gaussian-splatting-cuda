@@ -742,6 +742,7 @@
     "mirror": "Odbicie",
     "align_3point": "Wyrównanie 3-punktowe",
     "crop_box": "Pole Przycinania",
+    "enable_crop_box": "Włącz pole przycinania",
     "brush_selection": "Zaznaczenie pędzlem",
     "rect_selection": "Zaznaczenie prostokątne",
     "polygon_selection": "Zaznaczenie wielokąta",
