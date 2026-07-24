@@ -179,6 +179,25 @@ class TestOptimizationParams:
         assert "live_update" in info
         assert info["live_update"] is True
 
+    def test_cropbox_lr_scale_property(self, lf):
+        """Crop-box damping should be exposed as a live bounded float."""
+        params = lf.optimization_params()
+        info = params.prop_info("cropbox_lr_scale")
+
+        assert info["name"] == "Rejected splat LR scale"
+        assert info["type"] == "float"
+        assert info["min"] == pytest.approx(0.0)
+        assert info["max"] == pytest.approx(1.0)
+        assert info["default"] == pytest.approx(0.1)
+        assert info["live_update"] is True
+
+        original = params.cropbox_lr_scale
+        try:
+            params.cropbox_lr_scale = 0.25
+            assert params.cropbox_lr_scale == pytest.approx(0.25)
+        finally:
+            params.cropbox_lr_scale = original
+
     def test_prop_info_needs_restart(self, lf):
         """prop_info should indicate needs_restart for certain properties."""
         params = lf.optimization_params()

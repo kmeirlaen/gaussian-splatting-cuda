@@ -6,6 +6,7 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
 #include "training_cropbox_mask.hpp"
 
 #include <glm/gtc/matrix_inverse.hpp>
@@ -20,7 +21,9 @@ namespace {
 
     constexpr size_t kCropTestCount = 5;
 
-    std::unique_ptr<lfs::core::SplatData> make_test_splat(std::vector<float> means) {
+    std::unique_ptr<lfs::core::SplatData> make_test_splat(
+        std::vector<float> means,
+        const lfs::core::Device device = lfs::core::Device::CPU) {
         const size_t count = means.size() / 3;
         std::vector<float> rotations(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
@@ -29,19 +32,19 @@ namespace {
 
         return std::make_unique<lfs::core::SplatData>(
             0,
-            lfs::core::Tensor::from_vector(means, {count, size_t{3}}, lfs::core::Device::CPU),
+            lfs::core::Tensor::from_vector(means, {count, size_t{3}}, device),
             lfs::core::Tensor::zeros({count, size_t{1}, size_t{3}},
-                                     lfs::core::Device::CPU,
+                                     device,
                                      lfs::core::DataType::Float32),
             lfs::core::Tensor::zeros({count, lfs::core::sh_rest_coefficients_for_degree(0), size_t{3}},
-                                     lfs::core::Device::CPU,
+                                     device,
                                      lfs::core::DataType::Float32),
             lfs::core::Tensor::zeros({count, size_t{3}},
-                                     lfs::core::Device::CPU,
+                                     device,
                                      lfs::core::DataType::Float32),
-            lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, lfs::core::Device::CPU),
+            lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, device),
             lfs::core::Tensor::zeros({count, size_t{1}},
-                                     lfs::core::Device::CPU,
+                                     device,
                                      lfs::core::DataType::Float32),
             1.0f);
     }
@@ -392,6 +395,41 @@ TEST(TrainingCropBoxMask, PureMaskMatchesOnCpuAndCuda) {
     const std::vector<bool> expected{false, true, false, false};
     EXPECT_EQ(cpu_mask->to(lfs::core::Device::CPU).to_vector_bool(), expected);
     EXPECT_EQ(cuda_mask->to(lfs::core::Device::CPU).to_vector_bool(), expected);
+}
+
+TEST(TrainingCropBoxMask, DampedOptimizerStepUsesComputedRejectedMask) {
+    auto model = make_test_splat(
+        {0.0f, 0.0f, 0.0f,
+         2.0f, 0.0f, 0.0f},
+        lfs::core::Device::CUDA);
+    const auto remove_mask = lfs::training::compute_cropbox_remove_mask(
+        model->means(),
+        {-1.0f, -1.0f, -1.0f},
+        {1.0f, 1.0f, 1.0f},
+        glm::mat4(1.0f),
+        false);
+    ASSERT_TRUE(remove_mask.has_value());
+    EXPECT_EQ(remove_mask->to(lfs::core::Device::CPU).to_vector_bool(),
+              (std::vector<bool>{false, true}));
+
+    lfs::training::AdamConfig config{
+        .lr = 0.01f,
+        .beta1 = 0.0,
+        .beta2 = 0.0,
+        .eps = 1e-15};
+    lfs::training::AdamOptimizer optimizer(*model, config);
+    optimizer.allocate_gradients();
+    optimizer.zero_grad(0);
+    optimizer.get_grad(lfs::training::ParamType::Means).fill_(1.0f);
+    optimizer.set_crop_damping_mask(std::move(*remove_mask));
+    optimizer.set_cropbox_lr_scale(0.1f);
+
+    const auto before = model->means().clone();
+    optimizer.step(1);
+    const auto delta = (model->means() - before).abs().to(lfs::core::Device::CPU).to_vector();
+    ASSERT_EQ(delta.size(), 6u);
+    EXPECT_GT(delta[0], 0.0f);
+    EXPECT_NEAR(delta[3], delta[0] * 0.1f, 1e-7f);
 }
 
 TEST(TrainingCropBoxMask, EmptyMeansReturnNulloptWithoutMutation) {

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "strategy_utils.hpp"
+#include "core/assert.hpp"
 #include "core/logger.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include <algorithm>
@@ -174,6 +175,33 @@ namespace lfs::training {
         if (frozen_mask.is_valid()) {
             scores.masked_fill_(frozen_mask, 0.0f);
         }
+    }
+
+    lfs::core::Tensor apply_crop_damping_to_scores(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& scores) {
+        const auto& crop_mask = optimizer.crop_damping_mask();
+        const float scale = optimizer.cropbox_lr_scale();
+        if (!crop_mask.is_valid() || crop_mask.numel() == 0 || scale == 1.0f) {
+            return scores;
+        }
+
+        LFS_ASSERT_MSG(scores.is_valid(), "crop-damped scores must be valid");
+        LFS_ASSERT_MSG(scores.ndim() == 1, "crop-damped scores must be one-dimensional");
+        LFS_ASSERT_MSG(
+            scores.numel() <= crop_mask.numel(),
+            "crop damping mask must cover every score row");
+        LFS_ASSERT_MSG(
+            scores.device() == crop_mask.device(),
+            "crop damping mask and scores must use the same device");
+
+        const auto active_mask = scores.numel() == crop_mask.numel()
+                                     ? crop_mask
+                                     : crop_mask.slice(0, 0, scores.numel());
+        if (scale == 0.0f) {
+            return scores.masked_fill(active_mask, 0.0f);
+        }
+        return lfs::core::Tensor::where(active_mask, scores * scale, scores);
     }
 
     size_t frozen_row_count(const lfs::core::SplatData& splat_data, const size_t n) {

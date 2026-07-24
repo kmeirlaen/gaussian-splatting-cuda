@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 
 #include <limits>
+#include <nlohmann/json.hpp>
 
 namespace {
 
@@ -200,6 +201,29 @@ namespace {
         params = {};
         params.means_lr = std::numeric_limits<float>::infinity();
         EXPECT_NE(params.validate().find("means_lr"), std::string::npos);
+        params = {};
+        params.cropbox_lr_scale = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_NE(params.validate().find("cropbox_lr_scale"), std::string::npos);
+        params.cropbox_lr_scale = -0.1f;
+        EXPECT_NE(params.validate().find("cropbox_lr_scale"), std::string::npos);
+        params.cropbox_lr_scale = 1.1f;
+        EXPECT_NE(params.validate().find("cropbox_lr_scale"), std::string::npos);
+    }
+
+    TEST(ParameterValidationTest, CropBoxLrScaleJsonIsBackwardCompatible) {
+        lfs::core::param::OptimizationParameters params;
+        params.cropbox_lr_scale = 0.35f;
+        auto json = params.to_json();
+
+        EXPECT_FLOAT_EQ(json.at("cropbox_lr_scale").get<float>(), 0.35f);
+        EXPECT_FLOAT_EQ(
+            lfs::core::param::OptimizationParameters::from_json(json).cropbox_lr_scale,
+            0.35f);
+
+        json.erase("cropbox_lr_scale");
+        EXPECT_FLOAT_EQ(
+            lfs::core::param::OptimizationParameters::from_json(json).cropbox_lr_scale,
+            0.1f);
     }
 
     TEST(ParameterValidationTest, RejectsDatasetCadenceAndOddVideoDimensions) {

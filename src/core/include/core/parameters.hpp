@@ -95,6 +95,8 @@ namespace lfs::core {
             float scaling_lr = 0.005f;
             float scaling_lr_end = 0.005f;
             float rotation_lr = 0.001f;
+            // Adam and refinement signals only; strategy noise, decay, and resets remain crop-unaware.
+            float cropbox_lr_scale = 0.1f;
             float lambda_dssim = 0.2f;
             float min_opacity = 0.005f;
             size_t refine_every = 100;

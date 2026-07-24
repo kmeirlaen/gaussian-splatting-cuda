@@ -42,6 +42,7 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_EQ((*parsed)->dataset.max_width, 3840);
     EXPECT_EQ((*parsed)->dataset.resize_factor, 1);
     EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "ssi");
+    EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_lr_scale, 0.1f);
     EXPECT_FLOAT_EQ((*parsed)->freeze_lr_scale, 0.0f);
 }
 
@@ -254,6 +255,48 @@ TEST(ArgumentParserTest, TrainingRejectsFrozenLrScaleOutsideUnitInterval) {
         auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
         EXPECT_NE(parsed.error().find("freeze_lr_scale must be within [0, 1]"), std::string::npos)
+            << parsed.error();
+    }
+}
+
+TEST(ArgumentParserTest, TrainingParsesCropBoxLrScale) {
+    const auto data_path = make_test_path("lfs_arg_parser_cropbox_lr_scale_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cropbox_lr_scale_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--cropbox-lr-scale",
+        "0.25"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_lr_scale, 0.25f);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsCropBoxLrScaleOutsideUnitInterval) {
+    const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_lr_scale_data");
+    const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_lr_scale_output");
+
+    for (const char* scale : {"1.5", "-0.1"}) {
+        SCOPED_TRACE(scale);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "--headless",
+            "--data-path",
+            data_path.c_str(),
+            "--output-path",
+            output_path.c_str(),
+            "--cropbox-lr-scale",
+            scale};
+
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("cropbox_lr_scale must be finite and within [0, 1]"), std::string::npos)
             << parsed.error();
     }
 }

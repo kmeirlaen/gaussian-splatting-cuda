@@ -1925,23 +1925,24 @@ namespace lfs::training {
         return {};
     }
 
-    bool Trainer::should_skip_cropbox_prune(
-        const lfs::core::SplatData& model,
-        const int crop_pruned,
-        const int iter) {
-        const size_t active_gaussians = model.visible_count();
-        if (active_gaussians > 0 && static_cast<size_t>(crop_pruned) < active_gaussians) {
-            return false;
+    void Trainer::install_cropbox_step_damping(
+        lfs::core::SplatData& model,
+        AdamOptimizer& optimizer) {
+        const float scale = params_.optimization.cropbox_lr_scale;
+        optimizer.set_cropbox_lr_scale(scale);
+
+        if (scale == 1.0f || !scene_) {
+            optimizer.set_crop_damping_mask({});
+            return;
         }
 
-        if (!cropbox_all_pruned_warning_emitted_) {
-            LOG_WARN(
-                "Training crop box would reject all {} active gaussians at iter {}; skipping prune",
-                active_gaussians,
-                iter);
-            cropbox_all_pruned_warning_emitted_ = true;
+        auto crop_mask = compute_training_cropbox_remove_mask(*scene_, model);
+        if (!crop_mask || !crop_mask->is_valid() || crop_mask->numel() == 0) {
+            optimizer.set_crop_damping_mask({});
+            return;
         }
-        return true;
+
+        optimizer.set_crop_damping_mask(std::move(*crop_mask));
     }
 
     Trainer::Trainer(std::shared_ptr<CameraDataset> dataset,
@@ -3909,21 +3910,7 @@ namespace lfs::training {
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);
-                    if (scene_) {
-                        if (auto crop_mask = compute_training_cropbox_remove_mask(*scene_, model);
-                            crop_mask && crop_mask->is_valid() && crop_mask->numel() > 0) {
-                            const int crop_pruned = crop_mask->to(lfs::core::DataType::Int32).sum().template item<int>();
-                            if (crop_pruned > 0 && !should_skip_cropbox_prune(model, crop_pruned, iter)) {
-                                if (!lock.owns_lock()) {
-                                    lock.lock();
-                                    waitForModelReaders();
-                                }
-                                LOG_DEBUG("Training crop box: pruning {} gaussians rejected by the active crop box at iter {}",
-                                          crop_pruned, iter);
-                                strategy_->remove_gaussians(*crop_mask);
-                            }
-                        }
-                    }
+                    install_cropbox_step_damping(model, strategy_->get_optimizer());
                     fastgs_strategy_hooks_at_start = true;
 
                     if (sparsity_optimizer_ &&
@@ -3955,6 +3942,9 @@ namespace lfs::training {
                     }
                     ++mutation_epoch_;
                     persistent_commit = true;
+                }
+                if (fastgs_path && in_sparsification) {
+                    install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());
                 }
 
                 const int normal_start_iter = static_cast<int>(
@@ -5290,25 +5280,9 @@ namespace lfs::training {
                             ++mutation_epoch_;
                             persistent_commit = true;
                             strategy_->post_backward(iter, r_output);
-                            if (scene_) {
-                                auto& model = strategy_->get_model();
-                                if (auto crop_mask = compute_training_cropbox_remove_mask(*scene_, model);
-                                    crop_mask && crop_mask->is_valid() && crop_mask->numel() > 0) {
-                                    const int crop_pruned = crop_mask->to(lfs::core::DataType::Int32).sum().template item<int>();
-                                    if (crop_pruned > 0 && !should_skip_cropbox_prune(model, crop_pruned, iter)) {
-                                        if (!lock.owns_lock()) {
-                                            if (model_write_lock.owns_lock()) {
-                                                model_write_lock.unlock();
-                                            }
-                                            lock.lock();
-                                            waitForModelReaders();
-                                        }
-                                        LOG_DEBUG("Training crop box: pruning {} gaussians rejected by the active crop box at iter {}",
-                                                  crop_pruned, iter);
-                                        strategy_->remove_gaussians(*crop_mask);
-                                    }
-                                }
-                            }
+                        }
+                        if (!fastgs_path) {
+                            install_cropbox_step_damping(model, strategy_->get_optimizer());
                         }
 
                         // Skip strategy step if we're in controller distillation phase and freeze is enabled
@@ -5545,7 +5519,6 @@ namespace lfs::training {
             })));
         }
 
-        cropbox_all_pruned_warning_emitted_ = false;
         training_complete_ = false;
         ready_to_start_ = false; // Reset the flag
         lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);

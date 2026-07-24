@@ -154,6 +154,9 @@ namespace fast_lfs::optimizer::kernels::adam {
         const bool* frozen_mask,
         const int frozen_mask_size,
         const float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        const int crop_damping_mask_size,
+        const float cropbox_lr_scale,
         const int n_rows,
         const int row_size,
         const float lr,
@@ -170,6 +173,13 @@ namespace fast_lfs::optimizer::kernels::adam {
             if (frozen_lr_scale == 0.0f)
                 return;
             row_lr *= frozen_lr_scale;
+        }
+        if (crop_damping_mask != nullptr &&
+            row < crop_damping_mask_size &&
+            crop_damping_mask[row]) {
+            if (cropbox_lr_scale == 0.0f)
+                return;
+            row_lr *= cropbox_lr_scale;
         }
 
         const int base = row * row_size;
@@ -269,6 +279,9 @@ namespace fast_lfs::optimizer::kernels::adam {
         const bool* frozen_mask,
         const int frozen_mask_size,
         const float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        const int crop_damping_mask_size,
+        const float cropbox_lr_scale,
         const int n_primitives,
         const int slots_per_primitive,
         const float lr,
@@ -285,6 +298,13 @@ namespace fast_lfs::optimizer::kernels::adam {
             if (frozen_lr_scale == 0.0f)
                 return;
             row_lr *= frozen_lr_scale;
+        }
+        if (crop_damping_mask != nullptr &&
+            p < crop_damping_mask_size &&
+            crop_damping_mask[p]) {
+            if (cropbox_lr_scale == 0.0f)
+                return;
+            row_lr *= cropbox_lr_scale;
         }
 
         float4* param4 = reinterpret_cast<float4*>(param);

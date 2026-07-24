@@ -58,6 +58,12 @@ def draw_cropbox_controls(layout):
     layout.separator()
     layout.prop(cropbox, "inverse")
 
+    params = lf.optimization_params()
+    if params and params.has_params():
+        layout.separator()
+        layout.label("Training")
+        layout.prop(params, "cropbox_lr_scale")
+
     layout.separator()
     layout.label("Appearance")
     layout.prop(cropbox, "color")

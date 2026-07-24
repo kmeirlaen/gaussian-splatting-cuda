@@ -102,6 +102,7 @@ namespace lfs::core {
             opt_json["scaling_lr"] = scaling_lr;
             opt_json["scaling_lr_end"] = scaling_lr_end;
             opt_json["rotation_lr"] = rotation_lr;
+            opt_json["cropbox_lr_scale"] = cropbox_lr_scale;
             opt_json["lambda_dssim"] = lambda_dssim;
             opt_json["min_opacity"] = min_opacity;
             opt_json["refine_every"] = refine_every;
@@ -286,6 +287,7 @@ namespace lfs::core {
             const std::array probability_fields{
                 std::pair{"lambda_dssim", lambda_dssim},
                 std::pair{"min_opacity", min_opacity},
+                std::pair{"cropbox_lr_scale", cropbox_lr_scale},
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},
@@ -476,6 +478,9 @@ namespace lfs::core {
                 params.scaling_lr_end = json["scaling_lr_end"];
             }
             params.rotation_lr = json["rotation_lr"];
+            if (json.contains("cropbox_lr_scale")) {
+                params.cropbox_lr_scale = json["cropbox_lr_scale"];
+            }
             params.lambda_dssim = json["lambda_dssim"];
             params.min_opacity = json["min_opacity"];
             params.refine_every = json["refine_every"];

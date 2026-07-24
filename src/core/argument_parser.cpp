@@ -242,6 +242,7 @@ namespace {
             ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", "SH degree interval", {"sh-degree-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", "Maximum number of Gaussians", {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", "Minimum opacity threshold", {"min-opacity"});
+            ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", "Adam-step and refinement-signal scale for splats rejected by the active crop box; strategy noise, decay, and resets remain active (default: 0.1)", {"cropbox-lr-scale"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", "Scale training steps by factor", {"steps-scaler"});
             ::args::Flag no_error_map(training_group, "no_error_map", "Disable per-pixel SSIM error-map weighting of the MRNF refine signal (default: enabled)", {"no-error-map"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", "Disable Sobel edge-map weighting of the MRNF refine signal (default: enabled)", {"no-edge-map"});
@@ -770,6 +771,7 @@ namespace {
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
+                                        cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
                                         init_extent_val = cli_option_present({"--init-extent"}) ? std::optional<float>(::args::get(init_extent)) : std::optional<float>(),
                                         strategy_val = cli_option_present({"--strategy"}) ? std::optional<std::string>(::args::get(strategy)) : std::optional<std::string>(),
@@ -859,6 +861,7 @@ namespace {
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
                 setVal(sh_degree_val, opt.sh_degree);
                 setVal(min_opacity_val, opt.min_opacity);
+                setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);
                 setVal(init_num_pts_val, opt.init_num_pts);
                 setVal(init_extent_val, opt.init_extent);
                 setVal(strategy_val, opt.strategy);
