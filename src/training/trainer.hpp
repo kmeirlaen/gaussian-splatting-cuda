@@ -377,6 +377,10 @@ namespace lfs::training {
 
         std::expected<void, std::string> handle_sparsity_update(const int iter, lfs::core::SplatData& splat_data);
         std::expected<void, std::string> apply_sparsity_pruning(const int iter, lfs::core::SplatData& splat_data);
+        [[nodiscard]] bool should_skip_cropbox_prune(
+            const lfs::core::SplatData& model,
+            int crop_pruned,
+            int iter);
 
         // Cleanup method for re-initialization
         void cleanup();
@@ -569,6 +573,7 @@ namespace lfs::training {
         // Current training state
         std::atomic<int> current_iteration_{0};
         std::atomic<float> current_loss_{0.0f};
+        bool cropbox_all_pruned_warning_emitted_ = false;
 
         // Monotonic, never rolls back. Incremented at the frozen persistent
         // commit boundaries and embedded in terminal MutationStamp context.

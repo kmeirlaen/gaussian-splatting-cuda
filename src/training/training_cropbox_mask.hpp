@@ -20,7 +20,7 @@ namespace lfs::training {
         const core::Tensor& means,
         const glm::vec3& crop_min,
         const glm::vec3& crop_max,
-        const glm::mat4& world_to_cropbox,
+        const glm::mat4& points_to_cropbox,
         bool inverse,
         const core::Tensor* deleted_mask = nullptr);
 
