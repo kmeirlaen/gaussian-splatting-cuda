@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "training_cropbox_mask.hpp"
 
+#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 
@@ -19,35 +20,38 @@ namespace {
 
     constexpr size_t kCropTestCount = 5;
 
-    std::unique_ptr<lfs::core::SplatData> make_crop_test_splat() {
-        std::vector<float> means = {
-            10.0f, 0.0f, 0.0f,
-            10.75f, 0.0f, 0.0f,
-            9.25f, 0.0f, 0.0f,
-            0.0f, 0.0f, 0.0f,
-            12.0f, 0.0f, 0.0f};
-        std::vector<float> rotations(kCropTestCount * 4, 0.0f);
-        for (size_t i = 0; i < kCropTestCount; ++i) {
+    std::unique_ptr<lfs::core::SplatData> make_test_splat(std::vector<float> means) {
+        const size_t count = means.size() / 3;
+        std::vector<float> rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
             rotations[i * 4] = 1.0f;
         }
 
         return std::make_unique<lfs::core::SplatData>(
             0,
-            lfs::core::Tensor::from_vector(means, {kCropTestCount, size_t{3}}, lfs::core::Device::CPU),
-            lfs::core::Tensor::zeros({kCropTestCount, size_t{1}, size_t{3}},
+            lfs::core::Tensor::from_vector(means, {count, size_t{3}}, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({count, size_t{1}, size_t{3}},
                                      lfs::core::Device::CPU,
                                      lfs::core::DataType::Float32),
-            lfs::core::Tensor::zeros({kCropTestCount, lfs::core::sh_rest_coefficients_for_degree(0), size_t{3}},
+            lfs::core::Tensor::zeros({count, lfs::core::sh_rest_coefficients_for_degree(0), size_t{3}},
                                      lfs::core::Device::CPU,
                                      lfs::core::DataType::Float32),
-            lfs::core::Tensor::zeros({kCropTestCount, size_t{3}},
+            lfs::core::Tensor::zeros({count, size_t{3}},
                                      lfs::core::Device::CPU,
                                      lfs::core::DataType::Float32),
-            lfs::core::Tensor::from_vector(rotations, {kCropTestCount, size_t{4}}, lfs::core::Device::CPU),
-            lfs::core::Tensor::zeros({kCropTestCount, size_t{1}},
+            lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({count, size_t{1}},
                                      lfs::core::Device::CPU,
                                      lfs::core::DataType::Float32),
             1.0f);
+    }
+
+    std::unique_ptr<lfs::core::SplatData> make_crop_test_splat() {
+        return make_test_splat({10.0f, 0.0f, 0.0f,
+                                10.75f, 0.0f, 0.0f,
+                                9.25f, 0.0f, 0.0f,
+                                0.0f, 0.0f, 0.0f,
+                                12.0f, 0.0f, 0.0f});
     }
 
     lfs::core::SplatData* add_training_model_with_translated_cropbox(
@@ -262,6 +266,132 @@ TEST(TrainingCropBoxMask, WiderMeansUseFirstThreeColumnsForCropMask) {
     EXPECT_EQ(remove_mask->to(lfs::core::Device::CPU).to_vector_bool(),
               (std::vector<bool>{false, true, false}));
     EXPECT_EQ(means.to(lfs::core::Device::CPU).to_vector(), means_before);
+}
+
+TEST(TrainingCropBoxMask, RotatedCropBoxUsesPointToBoxTransform) {
+    const auto means = lfs::core::Tensor::from_vector(
+        std::vector<float>{
+            0.0f, 1.5f, 0.0f,
+            1.0f, 0.0f, 0.0f,
+            0.0f, -1.75f, 0.0f,
+            0.75f, 2.5f, 0.0f},
+        {size_t{4}, size_t{3}},
+        lfs::core::Device::CPU);
+    const glm::mat4 points_to_cropbox =
+        glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    const auto remove_mask = lfs::training::compute_cropbox_remove_mask(
+        means,
+        {-2.0f, -0.5f, -1.0f},
+        {2.0f, 0.5f, 1.0f},
+        points_to_cropbox,
+        false);
+
+    ASSERT_TRUE(remove_mask.has_value());
+    EXPECT_EQ(remove_mask->to(lfs::core::Device::CPU).to_vector_bool(),
+              (std::vector<bool>{false, true, false, true}));
+}
+
+TEST(TrainingCropBoxMask, NonUniformlyScaledCropBoxUsesFullAffineTransform) {
+    const auto means = lfs::core::Tensor::from_vector(
+        std::vector<float>{
+            1.5f, 0.0f, 0.0f,
+            2.1f, 0.0f, 0.0f,
+            0.0f, 0.4f, 0.0f,
+            0.0f, 0.6f, 0.0f,
+            0.0f, 0.0f, 0.8f},
+        {size_t{5}, size_t{3}},
+        lfs::core::Device::CPU);
+    const glm::mat4 cropbox_to_points =
+        glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 0.5f, 1.0f));
+
+    const auto remove_mask = lfs::training::compute_cropbox_remove_mask(
+        means,
+        {-1.0f, -1.0f, -1.0f},
+        {1.0f, 1.0f, 1.0f},
+        glm::inverse(cropbox_to_points),
+        false);
+
+    ASSERT_TRUE(remove_mask.has_value());
+    EXPECT_EQ(remove_mask->to(lfs::core::Device::CPU).to_vector_bool(),
+              (std::vector<bool>{false, true, false, true, false}));
+}
+
+TEST(TrainingCropBoxMask, TrainingModelTransformIsComposedBeforeChildCropBox) {
+    lfs::core::Scene scene;
+    auto model = make_test_splat({2.0f, 0.0f, 0.0f,
+                                  2.75f, 0.25f, 0.0f,
+                                  0.0f, 0.0f, 0.0f,
+                                  2.0f, 1.5f, 0.0f});
+    auto* const model_ptr = model.get();
+    const auto model_id = scene.addSplat("Model", std::move(model));
+    scene.setTrainingModelNode("Model");
+
+    const glm::mat4 model_transform = glm::rotate(
+        glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, -4.0f, 2.0f)),
+        glm::radians(90.0f),
+        glm::vec3(0.0f, 0.0f, 1.0f));
+    scene.setNodeTransform("Model", model_transform);
+
+    const auto cropbox_id = scene.addCropBox("Model_cropbox", model_id);
+    lfs::core::CropBoxData cropbox;
+    cropbox.min = {-1.0f, -1.0f, -1.0f};
+    cropbox.max = {1.0f, 1.0f, 1.0f};
+    cropbox.enabled = true;
+    scene.setCropBoxData(cropbox_id, cropbox);
+    scene.setNodeTransform(
+        "Model_cropbox",
+        glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+
+    const auto before = snapshot_cropbox_scene(scene, *model_ptr);
+    const auto remove_mask =
+        lfs::training::compute_training_cropbox_remove_mask(scene, *model_ptr);
+
+    ASSERT_TRUE(remove_mask.has_value());
+    EXPECT_EQ(remove_mask->to(lfs::core::Device::CPU).to_vector_bool(),
+              (std::vector<bool>{false, false, true, true}));
+    expect_cropbox_scene_unchanged(scene, *model_ptr, before);
+}
+
+TEST(TrainingCropBoxMask, PureMaskMatchesOnCpuAndCuda) {
+    const auto cpu_means = lfs::core::Tensor::from_vector(
+        std::vector<float>{
+            1.0f, 0.0f, 0.0f,
+            2.5f, 0.0f, 0.0f,
+            4.0f, 0.0f, 0.0f,
+            1.0f, -1.0f, 0.0f},
+        {size_t{4}, size_t{3}},
+        lfs::core::Device::CPU);
+    const auto cpu_deleted = lfs::core::Tensor::from_vector(
+        std::vector<bool>{false, false, true, false},
+        {size_t{4}},
+        lfs::core::Device::CPU);
+    const glm::mat4 points_to_cropbox =
+        glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.0f, 0.0f));
+
+    const auto cpu_mask = lfs::training::compute_cropbox_remove_mask(
+        cpu_means,
+        {-1.0f, -1.0f, -1.0f},
+        {1.0f, 1.0f, 1.0f},
+        points_to_cropbox,
+        false,
+        &cpu_deleted);
+
+    const auto cuda_means = cpu_means.to(lfs::core::Device::CUDA);
+    const auto cuda_deleted = cpu_deleted.to(lfs::core::Device::CUDA);
+    const auto cuda_mask = lfs::training::compute_cropbox_remove_mask(
+        cuda_means,
+        {-1.0f, -1.0f, -1.0f},
+        {1.0f, 1.0f, 1.0f},
+        points_to_cropbox,
+        false,
+        &cuda_deleted);
+
+    ASSERT_TRUE(cpu_mask.has_value());
+    ASSERT_TRUE(cuda_mask.has_value());
+    const std::vector<bool> expected{false, true, false, false};
+    EXPECT_EQ(cpu_mask->to(lfs::core::Device::CPU).to_vector_bool(), expected);
+    EXPECT_EQ(cuda_mask->to(lfs::core::Device::CPU).to_vector_bool(), expected);
 }
 
 TEST(TrainingCropBoxMask, EmptyMeansReturnNulloptWithoutMutation) {
