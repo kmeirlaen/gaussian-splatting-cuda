@@ -249,6 +249,7 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "mirror_group_buttons" in model.bound_record_lists
     assert "crop_group_buttons" in model.bound_record_lists
     assert "crop_enable_buttons" in model.bound_record_lists
+    assert "crop_settings_buttons" in model.bound_record_lists
     assert "crop_object_buttons" in model.bound_record_lists
     assert "crop_transform_buttons" in model.bound_record_lists
     assert "crop_action_buttons" in model.bound_record_lists
@@ -259,6 +260,13 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "show_crop_toolbar" in model.bound_funcs
     assert "show_crop_edit_controls" in model.bound_funcs
     assert "show_crop_enable_separator" in model.bound_funcs
+    assert "crop_roi_settings_open" in model.bound_funcs
+    assert "crop_roi_params_available" in model.bound_funcs
+    assert "label_crop_roi_settings" in model.bound_funcs
+    assert "label_cropbox_lr_scale" in model.bound_funcs
+    assert "label_cropbox_loss_weight" in model.bound_funcs
+    assert "cropbox_lr_scale" in model.bound_binds
+    assert "cropbox_loss_weight" in model.bound_binds
     assert "show_selection_volume_gizmos" in model.bound_funcs
     assert "toolbar_action" in model.bound_events
     assert "selection_tool_label" not in model.bound_funcs
@@ -799,6 +807,21 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "opacity": "1",
         }
     ]
+    assert snapshot["crop_settings_buttons"] == [
+        {
+            "button_id": "crop-roi-settings",
+            "action": "toggle_crop_roi_settings",
+            "value": "",
+            "icon_src": "../icon/settings.png",
+            "tooltip_key": "toolbar.crop_roi_settings",
+            "tooltip_text": "Crop ROI Settings",
+            "action_id": "",
+            "shortcut_text": "",
+            "selected": False,
+            "enabled": True,
+            "opacity": "1",
+        }
+    ]
 
     controller.dispatch("crop_toggle_enabled", "")
 
@@ -818,6 +841,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
         assert snapshot["show_crop_edit_controls"] is False
         assert snapshot["show_crop_enable_separator"] is False
         assert snapshot["crop_enable_buttons"][0]["selected"] is False
+        assert snapshot["crop_settings_buttons"][0]["selected"] is False
         assert snapshot["crop_object_buttons"] == []
         assert snapshot["crop_transform_buttons"] == []
         assert snapshot["crop_action_buttons"] == []
@@ -828,6 +852,90 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
 
     assert snapshot["show_crop_toolbar"] is False
     assert snapshot["crop_enable_buttons"] == []
+    assert snapshot["crop_settings_buttons"] == []
+
+
+def test_crop_roi_settings_write_live_params_and_track_external_values(
+    toolbar_module, monkeypatch
+):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    set_calls = []
+
+    class Params:
+        cropbox_lr_scale = 0.1
+        cropbox_loss_weight = 0.1
+
+        @staticmethod
+        def has_params():
+            return True
+
+        def set(self, name, value):
+            set_calls.append((name, value))
+            setattr(self, name, value)
+
+    params = Params()
+    cropbox = SimpleNamespace(enabled=True)
+    crop_node = SimpleNamespace(
+        id=7,
+        name="bicycle_cropbox",
+        type=SimpleNamespace(name="CROPBOX"),
+        children=(),
+        cropbox=lambda: cropbox,
+    )
+    scene = SimpleNamespace(
+        get_node=lambda name: crop_node if name == crop_node.name else None,
+        get_node_by_id=lambda node_id: crop_node if node_id == crop_node.id else None,
+    )
+
+    monkeypatch.setattr(lf_stub, "optimization_params", lambda: params, raising=False)
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(
+        lf_stub, "get_selected_node_names", lambda: [crop_node.name], raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_content_type", lambda: "dataset", raising=False
+    )
+
+    controller = module._ViewportToolbarController()
+    model = _DataModelStub()
+    controller.bind_model(model)
+    controller.attach_handle(model.handle)
+
+    lr_getter, lr_setter = model.bound_binds["cropbox_lr_scale"]
+    loss_getter, loss_setter = model.bound_binds["cropbox_loss_weight"]
+
+    assert controller._gizmo.cropbox_toolbar_signature() == (
+        "bicycle_cropbox",
+        True,
+        True,
+        0.1,
+        0.1,
+    )
+    assert controller._gizmo._build_crop_settings_records(True)[0]["selected"] is True
+
+    lr_setter("0.35")
+    loss_setter("0.65")
+
+    assert set_calls == [
+        ("cropbox_lr_scale", 0.35),
+        ("cropbox_loss_weight", 0.65),
+    ]
+    assert lr_getter() == "0.350"
+    assert loss_getter() == "0.650"
+    assert model.handle.request_update_calls == 2
+
+    params.cropbox_lr_scale = 0.42
+    params.cropbox_loss_weight = 0.73
+    signature = controller._gizmo.cropbox_toolbar_signature()
+    assert signature[-2:] == (0.42, 0.73)
+
+    controller._sync_crop_roi_params(signature)
+
+    assert lr_getter() == "0.420"
+    assert loss_getter() == "0.730"
+    assert "cropbox_lr_scale" in model.handle.dirty_calls
+    assert "cropbox_loss_weight" in model.handle.dirty_calls
 
 
 def test_crop_tool_activation_creates_explicitly_but_snapshot_is_passive(toolbar_module, monkeypatch):
@@ -1169,6 +1277,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : mirror_group_buttons"') == 2
     assert rml.count('data-for="button : crop_group_buttons"') == 2
     assert rml.count('data-for="button : crop_enable_buttons"') == 2
+    assert rml.count('data-for="button : crop_settings_buttons"') == 2
     assert rml.count('data-for="button : crop_object_buttons"') == 2
     assert rml.count('data-for="button : crop_transform_buttons"') == 2
     assert rml.count('data-for="button : crop_action_buttons"') == 2
@@ -1193,7 +1302,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     for toolbar_markup in (primary_left, secondary_left):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
         assert 'data-for="button : utility_primary_buttons"' not in toolbar_markup
-    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 27
+    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 29
     assert "data-attr-data-tooltip" not in rml
     assert 'data-attr-title="button.tooltip_text"' in rml
     assert rml.count('data-for="button : selection_mode_buttons"') == 1
@@ -1222,6 +1331,15 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "../icon/contrast.png" in rml
     assert "../icon/scene/trash.png" in rml
     assert "../icon/scene/x.png" in rml
+    assert rml.count('class="crop-roi-popover hidden"') == 2
+    assert rml.count('data-class-hidden="!crop_roi_settings_open"') == 2
+    assert rml.count('data-value="cropbox_lr_scale"') == 2
+    assert rml.count('data-value="cropbox_loss_weight"') == 2
+    assert rml.count('min="0"') >= 4
+    assert rml.count('max="1"') >= 4
+    assert rml.count('step="0.01"') >= 4
+    assert 'data-tooltip="tooltip.cropbox_lr_scale"' in rml
+    assert 'data-tooltip="tooltip.cropbox_loss_weight"' in rml
     assert 'id="transform-block"' in rml
     assert 'class="viewport-transform-overlay hidden"' in rml
     assert 'class="viewport-transform-row"' in rml
@@ -1249,6 +1367,9 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
             "align_3point",
             "crop_box",
             "enable_crop_box",
+            "crop_roi_settings",
+            "rejected_splat_lr_scale",
+            "outside_roi_loss_weight",
             "ellipsoid",
             "brush_selection",
             "rect_selection",
@@ -1302,6 +1423,18 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         assert data.get("toolbar", {}).get(
             "enable_crop_box"
         ), f"{locale_path.name} missing toolbar.enable_crop_box"
+        for key in (
+            "crop_roi_settings",
+            "rejected_splat_lr_scale",
+            "outside_roi_loss_weight",
+        ):
+            assert data.get("toolbar", {}).get(
+                key
+            ), f"{locale_path.name} missing toolbar.{key}"
+        for key in ("cropbox_lr_scale", "cropbox_loss_weight"):
+            assert data.get("tooltip", {}).get(
+                key
+            ), f"{locale_path.name} missing tooltip.{key}"
         for key in selection_tooltip_keys:
             assert data.get("tooltip", {}).get(key), f"{locale_path.name} missing tooltip.{key}"
         for key in (*transform_tooltip_keys, *transform_dynamic_tooltip_keys):

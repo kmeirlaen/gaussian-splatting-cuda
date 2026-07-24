@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Viewport toolbars rendered from a retained RmlUI data model."""
 
+import math
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,6 +28,7 @@ _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
 _toolbar_controller = None
 _MISSING = object()
+_CROP_ROI_DEFAULT = 0.1
 
 
 def __lfs_after_reload__(runtime):
@@ -137,6 +139,28 @@ def _panel_enabled(panel_id):
     except Exception:
         pass
     return False
+
+
+def _crop_roi_param_state():
+    """Return (available, LR scale, loss weight) from the live parameter owner."""
+    try:
+        import lichtfeld as lf
+
+        getter = getattr(lf, "optimization_params", None)
+        params = getter() if callable(getter) else None
+        if params is None:
+            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+        has_params = getattr(params, "has_params", None)
+        if callable(has_params) and not has_params():
+            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+
+        lr_scale = float(params.cropbox_lr_scale)
+        loss_weight = float(params.cropbox_loss_weight)
+        if not math.isfinite(lr_scale) or not math.isfinite(loss_weight):
+            return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
+        return True, lr_scale, loss_weight
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT
 
 
 def _button_record(button_id, action, value, icon_src, *,
@@ -256,11 +280,14 @@ class _GizmoToolbarController:
             and self._active_selection_submode() in self._SELECTION_VOLUME_MODES
         )
 
-    def snapshot(self):
+    def snapshot(self, crop_roi_settings_open=False):
         import lichtfeld as lf
         from .op_context import get_context
 
         crop_enable_buttons = self._build_crop_enable_records()
+        crop_settings_buttons = self._build_crop_settings_records(
+            crop_roi_settings_open
+        )
         hidden = RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
         if hidden:
             if not self._was_hidden:
@@ -283,6 +310,7 @@ class _GizmoToolbarController:
                 "mirror_group_buttons": [],
                 "crop_group_buttons": [],
                 "crop_enable_buttons": crop_enable_buttons,
+                "crop_settings_buttons": crop_settings_buttons,
                 "crop_object_buttons": [],
                 "crop_transform_buttons": [],
                 "crop_action_buttons": [],
@@ -380,6 +408,7 @@ class _GizmoToolbarController:
             "mirror_group_buttons": mirror_group_buttons,
             "crop_group_buttons": crop_group_buttons,
             "crop_enable_buttons": crop_enable_buttons,
+            "crop_settings_buttons": crop_settings_buttons,
             "crop_object_buttons": crop_object_buttons,
             "crop_transform_buttons": crop_transform_buttons,
             "crop_action_buttons": crop_action_buttons,
@@ -629,12 +658,16 @@ class _GizmoToolbarController:
         except Exception:
             return None
 
-    def cropbox_enable_signature(self):
+    def cropbox_toolbar_signature(self):
         resolved = self._resolve_selected_cropbox()
         if resolved is None:
             return None
         node, cropbox = resolved
-        return getattr(node, "name", ""), bool(cropbox.enabled)
+        return (
+            getattr(node, "name", ""),
+            bool(cropbox.enabled),
+            *_crop_roi_param_state(),
+        )
 
     def _build_crop_enable_records(self):
         resolved = self._resolve_selected_cropbox()
@@ -650,6 +683,21 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.enable_crop_box",
                 tooltip_text="Enable Crop Box",
                 selected=bool(cropbox.enabled),
+            )
+        ]
+
+    def _build_crop_settings_records(self, settings_open):
+        if self._resolve_selected_cropbox() is None:
+            return []
+        return [
+            _button_record(
+                "crop-roi-settings",
+                "toggle_crop_roi_settings",
+                "",
+                _icon_src("settings"),
+                tooltip_key="toolbar.crop_roi_settings",
+                tooltip_text="Crop ROI Settings",
+                selected=bool(settings_open),
             )
         ]
 
@@ -1207,6 +1255,8 @@ class _ViewportToolbarController:
         "show_crop_toolbar",
         "show_crop_edit_controls",
         "show_crop_enable_separator",
+        "crop_roi_settings_open",
+        "crop_roi_params_available",
         "show_selection_volume_gizmos",
         "show_transform_space_controls",
         "show_transform_pivot_controls",
@@ -1224,6 +1274,7 @@ class _ViewportToolbarController:
         "mirror_group_buttons",
         "crop_group_buttons",
         "crop_enable_buttons",
+        "crop_settings_buttons",
         "crop_object_buttons",
         "crop_transform_buttons",
         "crop_action_buttons",
@@ -1256,6 +1307,10 @@ class _ViewportToolbarController:
         self._show_crop_toolbar = False
         self._show_crop_edit_controls = False
         self._show_crop_enable_separator = False
+        self._crop_roi_settings_open = False
+        self._crop_roi_params_available = False
+        self._cropbox_lr_scale = _CROP_ROI_DEFAULT
+        self._cropbox_loss_weight = _CROP_ROI_DEFAULT
         self._show_selection_volume_gizmos = False
         self._show_transform_space_controls = False
         self._show_transform_pivot_controls = False
@@ -1271,6 +1326,32 @@ class _ViewportToolbarController:
             model.bind_func(field, lambda name=field: getattr(self, f"_{name}"))
         for field in self._RECORD_FIELDS:
             model.bind_record_list(field)
+        model.bind_func(
+            "label_crop_roi_settings",
+            lambda: _ui_label("toolbar.crop_roi_settings", "Crop ROI Settings"),
+        )
+        model.bind_func(
+            "label_cropbox_lr_scale",
+            lambda: _ui_label(
+                "toolbar.rejected_splat_lr_scale", "Rejected splat LR scale"
+            ),
+        )
+        model.bind_func(
+            "label_cropbox_loss_weight",
+            lambda: _ui_label(
+                "toolbar.outside_roi_loss_weight", "Outside ROI loss weight"
+            ),
+        )
+        model.bind(
+            "cropbox_lr_scale",
+            lambda: f"{self._cropbox_lr_scale:.3f}",
+            lambda value: self._set_crop_roi_param("cropbox_lr_scale", value),
+        )
+        model.bind(
+            "cropbox_loss_weight",
+            lambda: f"{self._cropbox_loss_weight:.3f}",
+            lambda value: self._set_crop_roi_param("cropbox_loss_weight", value),
+        )
         model.bind_event("toolbar_action", self._on_toolbar_action)
         self._gt_compare_controls.bind_model(model)
         self._depth_view_controls.bind_model(model)
@@ -1397,15 +1478,19 @@ class _ViewportToolbarController:
     def _sync_toolbar_state(self, doc=None):
         if self._handle is None:
             return False
-        signature = self._toolbar_signature()
+        cropbox_toolbar_signature = self._gizmo.cropbox_toolbar_signature()
+        signature = self._toolbar_signature(cropbox_toolbar_signature)
         if signature == self._last_toolbar_signature:
             return False
         self._last_toolbar_signature = signature
 
         utility_state = self._utility.snapshot()
-        gizmo_state = self._gizmo.snapshot()
+        gizmo_state = self._gizmo.snapshot(self._crop_roi_settings_open)
 
         dirty = False
+        if not gizmo_state["crop_settings_buttons"]:
+            dirty |= self._sync_flag("crop_roi_settings_open", False)
+        dirty |= self._sync_crop_roi_params(cropbox_toolbar_signature)
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])
         dirty |= self._sync_flag("show_mirror_toolbar", gizmo_state["show_mirror_toolbar"])
         dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"])
@@ -1427,12 +1512,28 @@ class _ViewportToolbarController:
         dirty |= self._sync_records("mirror_group_buttons", gizmo_state["mirror_group_buttons"])
         dirty |= self._sync_records("crop_group_buttons", gizmo_state["crop_group_buttons"])
         dirty |= self._sync_records("crop_enable_buttons", gizmo_state["crop_enable_buttons"])
+        dirty |= self._sync_records("crop_settings_buttons", gizmo_state["crop_settings_buttons"])
         dirty |= self._sync_records("crop_object_buttons", gizmo_state["crop_object_buttons"])
         dirty |= self._sync_records("crop_transform_buttons", gizmo_state["crop_transform_buttons"])
         dirty |= self._sync_records("crop_action_buttons", gizmo_state["crop_action_buttons"])
         dirty |= self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
         dirty |= self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
         dirty |= self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])
+        return dirty
+
+    def _sync_crop_roi_params(self, cropbox_toolbar_signature):
+        if cropbox_toolbar_signature is None:
+            available = False
+            lr_scale = _CROP_ROI_DEFAULT
+            loss_weight = _CROP_ROI_DEFAULT
+        else:
+            _node_name, _enabled, available, lr_scale, loss_weight = (
+                cropbox_toolbar_signature
+            )
+
+        dirty = self._sync_flag("crop_roi_params_available", bool(available))
+        dirty |= self._sync_value("cropbox_lr_scale", float(lr_scale))
+        dirty |= self._sync_value("cropbox_loss_weight", float(loss_weight))
         return dirty
 
     def _sync_flag(self, name, value):
@@ -1443,6 +1544,44 @@ class _ViewportToolbarController:
         if self._handle:
             self._handle.dirty(name)
         return True
+
+    def _sync_value(self, name, value):
+        attribute = f"_{name}"
+        if getattr(self, attribute) == value:
+            return False
+        setattr(self, attribute, value)
+        if self._handle:
+            self._handle.dirty(name)
+        return True
+
+    def _set_crop_roi_param(self, name, value):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(parsed):
+            return
+        parsed = min(max(parsed, 0.0), 1.0)
+
+        try:
+            import lichtfeld as lf
+
+            params = lf.optimization_params()
+            if params is None:
+                return
+            has_params = getattr(params, "has_params", None)
+            if callable(has_params) and not has_params():
+                return
+            params.set(name, parsed)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            return
+
+        self._sync_value(name, parsed)
+        self._last_toolbar_signature = None
+        if self._handle:
+            request_update = getattr(self._handle, "request_update", None)
+            if callable(request_update):
+                request_update()
 
     def _sync_records(self, name, records, doc=None):
         previous = self._record_cache.get(name)
@@ -1499,7 +1638,7 @@ class _ViewportToolbarController:
 
         return patched
 
-    def _toolbar_signature(self):
+    def _toolbar_signature(self, cropbox_toolbar_signature):
         import lichtfeld as lf
 
         try:
@@ -1556,8 +1695,6 @@ class _ViewportToolbarController:
         can_transform_selection = bool(
             call(False, getattr(lf, "can_transform_selection", None))
         )
-        cropbox_enable_signature = self._gizmo.cropbox_enable_signature()
-
         input_settings_enabled = bool(
             call(
                 False,
@@ -1588,7 +1725,8 @@ class _ViewportToolbarController:
             selected_nodes,
             selected_node_types,
             can_transform_selection,
-            cropbox_enable_signature,
+            cropbox_toolbar_signature,
+            self._crop_roi_settings_open,
             tool_ids,
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
             self._viewport_export_controls.visible,
@@ -1606,7 +1744,19 @@ class _ViewportToolbarController:
         value = str(args[1]) if len(args) > 1 else ""
         if action == "toggle_viewport_export":
             self._gizmo.clear_active_horizontal_tool()
+            self._sync_flag("crop_roi_settings_open", False)
             self._viewport_export_controls.toggle(notify=False)
+            self._last_toolbar_signature = None
+            self._sync_toolbar_state()
+            self._sync_tool_overlays_now()
+            return
+        if action == "toggle_crop_roi_settings":
+            if self._gizmo.cropbox_toolbar_signature() is None:
+                return
+            self._viewport_export_controls.close(notify=False)
+            self._sync_flag(
+                "crop_roi_settings_open", not self._crop_roi_settings_open
+            )
             self._last_toolbar_signature = None
             self._sync_toolbar_state()
             self._sync_tool_overlays_now()
