@@ -2747,6 +2747,10 @@ namespace lfs::app {
 
                     core::events::cmd::MergeGroupById{.node_id = group->id}.emit();
 
+                    if (const auto* const merged = scene.getNode(name);
+                        merged && merged->type == core::NodeType::SPLAT)
+                        return json{{"success", true}, {"node", node_summary_json(scene, *merged)}};
+
                     for (const auto* const node : scene.getNodes()) {
                         if (node && !before.contains(node->name))
                             return json{{"success", true}, {"node", node_summary_json(scene, *node)}};

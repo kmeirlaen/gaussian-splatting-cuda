@@ -1055,6 +1055,37 @@ namespace lfs::python {
                 EXPECT_NEAR(world_before[col][row], world_after[col][row], 1e-4f);
     }
 
+    TEST_F(SceneValidityTest, MergeGroupAfterDuplicatingAndMovingSplatsKeepsMergedNode) {
+        const auto original = dummy_scene_.addSplat("Model", make_test_splat(3));
+        ASSERT_NE(original, core::NULL_NODE);
+
+        const std::string copy_name = dummy_scene_.duplicateNode("Model");
+        ASSERT_FALSE(copy_name.empty());
+        const auto copy = dummy_scene_.getNodeIdByName(copy_name);
+        ASSERT_NE(copy, core::NULL_NODE);
+
+        glm::mat4 copy_transform(1.0f);
+        copy_transform[3] = glm::vec4(2.0f, 0.0f, 0.0f, 1.0f);
+        dummy_scene_.setNodeTransform(copy_name, copy_transform);
+
+        const auto group = dummy_scene_.addGroup("Group");
+        ASSERT_NE(group, core::NULL_NODE);
+        ASSERT_TRUE(dummy_scene_.moveNode(original, group, -1));
+        ASSERT_TRUE(dummy_scene_.moveNode(copy, group, -1));
+
+        const std::string merged_name = dummy_scene_.mergeGroup("Group");
+
+        EXPECT_EQ(merged_name, "Group");
+        const auto* merged = dummy_scene_.getNode("Group");
+        ASSERT_NE(merged, nullptr);
+        EXPECT_EQ(merged->type, core::NodeType::SPLAT);
+        ASSERT_TRUE(merged->model != nullptr);
+        EXPECT_EQ(merged->model->size(), 6);
+        EXPECT_EQ(dummy_scene_.getTotalGaussianCount(), 6u);
+        EXPECT_EQ(dummy_scene_.getNode("Model"), nullptr);
+        EXPECT_EQ(dummy_scene_.getNode(copy_name), nullptr);
+        EXPECT_EQ(dummy_scene_.getNodeCount(), 1u);
+    }
     TEST_F(SceneValidityTest, SceneManagerMoveNodeReparentsIntoGroup) {
         lfs::vis::SceneManager sm;
         auto& scene = sm.getScene();
@@ -1084,6 +1115,43 @@ namespace lfs::python {
         EXPECT_TRUE(scene.getNodeById(group)->children.empty());
     }
 
+    TEST_F(SceneValidityTest, SceneManagerMergeGroupAfterDuplicatingAndMovingSplatsKeepsMergedNode) {
+        lfs::vis::SceneManager sm;
+        auto& scene = sm.getScene();
+        const auto original = scene.addSplat("Model", make_test_splat(3));
+        ASSERT_NE(original, core::NULL_NODE);
+
+        const std::string copy_name = scene.duplicateNode("Model");
+        ASSERT_FALSE(copy_name.empty());
+        const auto copy = scene.getNodeIdByName(copy_name);
+        ASSERT_NE(copy, core::NULL_NODE);
+
+        glm::mat4 copy_transform(1.0f);
+        copy_transform[3] = glm::vec4(2.0f, 0.0f, 0.0f, 1.0f);
+        scene.setNodeTransform(copy_name, copy_transform);
+
+        const std::string group_name = sm.addGroupNode("Group", core::NULL_NODE);
+        ASSERT_EQ(group_name, "Group");
+        const auto group = scene.getNodeIdByName(group_name);
+        ASSERT_NE(group, core::NULL_NODE);
+        ASSERT_TRUE(sm.moveNode(original, group, -1));
+        ASSERT_TRUE(sm.moveNode(copy, group, -1));
+        sm.selectNodesById({group});
+
+        const std::string merged_name = sm.mergeGroupNode(group_name);
+
+        EXPECT_EQ(merged_name, group_name);
+        const auto* merged = scene.getNode(group_name);
+        ASSERT_NE(merged, nullptr);
+        EXPECT_EQ(merged->type, core::NodeType::SPLAT);
+        ASSERT_TRUE(merged->model != nullptr);
+        EXPECT_EQ(merged->model->size(), 6);
+        EXPECT_EQ(scene.getTotalGaussianCount(), 6u);
+        EXPECT_EQ(scene.getNode("Model"), nullptr);
+        EXPECT_EQ(scene.getNode(copy_name), nullptr);
+        ASSERT_EQ(sm.getSelectedNodeNames().size(), 1u);
+        EXPECT_EQ(sm.getSelectedNodeNames()[0], group_name);
+    }
     TEST_F(SceneValidityTest, SceneManagerBlocksActiveCameraSubtreeAndAllowsInactiveCameraRemoval) {
         const ScopedServicesClear services_scope;
         lfs::vis::SceneManager sm;

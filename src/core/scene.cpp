@@ -2491,11 +2491,21 @@ namespace lfs::core {
             return "";
         }
 
-        Transaction txn(*this);
-        removeNode(group_name, false);
-        addSplat(group_name, std::move(merged), parent_id);
+        std::string merged_name = makeUniqueNodeName(name_to_id_, group_name + " Merged");
+        NodeId merged_id = NULL_NODE;
+        {
+            Transaction txn(*this);
+            merged_id = addSplat(merged_name, std::move(merged), parent_id);
+            if (merged_id == NULL_NODE) {
+                return "";
+            }
+            removeNode(group_name, false);
+            if (renameNode(merged_id, group_name)) {
+                merged_name = group_name;
+            }
+        }
 
-        return group_name;
+        return merged_name;
     }
 
     std::unique_ptr<lfs::core::SplatData> Scene::createMergedModelWithTransforms() const {

@@ -4188,12 +4188,22 @@ namespace lfs::vis {
             scene_.setCombinedModelAllocator(std::move(allocator));
         }
 
+        std::string merged_name = makeUniqueNodeName(scene_, name + " Merged");
+        core::NodeId merged_id = core::NULL_NODE;
         {
             core::Scene::Transaction txn(scene_);
+            merged_id = scene_.addSplat(merged_name, std::move(merged_model), parent_id);
+            if (merged_id == core::NULL_NODE) {
+                LOG_ERROR("Failed to add merged group '{}' as '{}'", name, merged_name);
+                return {};
+            }
             scene_.removeNode(name, false);
-            scene_.addSplat(name, std::move(merged_model), parent_id);
+            if (scene_.renameNode(merged_id, name)) {
+                merged_name = name;
+            } else {
+                LOG_ERROR("Failed to rename merged group '{}' back to '{}'", merged_name, name);
+            }
         }
-        const std::string merged_name = name;
         selection_.invalidateNodeMask();
 
         // Emit PLYRemoved for all original children and the group
