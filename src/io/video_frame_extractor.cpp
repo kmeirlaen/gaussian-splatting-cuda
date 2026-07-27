@@ -1419,8 +1419,7 @@ namespace lfs::io {
                         [](const CandidateFrame& a, const CandidateFrame& b) {
                             return a.score < b.score;
                         });
-                    std::filesystem::path fname = generate_filename(
-                        written_count + 1);
+                    std::filesystem::path fname = generate_filename(best->source_frame);
                     // Apply rotation to the best window frame before writing
                     int write_w = out_width;
                     int write_h = out_height;
@@ -1478,7 +1477,7 @@ namespace lfs::io {
 
                 auto process_frame_hw = [&](AVFrame* hw_frame) {
                     throw_if_cancelled();
-                    std::filesystem::path filename = generate_filename(saved_count + 1);
+                    std::filesystem::path filename = generate_filename(current_src_frame);
 
                     const AVPixelFormat hw_sw_format = hardwareFrameSoftwareFormat(hw_frame);
                     if (decoded_software_format == AV_PIX_FMT_NONE &&
@@ -1765,7 +1764,7 @@ namespace lfs::io {
                     }
                     // --- End rotation ---
 
-                    std::filesystem::path filename = generate_filename(saved_count + 1);
+                    std::filesystem::path filename = generate_filename(current_src_frame);
 
                     if (gpu_encoding_enabled) {
                         if (batch_encode_w == 0) {
