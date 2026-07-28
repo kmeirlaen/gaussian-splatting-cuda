@@ -596,8 +596,10 @@ namespace lfs::vis {
 
         cmd::MergeGroupById::when([this](const auto& cmd) {
             const auto* node = scene_.getNodeById(static_cast<core::NodeId>(cmd.node_id));
-            if (node)
-                mergeGroupNode(node->name);
+            if (node) {
+                const std::string node_name = node->name;
+                mergeGroupNode(node_name);
+            }
         });
 
         // Handle node selection from scene panel (both PLYs and Groups)
@@ -4120,13 +4122,14 @@ namespace lfs::vis {
     }
 
     std::string SceneManager::mergeGroupNode(const std::string& name) {
-        const auto* group = scene_.getNode(name);
+        const std::string group_name = name;
+        const auto* group = scene_.getNode(group_name);
         if (!group || group->type != core::NodeType::GROUP) {
             return {};
         }
 
         const auto history_options = sceneGraphCaptureOptions(true, false);
-        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {group_name}, history_options);
         const core::NodeId group_id = group->id;
         const core::NodeId parent_id = group->parent_id;
 
@@ -4140,7 +4143,7 @@ namespace lfs::vis {
         // Check if the group being merged is currently selected
         bool was_selected = false;
         {
-            const core::NodeId group_nid = scene_.getNodeIdByName(name);
+            const core::NodeId group_nid = scene_.getNodeIdByName(group_name);
             if (group_nid != core::NULL_NODE && selection_.isNodeSelected(group_nid)) {
                 was_selected = true;
                 selection_.removeFromSelection(group_nid);
@@ -4174,14 +4177,14 @@ namespace lfs::vis {
 
         auto merged_model = core::Scene::mergeSplatsWithTransforms(splats);
         if (!merged_model) {
-            LOG_WARN("Failed to merge group '{}'", name);
+            LOG_WARN("Failed to merge group '{}'", group_name);
             return {};
         }
 
         if (auto allocator = makeExternalSplatAllocator()) {
             if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*merged_model, allocator); !migrated) {
                 LOG_ERROR("Failed to prepare merged group '{}' for rendering: {}",
-                          name,
+                          group_name,
                           migrated.error().format());
                 return {};
             }
@@ -4190,10 +4193,10 @@ namespace lfs::vis {
 
         {
             core::Scene::Transaction txn(scene_);
-            scene_.removeNode(name, false);
-            scene_.addSplat(name, std::move(merged_model), parent_id);
+            scene_.removeNode(group_name, false);
+            scene_.addSplat(group_name, std::move(merged_model), parent_id);
         }
-        const std::string merged_name = name;
+        const std::string merged_name = group_name;
         selection_.invalidateNodeMask();
 
         // Emit PLYRemoved for all original children and the group
@@ -4208,7 +4211,7 @@ namespace lfs::vis {
         }
 
         state::PLYRemoved{
-            .name = name,
+            .name = group_name,
             .children_kept = false,
             .parent_of_removed = {},
             .from_history = false,
@@ -4243,7 +4246,7 @@ namespace lfs::vis {
             }
         }
 
-        LOG_INFO("Merged group '{}' -> '{}'", name, merged_name);
+        LOG_INFO("Merged group '{}' -> '{}'", group_name, merged_name);
         pushSceneGraphHistoryEntry(*this, "Merge Group", std::move(history_before), {merged_name}, history_options);
         return merged_name;
     }
