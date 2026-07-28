@@ -60,6 +60,12 @@ namespace {
         cudaError_t status = cudaSuccess;
     };
 
+    void skipIfCudaUnavailable() {
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count <= 0)
+            GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
+    }
+
     bool writeTinyEncodedVideo(const std::filesystem::path& video_path, std::string& error) {
         constexpr int width = 16;
         constexpr int height = 16;
@@ -293,6 +299,8 @@ TEST(VideoFrameExtractorParams, RejectsInvalidRangesAndDimensions) {
 }
 
 TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
+    skipIfCudaUnavailable();
+
     TempDir temp("interval");
     const std::filesystem::path video_path = temp.path / "source.mp4";
     const std::filesystem::path output_dir = temp.path / "frames";
@@ -313,6 +321,8 @@ TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
 }
 
 TEST(VideoFrameExtractorOutputNaming, TrimmedRangeKeepsOriginalSourceFrameNumbers) {
+    skipIfCudaUnavailable();
+
     TempDir temp("trim");
     const std::filesystem::path video_path = temp.path / "source.mp4";
     const std::filesystem::path output_dir = temp.path / "frames";
