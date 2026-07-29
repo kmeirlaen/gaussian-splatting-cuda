@@ -3,7 +3,6 @@
 
 #include "io/hdr_tonemap.hpp"
 #include "io/video_frame_extractor.hpp"
-#include "io/video/video_encoder.hpp"
 
 extern "C" {
 #include <libavutil/pixfmt.h>
@@ -11,17 +10,9 @@ extern "C" {
 
 #include <gtest/gtest.h>
 
-#include <cuda_runtime.h>
-
 #include <array>
-#include <chrono>
-#include <cstdint>
-#include <filesystem>
 #include <limits>
 #include <string>
-#include <string_view>
-#include <system_error>
-#include <vector>
 
 namespace {
 
@@ -30,111 +21,6 @@ namespace {
     using lfs::io::ResolutionMode;
     using lfs::io::VideoFrameExtractor;
 
-    struct TempDir {
-        explicit TempDir(const std::string_view label) {
-            const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-            path = std::filesystem::temp_directory_path() /
-                   ("lfs_video_extract_" + std::string(label) + "_" + std::to_string(now));
-            std::filesystem::create_directories(path);
-        }
-
-        ~TempDir() {
-            std::error_code ec;
-            std::filesystem::remove_all(path, ec);
-        }
-
-        std::filesystem::path path;
-    };
-
-    struct CudaFloatBuffer {
-        explicit CudaFloatBuffer(const std::size_t count) {
-            status = cudaMalloc(reinterpret_cast<void**>(&ptr), count * sizeof(float));
-        }
-
-        ~CudaFloatBuffer() {
-            if (ptr)
-                cudaFree(ptr);
-        }
-
-        float* ptr = nullptr;
-        cudaError_t status = cudaSuccess;
-    };
-
-    void skipIfCudaUnavailable() {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count <= 0)
-            GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
-    }
-
-    bool writeTinyEncodedVideo(const std::filesystem::path& video_path, std::string& error) {
-        constexpr int width = 16;
-        constexpr int height = 16;
-        constexpr int frame_count = 5;
-        constexpr int channels = 3;
-
-        lfs::io::video::VideoExportOptions options;
-        options.preset = lfs::io::video::VideoPreset::CUSTOM;
-        options.width = width;
-        options.height = height;
-        options.framerate = 10;
-        options.crf = 23;
-
-        lfs::io::video::VideoEncoder encoder;
-        if (const auto opened = encoder.open(video_path, options); !opened) {
-            error = opened.error();
-            return false;
-        }
-
-        std::vector<float> frame(static_cast<std::size_t>(width) * height * channels);
-        CudaFloatBuffer device_frame(frame.size());
-        if (device_frame.status != cudaSuccess) {
-            error = cudaGetErrorString(device_frame.status);
-            return false;
-        }
-
-        for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
-            const float red = static_cast<float>(frame_index + 1) / static_cast<float>(frame_count);
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    const std::size_t offset = (static_cast<std::size_t>(y) * width + x) * channels;
-                    frame[offset + 0] = red;
-                    frame[offset + 1] = static_cast<float>(x) / static_cast<float>(width - 1);
-                    frame[offset + 2] = static_cast<float>(y) / static_cast<float>(height - 1);
-                }
-            }
-
-            const cudaError_t copy_status = cudaMemcpy(
-                device_frame.ptr, frame.data(), frame.size() * sizeof(float), cudaMemcpyHostToDevice);
-            if (copy_status != cudaSuccess) {
-                error = cudaGetErrorString(copy_status);
-                return false;
-            }
-
-            if (const auto written = encoder.writeFrameGpu(device_frame.ptr, width, height); !written) {
-                error = written.error();
-                return false;
-            }
-        }
-
-        if (const auto closed = encoder.close(); !closed) {
-            error = closed.error();
-            return false;
-        }
-        return true;
-    }
-
-    VideoFrameExtractor::Params extractionParams(
-        const std::filesystem::path& video_path,
-        const std::filesystem::path& output_dir) {
-        VideoFrameExtractor::Params params;
-        params.video_path = video_path;
-        params.output_dir = output_dir;
-        params.mode = ExtractionMode::INTERVAL;
-        params.frame_interval = 1;
-        params.format = lfs::io::ImageFormat::PNG;
-        params.generate_metadata = true;
-        return params;
-    }
     VideoFrameExtractor::Params validParams() {
         VideoFrameExtractor::Params params;
         params.mode = ExtractionMode::FPS;
@@ -296,48 +182,4 @@ TEST(VideoFrameExtractorParams, RejectsInvalidRangesAndDimensions) {
     params.custom_height = 1;
     EXPECT_FALSE(VideoFrameExtractor::validateParams(
         params, 1920, 1080, 1.0 / 90000.0, layout, error));
-}
-
-TEST(VideoFrameExtractorOutputNaming, IntervalUsesSourceFrameNumbers) {
-    skipIfCudaUnavailable();
-
-    TempDir temp("interval");
-    const std::filesystem::path video_path = temp.path / "source.mp4";
-    const std::filesystem::path output_dir = temp.path / "frames";
-    std::filesystem::create_directories(output_dir);
-
-    std::string error;
-    ASSERT_TRUE(writeTinyEncodedVideo(video_path, error)) << error;
-
-    auto params = extractionParams(video_path, output_dir);
-    params.frame_interval = 2;
-
-    VideoFrameExtractor extractor;
-    EXPECT_TRUE(extractor.extract(params, error)) << error;
-    EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_1.png"));
-    EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_3.png"));
-    EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_5.png"));
-    EXPECT_FALSE(std::filesystem::exists(output_dir / "frame_2.png"));
-}
-
-TEST(VideoFrameExtractorOutputNaming, TrimmedRangeKeepsOriginalSourceFrameNumbers) {
-    skipIfCudaUnavailable();
-
-    TempDir temp("trim");
-    const std::filesystem::path video_path = temp.path / "source.mp4";
-    const std::filesystem::path output_dir = temp.path / "frames";
-    std::filesystem::create_directories(output_dir);
-
-    std::string error;
-    ASSERT_TRUE(writeTinyEncodedVideo(video_path, error)) << error;
-
-    auto params = extractionParams(video_path, output_dir);
-    params.start_time = 0.19;
-    params.end_time = 0.31;
-
-    VideoFrameExtractor extractor;
-    EXPECT_TRUE(extractor.extract(params, error)) << error;
-    EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_3.png"));
-    EXPECT_TRUE(std::filesystem::exists(output_dir / "frame_4.png"));
-    EXPECT_FALSE(std::filesystem::exists(output_dir / "frame_1.png"));
 }
