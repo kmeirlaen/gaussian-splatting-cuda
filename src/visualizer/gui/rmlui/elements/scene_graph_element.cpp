@@ -82,8 +82,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string formatCameraGroupLabel(
             const std::string& name,
             const core::Scene::CameraTrainingCounts counts) {
-            if (counts.total == 0)
-                return name;
             if (counts.enabled == counts.total)
                 return std::format("{}  ({})", name, formatWithThousands(counts.total));
             return std::format("{}  ({}/{})",
