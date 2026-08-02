@@ -64,15 +64,7 @@ namespace {
         return loss.cpu().item<float>();
     }
 
-    class PPISPCheckpointRoundtripTest : public ::testing::Test {
-    protected:
-        void SetUp() override {
-            if (!tensor_hardening::has_cuda_device()) {
-                GTEST_SKIP() << "CUDA device required";
-            }
-            ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
-        }
-    };
+    class PPISPCheckpointRoundtripTest : public tensor_hardening::CudaTest {};
 
     TEST_F(PPISPCheckpointRoundtripTest, AdoptCheckpointStatePreservesColorMeanRegularizer) {
         PPISPConfig config;
