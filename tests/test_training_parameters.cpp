@@ -342,7 +342,7 @@ namespace {
             auto params = OptimizationParameters::mrnf_defaults();
             params.normal_loss_space = space;
             const auto json = params.to_json();
-            EXPECT_EQ(json.at("normal_loss_space"), wire);
+            EXPECT_EQ(json.at("normal_loss_space").get<std::string>(), std::string(wire));
 
             auto old_json = json;
             old_json["normal_loss_space"] = wire;
