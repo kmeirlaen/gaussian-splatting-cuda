@@ -373,6 +373,7 @@ if(NOT LFS_SIMPLIFY_TEST_PLY_OK)
         "https://pub-c3fee24842994e5d866dbd9cc41c3f66.r2.dev/kerstbol-isolated-rotated_137502.ply"
         "${LFS_SIMPLIFY_TEST_PLY}.tmp"
         INACTIVITY_TIMEOUT 60
+        TIMEOUT 300
         STATUS LFS_SIMPLIFY_TEST_PLY_STATUS
     )
     list(GET LFS_SIMPLIFY_TEST_PLY_STATUS 0 LFS_SIMPLIFY_TEST_PLY_RC)
