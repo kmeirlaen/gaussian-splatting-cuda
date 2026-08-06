@@ -355,6 +355,45 @@ target_compile_definitions(lichtfeld_tests PRIVATE
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
 )
 
+# Large test assets are hosted in the public Cloudflare R2 bucket
+# 'lichtfeld-test-assets' and fetched at configure time. A failed download only
+# warns: tests guard on the file's existence and GTEST_SKIP when it is missing.
+set(LFS_SIMPLIFY_TEST_PLY "${CMAKE_SOURCE_DIR}/data/kerstbol-isolated-rotated_137502.ply")
+set(LFS_SIMPLIFY_TEST_PLY_SHA256 "7fc85d1b0f4b7ab26acaa988b397b41b4ecf83f90e78cfb91b65ed474cb671fc")
+set(LFS_SIMPLIFY_TEST_PLY_OK FALSE)
+if(EXISTS "${LFS_SIMPLIFY_TEST_PLY}")
+    file(SHA256 "${LFS_SIMPLIFY_TEST_PLY}" LFS_SIMPLIFY_TEST_PLY_HASH)
+    if(LFS_SIMPLIFY_TEST_PLY_HASH STREQUAL LFS_SIMPLIFY_TEST_PLY_SHA256)
+        set(LFS_SIMPLIFY_TEST_PLY_OK TRUE)
+    endif()
+endif()
+if(NOT LFS_SIMPLIFY_TEST_PLY_OK)
+    message(STATUS "Downloading simplify regression asset kerstbol-isolated-rotated_137502.ply (33 MB)")
+    file(DOWNLOAD
+        "https://pub-c3fee24842994e5d866dbd9cc41c3f66.r2.dev/kerstbol-isolated-rotated_137502.ply"
+        "${LFS_SIMPLIFY_TEST_PLY}.tmp"
+        INACTIVITY_TIMEOUT 60
+        STATUS LFS_SIMPLIFY_TEST_PLY_STATUS
+    )
+    list(GET LFS_SIMPLIFY_TEST_PLY_STATUS 0 LFS_SIMPLIFY_TEST_PLY_RC)
+    list(GET LFS_SIMPLIFY_TEST_PLY_STATUS 1 LFS_SIMPLIFY_TEST_PLY_ERR)
+    if(LFS_SIMPLIFY_TEST_PLY_RC EQUAL 0)
+        file(SHA256 "${LFS_SIMPLIFY_TEST_PLY}.tmp" LFS_SIMPLIFY_TEST_PLY_HASH)
+        if(LFS_SIMPLIFY_TEST_PLY_HASH STREQUAL LFS_SIMPLIFY_TEST_PLY_SHA256)
+            file(RENAME "${LFS_SIMPLIFY_TEST_PLY}.tmp" "${LFS_SIMPLIFY_TEST_PLY}")
+            set(LFS_SIMPLIFY_TEST_PLY_OK TRUE)
+        else()
+            set(LFS_SIMPLIFY_TEST_PLY_ERR "SHA256 mismatch: got ${LFS_SIMPLIFY_TEST_PLY_HASH}")
+        endif()
+    endif()
+    if(NOT LFS_SIMPLIFY_TEST_PLY_OK)
+        file(REMOVE "${LFS_SIMPLIFY_TEST_PLY}.tmp")
+        message(WARNING "Failed to download simplify regression asset "
+            "kerstbol-isolated-rotated_137502.ply (${LFS_SIMPLIFY_TEST_PLY_ERR}); "
+            "SplatSimplify.RealPlySimplifyDoesNotUndershootRequestedTarget will be skipped.")
+    endif()
+endif()
+
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_TEST_INTERNAL_LINK_LIBS
         "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_tcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
