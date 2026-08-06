@@ -827,7 +827,7 @@ namespace lfs::core {
 
             std::vector<uint8_t> consumed(groups.size(), uint8_t{0});
             std::vector<std::vector<int>> adjusted_groups;
-            adjusted_groups.reserve(groups.size());
+            adjusted_groups.reserve(static_cast<size_t>(current_count));
             for (const size_t group_index : order) {
                 const auto& group = groups[group_index];
                 const int savings = static_cast<int>(group.size()) - 1;

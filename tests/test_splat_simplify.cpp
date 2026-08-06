@@ -1105,7 +1105,9 @@ TEST(SplatSimplify, RealPlySimplifyDoesNotUndershootRequestedTarget) {
     }
 
     auto loaded = lfs::io::load_ply(input_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load simplify regression asset";
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load simplify regression asset: " << loaded.error().user_message()
+        << " detail: " << loaded.error().detail();
     lfs::core::SplatData source = std::move(loaded->value);
     ASSERT_EQ(source.size(), 137502u);
 
