@@ -89,6 +89,8 @@ namespace lfs::io {
         constexpr size_t VALIDATION_CANCEL_INTERVAL = 65536;
         constexpr size_t MAX_HEADER_BYTES = 1024 * 1024;
         constexpr float MIN_ROTATION_NORM_SQUARED = 1.0e-12f;
+        constexpr float REPAIRED_POSITIVE_INFINITY_OPACITY_LOGIT = 20.0f;
+        constexpr float REPAIRED_NEGATIVE_INFINITY_OPACITY_LOGIT = -20.0f;
         // Load decode + save pack: cap below full HW concurrency to leave headroom
         // for GPU driver / other workers, but allow more than the old 6-thread limit.
         constexpr int MAX_DECODE_THREADS = 16;
@@ -367,9 +369,16 @@ namespace lfs::io {
         size_t invalid_count = 0;
         size_t non_finite_value_count = 0;
         size_t zero_rotation_count = 0;
+        size_t repaired_positive_infinite_opacity_count = 0;
+        size_t repaired_negative_infinite_opacity_count = 0;
 
         [[nodiscard]] size_t output_count(const size_t vertex_count) const {
             return valid_rows.empty() ? vertex_count : valid_rows.size();
+        }
+
+        [[nodiscard]] size_t repaired_opacity_count() const {
+            return repaired_positive_infinite_opacity_count +
+                   repaired_negative_infinite_opacity_count;
         }
     };
 
@@ -794,6 +803,25 @@ namespace lfs::io {
         return value;
     }
 
+    [[nodiscard]] float repair_infinite_opacity_logit(
+        const float value,
+        size_t* const positive_repair_count,
+        size_t* const negative_repair_count) {
+        if (std::isinf(value)) {
+            if (value > 0.0f) {
+                if (positive_repair_count != nullptr) {
+                    ++(*positive_repair_count);
+                }
+                return ply_constants::REPAIRED_POSITIVE_INFINITY_OPACITY_LOGIT;
+            }
+            if (negative_repair_count != nullptr) {
+                ++(*negative_repair_count);
+            }
+            return ply_constants::REPAIRED_NEGATIVE_INFINITY_OPACITY_LOGIT;
+        }
+        return value;
+    }
+
     [[nodiscard]] tbb::task_arena& ply_decode_arena() {
         static const int concurrency = std::max(
             1,
@@ -960,6 +988,23 @@ namespace lfs::io {
             }
             return value;
         };
+        const auto read_opacity = [&](const char* row, const size_t offset, bool& invalid) {
+            LFS_DEBUG_ASSERT_MSG(offset <= layout.vertex_stride &&
+                                     sizeof(float) <= layout.vertex_stride - offset,
+                                 std::format("PLY payload field must fit inside its vertex row "
+                                             "(offset={}, field_size={}, vertex_stride={})",
+                                             offset, sizeof(float), layout.vertex_stride));
+            const float value = read_unaligned_float32(row + offset);
+            if (std::isnan(value)) {
+                invalid = true;
+                ++validation.non_finite_value_count;
+                return value;
+            }
+            return repair_infinite_opacity_logit(
+                value,
+                &validation.repaired_positive_infinite_opacity_count,
+                &validation.repaired_negative_infinite_opacity_count);
+        };
 
         for (size_t i = 0; i < layout.vertex_count; ++i) {
             if ((i % ply_constants::VALIDATION_CANCEL_INTERVAL) == 0) {
@@ -974,7 +1019,7 @@ namespace lfs::io {
             (void)read_field(row, layout.pos_z_offset, invalid);
 
             if (layout.has_opacity()) {
-                (void)read_field(row, layout.opacity_offset, invalid);
+                (void)read_opacity(row, layout.opacity_offset, invalid);
             }
 
             if (layout.has_scaling()) {
@@ -1026,14 +1071,18 @@ namespace lfs::io {
             throw_ply_error(
                 lfs::ErrorCode::DataLoss,
                 std::format(
-                    "PLY contains no valid Gaussian splats after validation ({} invalid rows, {} non-finite values, {} zero-length rotations)",
+                    "PLY contains no valid Gaussian splats after validation ({} invalid rows, {} non-finite values, {} zero-length rotations, {} +inf opacity repairs, {} -inf opacity repairs)",
                     validation.invalid_count,
                     validation.non_finite_value_count,
-                    validation.zero_rotation_count),
+                    validation.zero_rotation_count,
+                    validation.repaired_positive_infinite_opacity_count,
+                    validation.repaired_negative_infinite_opacity_count),
                 lfs::SmallFields{}
                     .add("invalid_rows", static_cast<std::int64_t>(validation.invalid_count))
                     .add("non_finite_values", static_cast<std::int64_t>(validation.non_finite_value_count))
                     .add("zero_rotations", static_cast<std::int64_t>(validation.zero_rotation_count))
+                    .add("repaired_positive_infinite_opacity_values", static_cast<std::int64_t>(validation.repaired_positive_infinite_opacity_count))
+                    .add("repaired_negative_infinite_opacity_values", static_cast<std::int64_t>(validation.repaired_negative_infinite_opacity_count))
                     .add("vertex_count", static_cast<std::int64_t>(layout.vertex_count)));
         }
 
@@ -1356,6 +1405,20 @@ namespace lfs::io {
         });
     }
 
+    void extract_opacity_to_host(const char* vertex_data,
+                                 const FastPropertyLayout& layout,
+                                 const std::span<const size_t> rows,
+                                 float* output) {
+        if (!layout.has_opacity())
+            return;
+
+        const size_t stride = layout.vertex_stride;
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
+            const float value = read_unaligned_float32(vertex_data + source_row * stride + layout.opacity_offset);
+            output[output_row] = repair_infinite_opacity_logit(value, nullptr, nullptr);
+        });
+    }
+
     void extract_scaling_fused_to_host(const char* __restrict__ vertex_data,
                                        const FastPropertyLayout& layout,
                                        const std::span<const size_t> rows,
@@ -1490,6 +1553,8 @@ namespace lfs::io {
         std::atomic<size_t> invalid_rows{0};
         std::atomic<size_t> non_finite_values{0};
         std::atomic<size_t> zero_rotations{0};
+        std::atomic<size_t> repaired_positive_infinite_opacity{0};
+        std::atomic<size_t> repaired_negative_infinite_opacity{0};
 
         ply_decode_arena().execute([&] {
             tbb::parallel_for(
@@ -1501,6 +1566,8 @@ namespace lfs::io {
                     size_t local_invalid_rows = 0;
                     size_t local_non_finite_values = 0;
                     size_t local_zero_rotations = 0;
+                    size_t local_repaired_positive_infinite_opacity = 0;
+                    size_t local_repaired_negative_infinite_opacity = 0;
 
                     for (size_t row_index = range.begin(); row_index < range.end(); ++row_index) {
                         const char* const row = vertex_data + row_index * stride;
@@ -1518,13 +1585,32 @@ namespace lfs::io {
                             }
                             return value;
                         };
+                        const auto read_opacity = [&] {
+                            LFS_DEBUG_ASSERT_MSG(
+                                layout.opacity_offset <= stride &&
+                                    sizeof(float) <= stride - layout.opacity_offset,
+                                std::format("PLY payload field must fit inside its vertex row "
+                                            "(offset={}, field_size={}, vertex_stride={})",
+                                            layout.opacity_offset, sizeof(float), stride));
+                            const float value =
+                                read_unaligned_float32(row + layout.opacity_offset);
+                            if (std::isnan(value)) {
+                                invalid = true;
+                                ++local_non_finite_values;
+                                return value;
+                            }
+                            return repair_infinite_opacity_logit(
+                                value,
+                                &local_repaired_positive_infinite_opacity,
+                                &local_repaired_negative_infinite_opacity);
+                        };
 
                         host.means.ptr[row_index * 3 + 0] = read_field(layout.pos_x_offset);
                         host.means.ptr[row_index * 3 + 1] = read_field(layout.pos_y_offset);
                         host.means.ptr[row_index * 3 + 2] = read_field(layout.pos_z_offset);
 
                         host.opacity.ptr[row_index] = layout.has_opacity()
-                                                          ? read_field(layout.opacity_offset)
+                                                          ? read_opacity()
                                                           : 0.0f;
 
                         if (layout.has_scaling()) {
@@ -1607,6 +1693,12 @@ namespace lfs::io {
                     non_finite_values.fetch_add(local_non_finite_values,
                                                 std::memory_order_relaxed);
                     zero_rotations.fetch_add(local_zero_rotations, std::memory_order_relaxed);
+                    repaired_positive_infinite_opacity.fetch_add(
+                        local_repaired_positive_infinite_opacity,
+                        std::memory_order_relaxed);
+                    repaired_negative_infinite_opacity.fetch_add(
+                        local_repaired_negative_infinite_opacity,
+                        std::memory_order_relaxed);
                 });
         });
 
@@ -1615,6 +1707,10 @@ namespace lfs::io {
             .invalid_count = invalid_rows.load(std::memory_order_relaxed),
             .non_finite_value_count = non_finite_values.load(std::memory_order_relaxed),
             .zero_rotation_count = zero_rotations.load(std::memory_order_relaxed),
+            .repaired_positive_infinite_opacity_count =
+                repaired_positive_infinite_opacity.load(std::memory_order_relaxed),
+            .repaired_negative_infinite_opacity_count =
+                repaired_negative_infinite_opacity.load(std::memory_order_relaxed),
         };
     }
 
@@ -1779,16 +1875,26 @@ namespace lfs::io {
                 LFS_ASSERT_MSG(
                     validation.invalid_count == fused_validation.invalid_count &&
                         validation.non_finite_value_count == fused_validation.non_finite_value_count &&
-                        validation.zero_rotation_count == fused_validation.zero_rotation_count,
+                        validation.zero_rotation_count == fused_validation.zero_rotation_count &&
+                        validation.repaired_positive_infinite_opacity_count ==
+                            fused_validation.repaired_positive_infinite_opacity_count &&
+                        validation.repaired_negative_infinite_opacity_count ==
+                            fused_validation.repaired_negative_infinite_opacity_count,
                     std::format("PLY fused validation must match compaction validation "
                                 "(fused_invalid={}, compact_invalid={}, "
                                 "fused_non_finite={}, compact_non_finite={}, "
-                                "fused_zero_rotation={}, compact_zero_rotation={})",
+                                "fused_zero_rotation={}, compact_zero_rotation={}, "
+                                "fused_pos_inf_opacity_repairs={}, compact_pos_inf_opacity_repairs={}, "
+                                "fused_neg_inf_opacity_repairs={}, compact_neg_inf_opacity_repairs={})",
                                 fused_validation.invalid_count, validation.invalid_count,
                                 fused_validation.non_finite_value_count,
                                 validation.non_finite_value_count,
                                 fused_validation.zero_rotation_count,
-                                validation.zero_rotation_count));
+                                validation.zero_rotation_count,
+                                fused_validation.repaired_positive_infinite_opacity_count,
+                                validation.repaired_positive_infinite_opacity_count,
+                                fused_validation.repaired_negative_infinite_opacity_count,
+                                validation.repaired_negative_infinite_opacity_count));
 
                 N = validation.output_count(layout.vertex_count);
                 // Do not hold the full-size fused staging allocation while creating
@@ -1830,8 +1936,8 @@ namespace lfs::io {
                 }
 
                 if (layout.has_opacity()) {
-                    extract_property_to_host(vertex_data, layout, rows_to_load,
-                                             layout.opacity_offset, host.opacity.ptr);
+                    extract_opacity_to_host(vertex_data, layout, rows_to_load,
+                                            host.opacity.ptr);
                 } else {
                     std::fill(host.opacity.ptr, host.opacity.ptr + host.opacity.count, 0.0f);
                 }
@@ -1879,6 +1985,25 @@ namespace lfs::io {
                                   .add("non_finite_values", static_cast<std::int64_t>(validation.non_finite_value_count))
                                   .add("zero_rotations", static_cast<std::int64_t>(validation.zero_rotation_count)),
                 });
+            }
+            if (validation.repaired_opacity_count() > 0) {
+                warnings.push_back(Diagnostic{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .message = std::format(
+                        "PLY validation repaired {} infinite opacity logit value(s) before import "
+                        "({} +inf, {} -inf)",
+                        validation.repaired_opacity_count(),
+                        validation.repaired_positive_infinite_opacity_count,
+                        validation.repaired_negative_infinite_opacity_count),
+                    .fields = lfs::SmallFields{}
+                                  .add("repaired_positive_infinite_opacity_values", static_cast<std::int64_t>(validation.repaired_positive_infinite_opacity_count))
+                                  .add("repaired_negative_infinite_opacity_values", static_cast<std::int64_t>(validation.repaired_negative_infinite_opacity_count)),
+                });
+                LOG_WARN(
+                    "PLY validation repaired {} infinite opacity logit value(s) before import ({} +inf, {} -inf)",
+                    validation.repaired_opacity_count(),
+                    validation.repaired_positive_infinite_opacity_count,
+                    validation.repaired_negative_infinite_opacity_count);
             }
             throw_if_load_cancel_requested(options, "PLY load cancelled");
             const auto decode_complete_at = std::chrono::steady_clock::now();
