@@ -4,15 +4,13 @@
 
 #pragma once
 
-#include "core/export.hpp"
-
 #include <cstdint>
 #include <unordered_map>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
 
-    class LFS_VIS_API VulkanImageBarrierTracker {
+    class VulkanImageBarrierTracker {
     public:
         struct AccessScope {
             VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_NONE;

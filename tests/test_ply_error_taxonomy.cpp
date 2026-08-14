@@ -368,7 +368,7 @@ namespace {
         ASSERT_EQ(result->warnings.size(), 1u);
         EXPECT_EQ(find_field<std::int64_t>(
                       result->warnings.front().fields,
-                      "repaired_positive_infinite_opacity_values"),
+                      "repaired_opacity_values"),
                   1);
         EXPECT_FALSE(find_field<std::int64_t>(
             result->warnings.front().fields, "invalid_rows"));
@@ -392,7 +392,7 @@ namespace {
         ASSERT_EQ(result->warnings.size(), 1u);
         EXPECT_EQ(find_field<std::int64_t>(
                       result->warnings.front().fields,
-                      "repaired_negative_infinite_opacity_values"),
+                      "repaired_opacity_values"),
                   1);
         EXPECT_FALSE(find_field<std::int64_t>(
             result->warnings.front().fields, "invalid_rows"));
@@ -424,11 +424,11 @@ namespace {
                 EXPECT_EQ(find_field<std::int64_t>(warning.fields, "invalid_rows"), 1);
             }
             if (find_field<std::int64_t>(
-                    warning.fields, "repaired_positive_infinite_opacity_values")) {
+                    warning.fields, "repaired_opacity_values")) {
                 ++repair_warnings;
                 EXPECT_EQ(find_field<std::int64_t>(
                               warning.fields,
-                              "repaired_positive_infinite_opacity_values"),
+                              "repaired_opacity_values"),
                           1);
             }
         }
