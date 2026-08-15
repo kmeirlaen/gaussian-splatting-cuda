@@ -1408,6 +1408,7 @@ namespace {
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
+        ::args::ValueFlag<std::string> rad_profile(parser, "profile", "RAD profile: lichtfeld (default) or spark-build-lod", {"rad-profile"});
         ::args::Flag rad_stream(parser, "stream", "RAD output: streamable Spark-compatible chunks (default)", {"stream"});
         ::args::Flag rad_none_stream(parser, "none-stream", "RAD output: native LichtFeld chunks", {"none-stream"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
@@ -1503,6 +1504,20 @@ namespace {
             }
         }
 
+        if (rad_profile) {
+            const std::string& name = ::args::get(rad_profile);
+            if (name == "lichtfeld" || name == "lichtfeld-optimized") {
+                params.rad_profile = lfs::core::RadExportProfile::LichtFeld;
+            } else if (name == "spark-build-lod" || name == "spark") {
+                params.rad_profile = lfs::core::RadExportProfile::SparkBuildLod;
+            } else {
+                return std::unexpected(std::format("Invalid --rad-profile '{}'. Use: lichtfeld, spark-build-lod", name));
+            }
+            if (params.format != param::OutputFormat::RAD) {
+                return std::unexpected("--rad-profile requires RAD output (--format rad)");
+            }
+        }
+
         if (rad_stream && rad_none_stream) {
             return std::unexpected("--stream and --none-stream are mutually exclusive");
         }
@@ -1511,6 +1526,11 @@ namespace {
         }
         params.rad_export_mode = rad_none_stream ? param::RadExportMode::NonStream
                                                  : param::RadExportMode::Stream;
+
+        if (params.rad_profile == lfs::core::RadExportProfile::SparkBuildLod &&
+            (params.tiles_x > 1 || params.tiles_y > 1)) {
+            return std::unexpected("--rad-profile spark-build-lod does not support --tiles; Spark-compatible export uses one global tree");
+        }
 
         return core_args::ConvertMode{params};
     }

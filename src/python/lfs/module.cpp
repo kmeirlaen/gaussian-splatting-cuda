@@ -1327,16 +1327,18 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance) {
+           bool rad_flip_y, bool rad_streamable, const std::string& rad_profile, int spz_version, bool include_provenance) {
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance);
+                                       rad_profile, spz_version, include_provenance);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
         nb::arg("rad_streamable") = true,
+        nb::arg("rad_profile") = "lichtfeld",
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
         "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
+        "rad_profile is 'lichtfeld' (default) or 'spark-build-lod' and is only used for RAD. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
         "Ignored for COLMAP and SPZ v3.");

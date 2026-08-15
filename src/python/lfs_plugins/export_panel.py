@@ -108,6 +108,7 @@ class ExportPanel(Panel):
         # RAD export settings
         self._rad_flip_y = False  # Y-flip checkbox (off by default)
         self._rad_streamable = True
+        self._rad_export_profile = "lichtfeld"
         self._include_provenance = True
         self._doc = None  # Document reference for DOM access
         self._last_export_path = None  # Track last export path for Asset Manager
@@ -155,6 +156,11 @@ class ExportPanel(Panel):
             "rad_export_mode",
             lambda: "stream" if self._rad_streamable else "non_stream",
             self._set_rad_export_mode,
+        )
+        model.bind(
+            "rad_export_profile",
+            lambda: self._rad_export_profile,
+            self._set_rad_export_profile,
         )
         model.bind_event("toggle_rad_flip_y", self._on_toggle_rad_flip_y)
         model.bind_func("include_provenance", lambda: self._include_provenance)
@@ -245,6 +251,15 @@ class ExportPanel(Panel):
             return
         self._rad_streamable = streamable
         self._dirty_model("rad_export_mode")
+
+    def _set_rad_export_profile(self, value):
+        profile = str(value)
+        if profile not in ("lichtfeld", "spark-build-lod"):
+            profile = "lichtfeld"
+        if profile == self._rad_export_profile:
+            return
+        self._rad_export_profile = profile
+        self._dirty_model("rad_export_profile")
 
     def _set_spz_version(self, value):
         try:
@@ -584,6 +599,7 @@ class ExportPanel(Panel):
             "export_error_text",
             "rad_flip_y",
             "rad_export_mode",
+            "rad_export_profile",
             "spz_version",
             "can_export",
             "export_label",
@@ -781,6 +797,7 @@ class ExportPanel(Panel):
                     self._export_sh_degree,
                     rad_flip_y=self._rad_flip_y,
                     rad_streamable=self._rad_streamable,
+                    rad_profile=self._rad_export_profile,
                     spz_version=self._spz_version,
                     include_provenance=self._include_provenance,
                 )

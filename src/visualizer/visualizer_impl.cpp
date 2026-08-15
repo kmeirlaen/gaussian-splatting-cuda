@@ -756,7 +756,7 @@ namespace lfs::vis {
 
         python::set_export_callback([](int format, const char* path, const char** node_names,
                                        int node_count, int sh_degree, bool rad_flip_y,
-                                       bool rad_streamable, int spz_version,
+                                       bool rad_streamable, const char* rad_profile, int spz_version,
                                        bool include_provenance) {
             if (auto* gm = python::get_gui_manager()) {
                 std::vector<std::string> names;
@@ -764,10 +764,17 @@ namespace lfs::vis {
                 for (int i = 0; i < node_count; ++i) {
                     names.emplace_back(node_names[i]);
                 }
+                const std::string_view profile = rad_profile != nullptr ? std::string_view(rad_profile)
+                                                                        : std::string_view("lichtfeld");
+                const auto resolved_profile =
+                    (profile == "spark-build-lod" || profile == "spark")
+                        ? lfs::core::RadExportProfile::SparkBuildLod
+                        : lfs::core::RadExportProfile::LichtFeld;
                 gm->asyncTasks().performExport(static_cast<lfs::core::ExportFormat>(format),
                                                lfs::core::utf8_to_path(path), names, sh_degree,
                                                rad_flip_y,
                                                rad_streamable,
+                                               resolved_profile,
                                                spz_version,
                                                include_provenance);
             }

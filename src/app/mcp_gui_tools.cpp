@@ -1575,7 +1575,8 @@ namespace lfs::app {
                                                             const core::ExportFormat format,
                                                             const std::filesystem::path& path,
                                                             const int sh_degree,
-                                                            const bool include_provenance = true) {
+                                                            const bool include_provenance = true,
+                                                            const core::RadExportProfile rad_profile = core::RadExportProfile::LichtFeld) {
             const auto& scene = scene_manager.getScene();
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
@@ -1642,7 +1643,7 @@ namespace lfs::app {
                 break;
             }
             case core::ExportFormat::RAD: {
-                if (auto result = io::save_rad(*merged, io::RadSaveOptions{.output_path = path, .provenance = stamp}); !result)
+                if (auto result = io::save_rad(*merged, io::RadSaveOptions{.output_path = path, .profile = rad_profile, .provenance = stamp}); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
@@ -3479,14 +3480,20 @@ namespace lfs::app {
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"rad_profile", json{{"type", "string"}, {"enum", json::array({"lichtfeld", "spark-build-lod"})}, {"description", "RAD profile: lichtfeld (default) or spark-build-lod"}}},
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
                 const int sh_degree = args.value("sh_degree", 3);
                 const bool include_provenance = args.value("include_provenance", true);
+                const std::string rad_profile_name = args.value("rad_profile", "lichtfeld");
+                const core::RadExportProfile rad_profile =
+                    (rad_profile_name == "spark-build-lod" || rad_profile_name == "spark")
+                        ? core::RadExportProfile::SparkBuildLod
+                        : core::RadExportProfile::LichtFeld;
 
-                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance, rad_profile]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
@@ -3495,7 +3502,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree, include_provenance); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree, include_provenance, rad_profile); !result)
                         return json{{"error", result.error()}};
 
                     return json{

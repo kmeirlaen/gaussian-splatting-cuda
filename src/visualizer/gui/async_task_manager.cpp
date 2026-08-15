@@ -1038,6 +1038,7 @@ namespace lfs::vis::gui {
                                          const std::vector<std::string>& node_names, int sh_degree,
                                          bool rad_flip_y,
                                          bool rad_streamable,
+                                         core::RadExportProfile rad_profile,
                                          int spz_version,
                                          bool include_provenance) {
         if (isExporting())
@@ -1126,6 +1127,7 @@ namespace lfs::vis::gui {
                          borrow_plan.model_mutex,
                          rad_flip_y,
                          rad_streamable,
+                         rad_profile,
                          spz_version,
                          std::move(provenance));
     }
@@ -1252,6 +1254,7 @@ namespace lfs::vis::gui {
                                             std::shared_mutex* model_mutex,
                                             bool rad_flip_y,
                                             bool rad_streamable,
+                                            core::RadExportProfile rad_profile,
                                             int spz_version,
                                             core::ProvenanceStamp provenance) {
         if (splats.empty()) {
@@ -1286,6 +1289,7 @@ namespace lfs::vis::gui {
              model_mutex,
              rad_flip_y,
              rad_streamable,
+             rad_profile,
              spz_version,
              provenance](
                 std::stop_token stop_token) mutable {
@@ -1461,6 +1465,7 @@ namespace lfs::vis::gui {
                                 .chunk_size = rad_streamable
                                                   ? lfs::io::kRadStreamableChunkSplats
                                                   : lfs::io::kRadNativeChunkSplats,
+                                .profile = rad_profile,
                                 .progress_callback = update_progress,
                                 .provenance = provenance};
                             if (auto result = lfs::io::save_rad(*splat_data, options); result) {

@@ -1523,6 +1523,79 @@ TEST_F(PythonIOTest, RadSaveLoadRoundtripPreservesCompactSplat) {
     EXPECT_EQ(leaf_positions, expected_positions);
 }
 
+TEST_F(PythonIOTest, RadSparkProfileWritesSparkEncodingAndChunkSize) {
+    const auto original = create_test_splat(64, 3);
+    const auto output_path = temp_dir / "spark_profile.rad";
+
+    RadSaveOptions options;
+    options.output_path = output_path;
+    options.compression_level = 1;
+    options.chunk_size = kRadNativeChunkSplats;
+    options.profile = RadExportProfile::SparkBuildLod;
+    const auto save_result = save_rad(original, options);
+    ASSERT_TRUE(save_result.has_value()) << save_result.error().format();
+
+    std::ifstream in(output_path, std::ios::binary);
+    ASSERT_TRUE(in.good());
+    std::array<std::uint8_t, 8> header{};
+    in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    ASSERT_TRUE(in.good());
+    const auto read_u32 = [](const std::uint8_t* p) {
+        return static_cast<std::uint32_t>(p[0]) |
+               (static_cast<std::uint32_t>(p[1]) << 8u) |
+               (static_cast<std::uint32_t>(p[2]) << 16u) |
+               (static_cast<std::uint32_t>(p[3]) << 24u);
+    };
+    ASSERT_EQ(read_u32(header.data()), 0x30444152u);
+    const std::uint32_t meta_size = read_u32(header.data() + 4);
+    std::string meta_json(meta_size, '\0');
+    in.read(meta_json.data(), static_cast<std::streamsize>(meta_json.size()));
+    ASSERT_TRUE(in.good());
+
+    const auto meta = nlohmann::json::parse(meta_json);
+    EXPECT_EQ(meta.at("chunkSize").get<std::uint32_t>(), kRadStreamableChunkSplats);
+    ASSERT_TRUE(meta.contains("splatEncoding"));
+    const auto& encoding = meta.at("splatEncoding");
+    EXPECT_TRUE(encoding.at("lodOpacity").get<bool>());
+    EXPECT_TRUE(encoding.contains("rgbMin"));
+    EXPECT_TRUE(encoding.contains("rgbMax"));
+    EXPECT_TRUE(encoding.contains("lnScaleMin"));
+    EXPECT_TRUE(encoding.contains("lnScaleMax"));
+    EXPECT_TRUE(encoding.contains("sh1Max"));
+    EXPECT_TRUE(encoding.contains("sh2Max"));
+    EXPECT_TRUE(encoding.contains("sh3Max"));
+    ASSERT_FALSE(meta.at("chunks").empty());
+    const auto first_chunk_offset =
+        ((static_cast<std::size_t>(8) + meta_size + static_cast<std::size_t>(7)) &
+         ~static_cast<std::size_t>(7)) +
+        meta.at("chunks").at(0).at("offset").get<std::size_t>();
+    in.seekg(static_cast<std::streamoff>(first_chunk_offset), std::ios::beg);
+    in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+    ASSERT_TRUE(in.good());
+    ASSERT_EQ(read_u32(header.data()), 0x43444152u);
+    const std::uint32_t chunk_meta_size = read_u32(header.data() + 4);
+    std::string chunk_meta_json(chunk_meta_size, '\0');
+    in.read(chunk_meta_json.data(), static_cast<std::streamsize>(chunk_meta_json.size()));
+    ASSERT_TRUE(in.good());
+    const auto chunk_meta = nlohmann::json::parse(chunk_meta_json);
+    ASSERT_TRUE(chunk_meta.contains("splatEncoding"));
+    EXPECT_TRUE(chunk_meta.at("splatEncoding").contains("rgbMin"));
+
+    const auto loaded = load_rad(output_path);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    ASSERT_TRUE(loaded->lod_tree && loaded->lod_tree->has_tree());
+    const auto& tree = *loaded->lod_tree;
+    for (std::size_t i = 0; i < tree.total_nodes(); ++i) {
+        const std::uint32_t child_start = tree.child_start_at(i);
+        const std::uint16_t child_count = tree.child_count_at(i);
+        if (child_count == 0) {
+            continue;
+        }
+        EXPECT_GT(child_start, i);
+        EXPECT_LE(static_cast<std::size_t>(child_start) + child_count, tree.total_nodes());
+    }
+}
+
 // Test progress callback
 TEST_F(PythonIOTest, ProgressCallback) {
     const size_t num_points = 1000;

@@ -407,6 +407,7 @@ namespace lfs::core {
             std::uint32_t tiles_y = 1;
             LodBuilder lod_builder = LodBuilder::BHATT;
             RadExportMode rad_export_mode = RadExportMode::Stream;
+            RadExportProfile rad_profile = RadExportProfile::LichtFeld;
             bool overwrite = false;         // Skip overwrite prompts
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };

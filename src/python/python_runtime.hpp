@@ -226,6 +226,7 @@ namespace lfs::python {
                                     int node_count, int sh_degree,
                                     bool rad_flip_y,
                                     bool rad_streamable,
+                                    const char* rad_profile,
                                     int spz_version,
                                     bool include_provenance);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
@@ -233,6 +234,7 @@ namespace lfs::python {
                                               const std::vector<std::string>& node_names, int sh_degree,
                                               bool rad_flip_y = false,
                                               bool rad_streamable = true,
+                                              const std::string& rad_profile = "lichtfeld",
                                               int spz_version = 4,
                                               bool include_provenance = true);
 

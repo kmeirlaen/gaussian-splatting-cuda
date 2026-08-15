@@ -3,6 +3,15 @@
 
 #pragma once
 
+namespace lfs::core {
+
+    enum class RadExportProfile {
+        LichtFeld,
+        SparkBuildLod,
+    };
+
+} // namespace lfs::core
+
 #ifdef _WIN32
 #define LFS_LOCAL_SYMBOL
 #ifdef LFS_LOGGER_EXPORTS

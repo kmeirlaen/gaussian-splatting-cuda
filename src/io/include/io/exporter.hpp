@@ -158,6 +158,7 @@ namespace lfs::io {
         int compression_level = 6;                            // gzip compression level (0-9, default 6)
         bool flip_y = false;                                  // Flip Y axis on export
         std::uint32_t chunk_size = kRadStreamableChunkSplats; // RAD splats per file chunk
+        core::RadExportProfile profile = core::RadExportProfile::LichtFeld;
         ExportProgressCallback progress_callback = nullptr;   // Progress callback
         std::optional<core::ProvenanceStamp> provenance{};    // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };

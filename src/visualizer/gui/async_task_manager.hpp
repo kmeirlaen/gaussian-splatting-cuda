@@ -55,6 +55,7 @@ namespace lfs::vis {
                                const std::vector<std::string>& node_names, int sh_degree,
                                bool rad_flip_y = false,
                                bool rad_streamable = true,
+                               lfs::core::RadExportProfile rad_profile = lfs::core::RadExportProfile::LichtFeld,
                                int spz_version = 4,
                                bool include_provenance = true);
             [[nodiscard]] bool isExporting() const {
@@ -211,6 +212,7 @@ namespace lfs::vis {
                                   std::shared_mutex* model_mutex,
                                   bool rad_flip_y,
                                   bool rad_streamable,
+                                  lfs::core::RadExportProfile rad_profile,
                                   int spz_version,
                                   lfs::core::ProvenanceStamp provenance);
             void startColmapExport(const std::filesystem::path& path);

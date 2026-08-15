@@ -817,6 +817,38 @@ TEST(ArgumentParserTest, TrainingParsesHexBackgroundColor) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[2], 64.0f / 255.0f);
 }
 
+TEST(ArgumentParserTest, ConvertParsesSparkCompatibleRadProfile) {
+    const auto dir = make_test_path("lfs_arg_parser_rad_profile");
+    const auto input_path = std::filesystem::path(dir) / "input.ply";
+    const auto output_path = std::filesystem::path(dir) / "output.rad";
+    std::ofstream input(input_path, std::ios::binary);
+    ASSERT_TRUE(input.good());
+    input << "ply\nformat binary_little_endian 1.0\n"
+          << "element vertex 0\n"
+          << "end_header\n";
+    input.close();
+    const auto input_arg = input_path.string();
+    const auto output_arg = output_path.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_arg.c_str(),
+        output_arg.c_str(),
+        "--format",
+        "rad",
+        "--rad-profile",
+        "spark-build-lod"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    EXPECT_TRUE(parsed.has_value()) << parsed.error();
+    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_EQ(mode->params.rad_profile, lfs::core::RadExportProfile::SparkBuildLod);
+
+    std::filesystem::remove_all(dir);
+}
+
 TEST(ArgumentParserTest, TrainingParsesLowercaseHexBackgroundColor) {
     const auto data_path = make_test_path("lfs_arg_parser_bg_lower_hex_color_data");
     const auto output_path = make_test_path("lfs_arg_parser_bg_lower_hex_color_output");

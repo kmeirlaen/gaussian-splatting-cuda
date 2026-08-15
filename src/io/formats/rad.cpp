@@ -49,6 +49,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
@@ -2060,6 +2061,243 @@ namespace lfs::io {
         // RAD Chunk Encoding
         // ============================================================================
 
+        nlohmann::json spark_splat_encoding_json() {
+            return nlohmann::json{
+                {"rgbMin", -0.026443481f},
+                {"rgbMax", 1.0244141f},
+                {"lnScaleMin", -12.0f},
+                {"lnScaleMax", 9.0f},
+                {"sh1Max", 1.0f},
+                {"sh2Max", 1.0f},
+                {"sh3Max", 1.0f},
+                {"lodOpacity", true},
+            };
+        }
+
+        nlohmann::json lod_splat_encoding_json(const core::RadExportProfile profile) {
+            return profile == core::RadExportProfile::SparkBuildLod
+                       ? spark_splat_encoding_json()
+                       : nlohmann::json{{"lodOpacity", true}};
+        }
+
+        std::expected<SplatData, std::string> reorder_lod_for_spark_chunks(const SplatData& input) {
+            if (!input.lod_tree || !input.lod_tree->has_tree()) {
+                return std::unexpected("Spark RAD profile requires a populated LOD tree");
+            }
+            const auto& tree = *input.lod_tree;
+            if (!tree.nodes_in_memory()) {
+                return std::unexpected("Spark RAD profile cannot reorder out-of-core RAD metadata");
+            }
+
+            const std::size_t n = tree.total_nodes();
+            if (n != static_cast<std::size_t>(input.size())) {
+                return std::unexpected("Spark RAD profile tree/node count mismatch");
+            }
+
+            constexpr std::size_t kSparkBatchSize = kRadStreamableChunkSplats;
+            constexpr std::size_t kMinBatchSize = 8 * 1024;
+            constexpr float kSliceStdDevs = 1.5f;
+
+            struct SparkBatchAabb {
+                glm::vec3 min{std::numeric_limits<float>::infinity()};
+                glm::vec3 max{-std::numeric_limits<float>::infinity()};
+
+                void add(const glm::vec3 center, const float size) {
+                    const glm::vec3 half_extent(size * 0.5f * kSliceStdDevs);
+                    min = glm::min(min, center - half_extent);
+                    max = glm::max(max, center + half_extent);
+                }
+
+                [[nodiscard]] glm::vec3 extent() const {
+                    return max - min;
+                }
+            };
+
+            const auto longest_axis = [](const glm::vec3 extent) -> int {
+                if (extent.x >= extent.y && extent.x >= extent.z) {
+                    return 0;
+                }
+                if (extent.y >= extent.z) {
+                    return 1;
+                }
+                return 2;
+            };
+            const auto axis_value = [](const glm::vec3 v, const int axis) -> float {
+                return axis == 0 ? v.x : (axis == 1 ? v.y : v.z);
+            };
+            const auto batch_end_for = [](const std::size_t start) -> std::size_t {
+                return ((start + kMinBatchSize + kSparkBatchSize - 1) / kSparkBatchSize) * kSparkBatchSize;
+            };
+
+            std::vector<std::vector<std::uint32_t>> children(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                const std::uint16_t count = tree.child_count[i];
+                if (count == 0) {
+                    continue;
+                }
+                const std::uint32_t start = tree.child_start[i];
+                if (static_cast<std::size_t>(start) + count > n) {
+                    return std::unexpected("Spark RAD profile encountered invalid input child links");
+                }
+                children[i].reserve(count);
+                for (std::uint32_t c = 0; c < count; ++c) {
+                    children[i].push_back(start + c);
+                }
+            }
+
+            std::vector<std::uint32_t> order(n);
+            std::vector<std::uint32_t> old_to_new(n, std::numeric_limits<std::uint32_t>::max());
+            std::vector<std::uint16_t> out_child_count(n, 0);
+            std::vector<std::uint32_t> out_child_start(n, 0);
+            std::vector<std::vector<std::uint32_t>> batches;
+            batches.push_back({0});
+            order[0] = 0;
+            old_to_new[0] = 0;
+            std::size_t order_size = 1;
+            std::size_t batch_cursor = 0;
+
+            while (batch_cursor < batches.size()) {
+                auto batch = std::move(batches[batch_cursor++]);
+                std::priority_queue<std::pair<float, std::uint32_t>> priority;
+                for (const std::uint32_t parent : batch) {
+                    priority.push({tree.size_at(parent), parent});
+                }
+
+                const std::size_t start_index = order_size;
+                const std::size_t end_index = std::min(batch_end_for(start_index), n);
+                while (!priority.empty()) {
+                    const auto [size, parent] = priority.top();
+                    priority.pop();
+                    const auto& direct_children = children[parent];
+                    if (order_size + direct_children.size() > end_index) {
+                        priority.push({size, parent});
+                        break;
+                    }
+
+                    const std::uint32_t new_parent = old_to_new[parent];
+                    if (!direct_children.empty()) {
+                        out_child_start[new_parent] = static_cast<std::uint32_t>(order_size);
+                        out_child_count[new_parent] = static_cast<std::uint16_t>(direct_children.size());
+                    }
+                    for (const std::uint32_t child : direct_children) {
+                        old_to_new[child] = static_cast<std::uint32_t>(order_size);
+                        order[order_size++] = child;
+                        priority.push({tree.size_at(child), child});
+                    }
+                }
+
+                if (priority.empty()) {
+                    continue;
+                }
+
+                std::vector<std::uint32_t> pending;
+                pending.reserve(priority.size());
+                SparkBatchAabb aabb;
+                while (!priority.empty()) {
+                    const std::uint32_t parent = priority.top().second;
+                    priority.pop();
+                    pending.push_back(parent);
+                    aabb.add(tree.center_at(parent), tree.size_at(parent));
+                }
+
+                const glm::vec3 extent = aabb.extent();
+                const float min_extent = std::min({extent.x, extent.y, extent.z});
+                const float max_extent = std::max({extent.x, extent.y, extent.z});
+                if (max_extent >= 3.0f * min_extent) {
+                    const int axis = longest_axis(extent);
+                    const float split = axis_value((aabb.min + aabb.max) * 0.5f, axis);
+                    std::vector<std::uint32_t> below;
+                    std::vector<std::uint32_t> above;
+                    for (const std::uint32_t parent : pending) {
+                        (axis_value(tree.center_at(parent), axis) < split ? below : above).push_back(parent);
+                    }
+                    std::array<std::vector<std::uint32_t>, 2> split_batches{std::move(below), std::move(above)};
+                    std::sort(split_batches.begin(), split_batches.end(),
+                              [](const auto& a, const auto& b) { return a.size() > b.size(); });
+                    for (auto& next : split_batches) {
+                        if (!next.empty()) {
+                            batches.push_back(std::move(next));
+                        }
+                    }
+                    continue;
+                }
+
+                std::array<std::vector<std::uint32_t>, 8> octants;
+                const glm::vec3 split = (aabb.min + aabb.max) * 0.5f;
+                for (const std::uint32_t parent : pending) {
+                    const glm::vec3 center = tree.center_at(parent);
+                    const int octant = (center.x < split.x ? 0 : 1) +
+                                       (center.y < split.y ? 0 : 2) +
+                                       (center.z < split.z ? 0 : 4);
+                    octants[octant].push_back(parent);
+                }
+                for (const int octant : {0, 1, 3, 2, 6, 7, 5, 4}) {
+                    if (!octants[octant].empty()) {
+                        batches.push_back(std::move(octants[octant]));
+                    }
+                }
+            }
+
+            if (order_size != n) {
+                return std::unexpected("Spark RAD profile chunk_tree did not emit every node");
+            }
+
+            std::vector<int> order_i32(n);
+            for (std::size_t new_idx = 0; new_idx < n; ++new_idx) {
+                order_i32[new_idx] = static_cast<int>(order[new_idx]);
+            }
+
+            const Tensor gather_indices =
+                Tensor::from_vector(order_i32, {n}, input.means_raw().device());
+            const Tensor gather_indices_cpu =
+                Tensor::from_vector(order_i32, {n}, Device::CPU);
+
+            SplatData output = input.clone();
+            output.means_raw() = input.means_raw().index_select(0, gather_indices).contiguous();
+            output.sh0_raw() = input.sh0_raw().index_select(0, gather_indices).contiguous();
+            output.scaling_raw() = input.scaling_raw().index_select(0, gather_indices).contiguous();
+            output.rotation_raw() = input.rotation_raw().index_select(0, gather_indices).contiguous();
+            output.opacity_raw() = input.opacity_raw().index_select(0, gather_indices).contiguous();
+            if (input.max_sh_coeffs_rest() > 0) {
+                const Tensor shn = input.shN_canonical_cpu().index_select(0, gather_indices_cpu).contiguous();
+                output.shN_set_from_canonical(shn);
+            }
+            if (input.has_deleted_mask() &&
+                input.deleted().numel() == static_cast<std::size_t>(input.size())) {
+                output.deleted() = input.deleted().index_select(0, gather_indices).contiguous();
+                output.notify_deleted_mask_changed();
+            }
+
+            auto out_tree = std::make_unique<lfs::core::SplatLodTree>();
+            out_tree->child_count = std::move(out_child_count);
+            out_tree->child_start = std::move(out_child_start);
+            out_tree->lod_level.resize(n);
+            out_tree->centers.resize(n);
+            out_tree->sizes.resize(n);
+            for (std::size_t new_idx = 0; new_idx < n; ++new_idx) {
+                const std::uint32_t old_idx = order[new_idx];
+                out_tree->lod_level[new_idx] = tree.level_at(old_idx);
+                out_tree->centers[new_idx] = tree.center_at(old_idx);
+                out_tree->sizes[new_idx] = tree.size_at(old_idx);
+                const std::uint32_t child_start = out_tree->child_start[new_idx];
+                const std::uint16_t child_count = out_tree->child_count[new_idx];
+                if (child_count > 0 &&
+                    (child_start <= new_idx || static_cast<std::size_t>(child_start) + child_count > n)) {
+                    return std::unexpected("Spark RAD profile reorder produced invalid child links");
+                }
+            }
+
+            const std::size_t chunk_count =
+                (n + lfs::core::SplatLodTree::kChunkSplats - 1) / lfs::core::SplatLodTree::kChunkSplats;
+            out_tree->chunk_to_page.resize(chunk_count);
+            out_tree->page_to_chunk.resize(chunk_count);
+            std::iota(out_tree->chunk_to_page.begin(), out_tree->chunk_to_page.end(), 0u);
+            std::iota(out_tree->page_to_chunk.begin(), out_tree->page_to_chunk.end(), 0u);
+            out_tree->lod_opacity_encoded = tree.lod_opacity_encoded;
+            output.lod_tree = std::move(out_tree);
+            return output;
+        }
+
         std::pair<RadChunkMeta, std::vector<uint8_t>> encode_rad_chunk(
             uint32_t base, uint32_t count, int sh_degree, int sh_coeffs,
             const float* means_ptr,
@@ -2072,6 +2310,7 @@ namespace lfs::io {
             const uint32_t* child_start_ptr,
             bool lod_tree,
             int compression_level,
+            core::RadExportProfile profile,
             const cuda::RadEncodeQuantChunkOut* gpu_planes = nullptr,
             const std::function<bool(float)>& progress_callback = nullptr) {
 
@@ -2082,7 +2321,7 @@ namespace lfs::io {
             chunk_meta.max_sh = sh_degree;
             chunk_meta.lod_tree = lod_tree;
             if (lod_tree) {
-                chunk_meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
+                chunk_meta.splat_encoding = lod_splat_encoding_json(profile);
             }
 
             std::vector<EncodedProperty> encoded_props;
@@ -2417,11 +2656,13 @@ namespace lfs::io {
             explicit RadEncoder(int compression_level = GZ_LEVEL,
                                 bool flip_y = false,
                                 std::uint32_t file_chunk_size = DEFAULT_RAD_FILE_CHUNK_SIZE,
+                                core::RadExportProfile profile = core::RadExportProfile::LichtFeld,
                                 ExportProgressCallback progress_callback = nullptr,
                                 std::optional<core::ProvenanceStamp> provenance = {})
                 : compression_level_(compression_level),
                   flip_y_(flip_y),
                   file_chunk_size_(normalized_export_chunk_size(file_chunk_size)),
+                  profile_(profile),
                   progress_callback_(std::move(progress_callback)),
                   provenance_(std::move(provenance)) {}
 
@@ -2451,11 +2692,25 @@ namespace lfs::io {
                     auto lod_progress = [&](float p, const std::string& stage) -> bool {
                         return report_progress(p * 0.1f, stage);
                     };
-                    auto lod_result = lfs::core::build_bhatt_lod(*export_source, 1.25f, lod_progress);
+                    const float lod_base = profile_ == core::RadExportProfile::SparkBuildLod ? 1.75f : 1.25f;
+                    auto lod_result = lfs::core::build_bhatt_lod(*export_source, lod_base, lod_progress);
                     if (lod_result && (*lod_result)->lod_tree && (*lod_result)->lod_tree->has_tree()) {
                         lod_splat_data = std::move(**lod_result);
                         export_source = &lod_splat_data.value();
+                    } else if (profile_ == core::RadExportProfile::SparkBuildLod) {
+                        throw std::runtime_error(lod_result ? "Spark RAD profile failed to build LOD tree"
+                                                            : lod_result.error());
                     }
+                }
+
+                if (profile_ == core::RadExportProfile::SparkBuildLod &&
+                    export_source->lod_tree && export_source->lod_tree->has_tree()) {
+                    auto reordered = reorder_lod_for_spark_chunks(*export_source);
+                    if (!reordered) {
+                        throw std::runtime_error(reordered.error());
+                    }
+                    lod_splat_data = std::move(*reordered);
+                    export_source = &lod_splat_data.value();
                 }
 
                 // 0.1: Packing splat data
@@ -2494,7 +2749,7 @@ namespace lfs::io {
                 meta.lod_tree = lod_tree ? std::optional<bool>(true) : std::nullopt;
                 meta.chunk_size = file_chunk_size_;
                 if (lod_tree) {
-                    meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
+                    meta.splat_encoding = lod_splat_encoding_json(profile_);
                 }
                 if (provenance_) {
                     meta.comment = core::provenance_to_json(*provenance_);
@@ -2539,6 +2794,7 @@ namespace lfs::io {
                                 lod_tree ? packed.child_start.data() + base : nullptr,
                                 lod_tree,
                                 compression_level_,
+                                profile_,
                                 nullptr,
                                 chunk_progress_cb);
 
@@ -2727,6 +2983,7 @@ namespace lfs::io {
             int compression_level_;
             bool flip_y_;
             std::uint32_t file_chunk_size_;
+            core::RadExportProfile profile_;
             ExportProgressCallback progress_callback_;
             std::optional<core::ProvenanceStamp> provenance_;
 
@@ -4472,6 +4729,9 @@ namespace lfs::io {
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
         }
+        if (options.profile == core::RadExportProfile::SparkBuildLod) {
+            options.chunk_size = kRadStreamableChunkSplats;
+        }
 
         auto start = std::chrono::high_resolution_clock::now();
 
@@ -4489,6 +4749,7 @@ namespace lfs::io {
         RadEncoder encoder(compression_level,
                            options.flip_y,
                            options.chunk_size,
+                           options.profile,
                            scale_export_progress(options.progress_callback, 0.0f, 0.95f),
                            options.provenance);
         std::vector<uint8_t> data;
@@ -4972,6 +5233,7 @@ namespace lfs::io {
                 s.lod_tree ? chunk.child_start : nullptr,
                 s.lod_tree,
                 s.compression_level,
+                core::RadExportProfile::LichtFeld,
                 gpu_planes.empty() ? nullptr : &gpu_planes[i]);
 
             if (!emit_meta) {

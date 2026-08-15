@@ -95,6 +95,15 @@
               </select>
             </div>
           </div>
+          <div class="setting-row setting-row--aligned">
+            <span class="setting-row__label-col">@tr:export_dialog.rad_export_profile</span>
+            <div class="setting-row__control-col setting-row__control-col--fill">
+              <select data-value="rad_export_profile">
+                <option value="lichtfeld">@tr:export_dialog.rad_profile_lichtfeld</option>
+                <option value="spark-build-lod">@tr:export_dialog.rad_profile_spark_build_lod</option>
+              </select>
+            </div>
+          </div>
           <!-- Y-flip checkbox -->
           <div class="setting-row setting-row--aligned">
             <span class="setting-row__label-col">@tr:export_dialog.rad_flip_y</span>

@@ -227,6 +227,7 @@ namespace lfs::app {
             const param::OutputFormat format,
             const int sog_iterations,
             const param::RadExportMode rad_export_mode,
+            const core::RadExportProfile rad_profile,
             const int spz_version,
             const core::ProvenanceStamp& provenance,
             const lfs::io::ExportProgressCallback& progress = nullptr) {
@@ -247,6 +248,7 @@ namespace lfs::app {
                 return lfs::io::save_rad(splat, {
                                                     .output_path = output,
                                                     .chunk_size = radChunkSizeForMode(rad_export_mode),
+                                                    .profile = rad_profile,
                                                     .progress_callback = progress,
                                                     .provenance = provenance,
                                                 });
@@ -419,7 +421,7 @@ namespace lfs::app {
                     std::println(stderr, "  Error: {}", lod_chunk_size.error());
                     return false;
                 }
-                if (*lod_chunk_size) {
+                if (*lod_chunk_size && params.rad_profile != core::RadExportProfile::SparkBuildLod) {
                     return rechunkRadFile(input, output, radChunkSizeForMode(params.rad_export_mode),
                                           make_convert_provenance(params.include_provenance, input));
                 }
@@ -428,6 +430,7 @@ namespace lfs::app {
             // An explicit non-default builder always takes the bucketed
             // converter; the monolithic in-memory path is bhatt-only.
             if (params.format == param::OutputFormat::RAD && isPlyExtension(input) &&
+                params.rad_profile != core::RadExportProfile::SparkBuildLod &&
                 (tiled || params.lod_builder != param::LodBuilder::BHATT ||
                  shouldStreamLodConvert(input))) {
                 return streamLodConvertFile(input, output, params);
@@ -461,7 +464,7 @@ namespace lfs::app {
             ConvertProgressBar bar;
             const auto result = saveSplat(
                 *splat, output, params.format, params.sog_iterations,
-                params.rad_export_mode, params.spz_version,
+                params.rad_export_mode, params.rad_profile, params.spz_version,
                 make_convert_provenance(params.include_provenance, input),
                 [&bar](const float progress, const std::string& stage) {
                     return bar.report(progress, stage);
@@ -523,7 +526,8 @@ namespace lfs::app {
             for (const auto& output : outputs) {
                 std::println("  Saving: {}", path_to_utf8(output.path));
                 const auto result = saveSplat(**splat, output.path, output.format, params.sog_iterations,
-                                              param::RadExportMode::Stream, params.spz_version,
+                                              param::RadExportMode::Stream,
+                                              core::RadExportProfile::LichtFeld, params.spz_version,
                                               make_convert_provenance(params.include_provenance));
                 if (!result) {
                     LOG_ERROR("Save failed: {}", result.error().format());

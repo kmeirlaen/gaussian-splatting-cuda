@@ -1264,6 +1264,7 @@ namespace lfs::python {
                        const std::vector<std::string>& node_names, int sh_degree,
                        bool rad_flip_y,
                        bool rad_streamable,
+                       const std::string& rad_profile,
                        int spz_version,
                        bool include_provenance) {
         if (!g_export_callback)
@@ -1278,6 +1279,7 @@ namespace lfs::python {
                           static_cast<int>(names_ptrs.size()), sh_degree,
                           rad_flip_y,
                           rad_streamable,
+                          rad_profile.c_str(),
                           spz_version,
                           include_provenance);
     }

@@ -363,6 +363,38 @@ def test_export_panel_uses_nurec_usdz_dialog_and_format_id(export_panel_module):
     ]
 
 
+def test_export_panel_exports_rad_with_spark_profile(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.RAD
+    panel._selected_nodes = {"Tree"}
+    panel._rad_export_profile = "spark-build-lod"
+    state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
+    module.lf.export_scene = (
+        lambda fmt, path, nodes, sh_degree, **kwargs:
+        state.export_calls.append((fmt, path, tuple(nodes), sh_degree, kwargs))
+    )
+
+    panel._do_export()
+
+    assert state.export_calls == [
+        (
+            int(module.ExportFormat.RAD),
+            "/tmp/Tree.rad",
+            ("Tree",),
+            3,
+            {
+                "rad_flip_y": False,
+                "rad_streamable": True,
+                "rad_profile": "spark-build-lod",
+                "spz_version": 4,
+                "include_provenance": True,
+            },
+        ),
+    ]
+
+
 def test_export_panel_uses_colmap_folder_picker_without_selected_models(export_panel_module, tmp_path):
     module, state = export_panel_module
     panel = module.ExportPanel()
