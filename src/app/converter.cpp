@@ -419,15 +419,17 @@ namespace lfs::app {
                     std::println(stderr, "  Error: {}", lod_chunk_size.error());
                     return false;
                 }
-                if (*lod_chunk_size) {
+                if (*lod_chunk_size && params.rad_export_mode == param::RadExportMode::NonStream) {
                     return rechunkRadFile(input, output, radChunkSizeForMode(params.rad_export_mode),
                                           make_convert_provenance(params.include_provenance, input));
                 }
             }
 
-            // An explicit non-default builder always takes the bucketed
-            // converter; the monolithic in-memory path is bhatt-only.
+            // The bucketed out-of-core converter is LichtFeld-native and is
+            // kept behind non-stream RAD. Stream RAD follows Spark build-lod:
+            // one global Bhatt tree, Spark chunk ordering, 65,536-node chunks.
             if (params.format == param::OutputFormat::RAD && isPlyExtension(input) &&
+                params.rad_export_mode == param::RadExportMode::NonStream &&
                 (tiled || params.lod_builder != param::LodBuilder::BHATT ||
                  shouldStreamLodConvert(input))) {
                 return streamLodConvertFile(input, output, params);

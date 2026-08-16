@@ -19,6 +19,7 @@
 
 #include <cuda_runtime.h>
 #include <libdeflate.h>
+#include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
@@ -49,6 +50,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
@@ -819,7 +821,9 @@ namespace lfs::io {
             float max_val;
         };
 
-        Ln0R8Result encode_ln_0r8(const float* data, size_t dims, size_t count) {
+        Ln0R8Result encode_ln_0r8(const float* data, size_t dims, size_t count,
+                                  std::optional<float> forced_min = std::nullopt,
+                                  std::optional<float> forced_max = std::nullopt) {
             // First pass: compute ln of all positive scales and find range
             std::vector<float> log_values;
             log_values.reserve(count * dims);
@@ -837,8 +841,10 @@ namespace lfs::io {
                 }
             }
 
-            // Handle edge case: all zeros or single value
-            if (!std::isfinite(ln_min) || !std::isfinite(ln_max) || ln_max - ln_min < 1e-7f) {
+            if (forced_min.has_value() && forced_max.has_value()) {
+                ln_min = forced_min.value();
+                ln_max = forced_max.value();
+            } else if (!std::isfinite(ln_min) || !std::isfinite(ln_max) || ln_max - ln_min < 1e-7f) {
                 ln_min = -10.0f; // Default ~exp(-10) = 4.5e-5
                 ln_max = 2.0f;   // Default exp(2) = 7.4
             }
@@ -1395,7 +1401,10 @@ namespace lfs::io {
                 return result;
             }
 
-            static EncodedProperty encode_rgb(const float* data, size_t dims, size_t count, RadRgbEncoding encoding) {
+            static EncodedProperty encode_rgb(const float* data, size_t dims, size_t count,
+                                              RadRgbEncoding encoding,
+                                              std::optional<float> forced_min = std::nullopt,
+                                              std::optional<float> forced_max = std::nullopt) {
                 EncodedProperty result;
 
                 switch (encoding) {
@@ -1412,7 +1421,7 @@ namespace lfs::io {
                     break;
 
                 case RadRgbEncoding::R8: {
-                    auto r8_result = encode_r8(data, dims, count);
+                    auto r8_result = encode_r8(data, dims, count, forced_min, forced_max);
                     result.data = std::move(r8_result.data);
                     result.min_val = r8_result.min_val;
                     result.max_val = r8_result.max_val;
@@ -1422,7 +1431,7 @@ namespace lfs::io {
                     break;
 
                 case RadRgbEncoding::R8Delta: {
-                    auto r8d_result = encode_r8_delta(data, dims, count);
+                    auto r8d_result = encode_r8_delta(data, dims, count, forced_min, forced_max);
                     result.data = std::move(r8d_result.data);
                     result.min_val = r8d_result.min_val;
                     result.max_val = r8d_result.max_val;
@@ -1432,7 +1441,7 @@ namespace lfs::io {
                     break;
 
                 default: {
-                    auto r8d_result = encode_r8_delta(data, dims, count);
+                    auto r8d_result = encode_r8_delta(data, dims, count, forced_min, forced_max);
                     result.data = std::move(r8d_result.data);
                     result.min_val = r8d_result.min_val;
                     result.max_val = r8d_result.max_val;
@@ -1445,7 +1454,10 @@ namespace lfs::io {
                 return result;
             }
 
-            static EncodedProperty encode_scales(const float* data, size_t dims, size_t count, RadScalesEncoding encoding) {
+            static EncodedProperty encode_scales(const float* data, size_t dims, size_t count,
+                                                 RadScalesEncoding encoding,
+                                                 std::optional<float> forced_min = std::nullopt,
+                                                 std::optional<float> forced_max = std::nullopt) {
                 EncodedProperty result;
 
                 switch (encoding) {
@@ -1456,7 +1468,7 @@ namespace lfs::io {
                     break;
 
                 case RadScalesEncoding::Ln0R8: {
-                    auto ln_result = encode_ln_0r8(data, dims, count);
+                    auto ln_result = encode_ln_0r8(data, dims, count, forced_min, forced_max);
                     result.data = std::move(ln_result.data);
                     result.min_val = ln_result.min_val;
                     result.max_val = ln_result.max_val;
@@ -1472,8 +1484,16 @@ namespace lfs::io {
                     break;
 
                 default:
-                    result.data = encode_ln_f16(data, dims, count);
-                    result.encoding = "ln_f16";
+                    if (forced_min.has_value() && forced_max.has_value()) {
+                        auto ln_result = encode_ln_0r8(data, dims, count, forced_min, forced_max);
+                        result.data = std::move(ln_result.data);
+                        result.min_val = ln_result.min_val;
+                        result.max_val = ln_result.max_val;
+                        result.encoding = "ln_0r8";
+                    } else {
+                        result.data = encode_ln_f16(data, dims, count);
+                        result.encoding = "ln_f16";
+                    }
                     result.compression = "none";
                     break;
                 }
@@ -1520,7 +1540,9 @@ namespace lfs::io {
                 return result;
             }
 
-            static EncodedProperty encode_sh(const float* data, size_t dims, size_t count, RadShEncoding encoding) {
+            static EncodedProperty encode_sh(const float* data, size_t dims, size_t count,
+                                             RadShEncoding encoding,
+                                             std::optional<float> forced_max = std::nullopt) {
                 EncodedProperty result;
 
                 switch (encoding) {
@@ -1537,7 +1559,7 @@ namespace lfs::io {
                     break;
 
                 case RadShEncoding::S8: {
-                    auto s8_result = encode_s8(data, dims, count);
+                    auto s8_result = encode_s8(data, dims, count, forced_max);
                     result.data.assign(reinterpret_cast<const uint8_t*>(s8_result.data.data()),
                                        reinterpret_cast<const uint8_t*>(s8_result.data.data() + s8_result.data.size()));
                     result.min_val = -s8_result.max_abs;
@@ -1548,7 +1570,7 @@ namespace lfs::io {
                     break;
 
                 case RadShEncoding::S8Delta: {
-                    auto s8d_result = encode_s8_delta(data, dims, count);
+                    auto s8d_result = encode_s8_delta(data, dims, count, forced_max);
                     result.data.assign(reinterpret_cast<const uint8_t*>(s8d_result.data.data()),
                                        reinterpret_cast<const uint8_t*>(s8d_result.data.data() + s8d_result.data.size()));
                     result.min_val = -s8d_result.max_abs;
@@ -1559,7 +1581,7 @@ namespace lfs::io {
                     break;
 
                 default: {
-                    auto s8_result = encode_s8(data, dims, count);
+                    auto s8_result = encode_s8(data, dims, count, forced_max);
                     result.data.assign(reinterpret_cast<const uint8_t*>(s8_result.data.data()),
                                        reinterpret_cast<const uint8_t*>(s8_result.data.data() + s8_result.data.size()));
                     result.min_val = -s8_result.max_abs;
@@ -2073,7 +2095,8 @@ namespace lfs::io {
             bool lod_tree,
             int compression_level,
             const cuda::RadEncodeQuantChunkOut* gpu_planes = nullptr,
-            const std::function<bool(float)>& progress_callback = nullptr) {
+            const std::function<bool(float)>& progress_callback = nullptr,
+            const nlohmann::json* splat_encoding = nullptr) {
 
             RadChunkMeta chunk_meta;
             chunk_meta.version = 1;
@@ -2082,11 +2105,23 @@ namespace lfs::io {
             chunk_meta.max_sh = sh_degree;
             chunk_meta.lod_tree = lod_tree;
             if (lod_tree) {
-                chunk_meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
+                chunk_meta.splat_encoding = splat_encoding != nullptr
+                                                ? *splat_encoding
+                                                : nlohmann::json{{"lodOpacity", true}};
             }
 
             std::vector<EncodedProperty> encoded_props;
             encoded_props.reserve(lod_tree ? 12 : 10);
+            const auto encoding_number = [&](const char* key) -> std::optional<float> {
+                if (splat_encoding == nullptr || !splat_encoding->is_object()) {
+                    return std::nullopt;
+                }
+                const auto it = splat_encoding->find(key);
+                if (it == splat_encoding->end() || !it->is_number()) {
+                    return std::nullopt;
+                }
+                return it->get<float>();
+            };
 
             // Thread-local buffers for temporary data to avoid allocation contention
             thread_local std::vector<float> tl_sh_data;
@@ -2178,7 +2213,9 @@ namespace lfs::io {
                     enc_data = gpu_planes->rgb;
                     enc_size = static_cast<size_t>(count) * 3;
                 } else {
-                    encoded = PropertyEncoder::encode_rgb(sh0_ptr, 3, count, RadRgbEncoding::Auto);
+                    encoded = PropertyEncoder::encode_rgb(sh0_ptr, 3, count, RadRgbEncoding::Auto,
+                                                          encoding_number("rgbMin"),
+                                                          encoding_number("rgbMax"));
                     enc_data = encoded.data.data();
                     enc_size = encoded.data.size();
                 }
@@ -2211,7 +2248,9 @@ namespace lfs::io {
             // Encode scales - all 3 components together as single property
             {
                 // Encode all 3 components together as "scales" property
-                auto encoded = PropertyEncoder::encode_scales(scales_ptr, 3, count, RadScalesEncoding::Auto);
+                auto encoded = PropertyEncoder::encode_scales(scales_ptr, 3, count, RadScalesEncoding::Auto,
+                                                              encoding_number("lnScaleMin"),
+                                                              encoding_number("lnScaleMax"));
                 auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level);
 
                 RadChunkProperty prop;
@@ -2287,7 +2326,10 @@ namespace lfs::io {
                             }
                         }
 
-                        encoded = PropertyEncoder::encode_sh(tl_sh_data.data(), dims, count, RadShEncoding::Auto);
+                        encoded = PropertyEncoder::encode_sh(tl_sh_data.data(), dims, count, RadShEncoding::Auto,
+                                                             encoding_number(std::string_view(prop_name) == PROP_SH1 ? "sh1Max"
+                                                                             : std::string_view(prop_name) == PROP_SH2 ? "sh2Max"
+                                                                                                                         : "sh3Max"));
                         enc_data = encoded.data.data();
                         enc_size = encoded.data.size();
                     }
@@ -2408,6 +2450,304 @@ namespace lfs::io {
             return {chunk_meta, payload};
         }
 
+        struct SparkAabb {
+            glm::vec3 min{std::numeric_limits<float>::infinity()};
+            glm::vec3 max{-std::numeric_limits<float>::infinity()};
+
+            void include(const glm::vec3& mn, const glm::vec3& mx) {
+                min = glm::min(min, mn);
+                max = glm::max(max, mx);
+            }
+
+            [[nodiscard]] glm::vec3 center() const { return (min + max) * 0.5f; }
+            [[nodiscard]] glm::vec3 extent() const { return max - min; }
+        };
+
+        lfs::Error spark_lod_error(std::string detail) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .user_message = "Invalid RAD LoD tree",
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        float normalized_quat_component(const float* q, const int component) {
+            double sum = 0.0;
+            for (int i = 0; i < 4; ++i) {
+                sum += q[i] * q[i];
+            }
+            const float inv = 1.0f / std::max(std::sqrt(static_cast<float>(sum)), 1.0e-12f);
+            return q[component] * inv;
+        }
+
+        SparkAabb spark_splat_aabb(const float* center, const float* scale, const float* rotation) {
+            const float x = normalized_quat_component(rotation, 0);
+            const float y = normalized_quat_component(rotation, 1);
+            const float z = normalized_quat_component(rotation, 2);
+            const float w = normalized_quat_component(rotation, 3);
+            const glm::mat3 rmat = glm::mat3_cast(glm::quat(w, x, y, z));
+            const glm::vec3 r{
+                std::max(scale[0], 1.0e-3f) * 1.5f,
+                std::max(scale[1], 1.0e-3f) * 1.5f,
+                std::max(scale[2], 1.0e-3f) * 1.5f,
+            };
+            const glm::vec3 half{
+                std::abs(rmat[0][0]) * r.x + std::abs(rmat[1][0]) * r.y + std::abs(rmat[2][0]) * r.z,
+                std::abs(rmat[0][1]) * r.x + std::abs(rmat[1][1]) * r.y + std::abs(rmat[2][1]) * r.z,
+                std::abs(rmat[0][2]) * r.x + std::abs(rmat[1][2]) * r.y + std::abs(rmat[2][2]) * r.z,
+            };
+            const glm::vec3 c{center[0], center[1], center[2]};
+            return {.min = c - half, .max = c + half};
+        }
+
+        lfs::Result<SplatData> reorder_lod_for_spark_chunks(const SplatData& input) {
+            if (!input.lod_tree || !input.lod_tree->has_tree()) {
+                return spark_lod_error("Spark RAD export requires a materialized LoD tree");
+            }
+
+            const auto& tree = *input.lod_tree;
+            const std::size_t node_count = tree.total_nodes();
+            if (node_count == 0 || node_count != static_cast<std::size_t>(input.size())) {
+                return spark_lod_error("LoD tree node count does not match splat data");
+            }
+
+            auto cpu_contiguous = [](Tensor tensor) {
+                return tensor.contiguous().to(Device::CPU);
+            };
+
+            Tensor means_cpu = cpu_contiguous(input.means_raw());
+            Tensor sh0_cpu = cpu_contiguous(input.sh0_raw());
+            Tensor scaling_cpu = cpu_contiguous(input.scaling_raw());
+            Tensor rotation_cpu = cpu_contiguous(input.rotation_raw());
+            Tensor opacity_cpu = cpu_contiguous(input.opacity_raw());
+            Tensor shN_cpu;
+            const int sh_degree = std::clamp(input.get_max_sh_degree(), 0, 3);
+            const int sh_coeffs = sh_degree > 0 ? SH_COEFFS_FOR_DEGREE[sh_degree] : 0;
+            if (sh_coeffs > 0) {
+                shN_cpu = input.shN_canonical_cpu();
+            }
+
+            const float* const means = means_cpu.ptr<float>();
+            const float* const sh0 = sh0_cpu.ptr<float>();
+            const float* const scaling_raw = scaling_cpu.ptr<float>();
+            const float* const rotation = rotation_cpu.ptr<float>();
+            const float* const opacity = opacity_cpu.ptr<float>();
+            const float* const shN = sh_coeffs > 0 ? shN_cpu.ptr<float>() : nullptr;
+
+            std::vector<float> scales(node_count * 3u);
+            for (std::size_t i = 0; i < scales.size(); ++i) {
+                scales[i] = std::exp(scaling_raw[i]);
+            }
+
+            struct Candidate {
+                float size = 0.0f;
+                std::uint32_t node = 0;
+                bool operator<(const Candidate& other) const {
+                    if (size == other.size) {
+                        return node < other.node;
+                    }
+                    return size < other.size;
+                }
+            };
+            struct Batch {
+                std::vector<std::uint32_t> nodes;
+            };
+
+            constexpr std::uint32_t kBatchSize = SPARK_CHUNK_SIZE;
+            constexpr std::uint32_t kMinBatchSize = 8u * 1024u;
+            constexpr std::array<int, 8> kOctantOrder = {0, 1, 3, 2, 6, 7, 5, 4};
+            constexpr std::uint32_t kInvalid = std::numeric_limits<std::uint32_t>::max();
+
+            std::vector<std::uint32_t> order;
+            order.reserve(node_count);
+            order.push_back(0);
+
+            std::vector<std::uint32_t> old_to_new(node_count, kInvalid);
+            std::vector<std::uint32_t> remapped_child_start(node_count, 0);
+            std::vector<std::uint16_t> remapped_child_count(node_count, 0);
+            old_to_new[0] = 0;
+
+            std::vector<Batch> batches;
+            batches.push_back(Batch{.nodes = {0}});
+
+            auto split_remaining = [&](const std::vector<std::uint32_t>& remaining) {
+                if (remaining.empty()) {
+                    return;
+                }
+
+                SparkAabb box;
+                for (const std::uint32_t old : remaining) {
+                    const auto aabb = spark_splat_aabb(means + static_cast<std::size_t>(old) * 3u,
+                                                       scales.data() + static_cast<std::size_t>(old) * 3u,
+                                                       rotation + static_cast<std::size_t>(old) * 4u);
+                    box.include(aabb.min, aabb.max);
+                }
+
+                const glm::vec3 center = box.center();
+                const glm::vec3 extent = box.extent();
+                const float min_extent = std::max(std::min({extent.x, extent.y, extent.z}), 1.0e-12f);
+                std::vector<Batch> next_batches;
+                if (std::max({extent.x, extent.y, extent.z}) >= 3.0f * min_extent) {
+                    int axis = 0;
+                    if (extent.y > extent.x && extent.y >= extent.z) {
+                        axis = 1;
+                    } else if (extent.z > extent.x && extent.z > extent.y) {
+                        axis = 2;
+                    }
+                    std::array<std::vector<std::uint32_t>, 2> split;
+                    for (const std::uint32_t old : remaining) {
+                        const float value = means[static_cast<std::size_t>(old) * 3u + static_cast<std::size_t>(axis)];
+                        const float mid = axis == 0 ? center.x : axis == 1 ? center.y
+                                                                           : center.z;
+                        split[value < mid ? 0 : 1].push_back(old);
+                    }
+                    for (auto& nodes : split) {
+                        if (!nodes.empty()) {
+                            next_batches.push_back(Batch{.nodes = std::move(nodes)});
+                        }
+                    }
+                    std::ranges::sort(next_batches, [](const Batch& a, const Batch& b) {
+                        return a.nodes.size() > b.nodes.size();
+                    });
+                } else {
+                    std::array<std::vector<std::uint32_t>, 8> octants;
+                    for (const std::uint32_t old : remaining) {
+                        const std::size_t base = static_cast<std::size_t>(old) * 3u;
+                        const int octant =
+                            (means[base + 0u] > center.x ? 1 : 0) |
+                            (means[base + 1u] > center.y ? 2 : 0) |
+                            (means[base + 2u] > center.z ? 4 : 0);
+                        octants[static_cast<std::size_t>(octant)].push_back(old);
+                    }
+                    for (const int octant : kOctantOrder) {
+                        auto& nodes = octants[static_cast<std::size_t>(octant)];
+                        if (!nodes.empty()) {
+                            next_batches.push_back(Batch{.nodes = std::move(nodes)});
+                        }
+                    }
+                }
+
+                for (auto& batch : next_batches) {
+                    batches.push_back(std::move(batch));
+                }
+            };
+
+            for (std::size_t batch_index = 0; batch_index < batches.size(); ++batch_index) {
+                std::priority_queue<Candidate> queue;
+                for (const std::uint32_t old : batches[batch_index].nodes) {
+                    if (old >= node_count) {
+                        return spark_lod_error("LoD batch references a node outside the tree");
+                    }
+                    queue.push(Candidate{.size = tree.size_at(old), .node = old});
+                }
+
+                const std::uint32_t start = static_cast<std::uint32_t>(order.size());
+                const std::uint32_t end =
+                    ((start + kMinBatchSize + kBatchSize - 1u) / kBatchSize) * kBatchSize;
+                std::vector<std::uint32_t> remaining;
+
+                while (!queue.empty()) {
+                    const Candidate candidate = queue.top();
+                    queue.pop();
+                    const std::uint32_t old = candidate.node;
+                    const std::uint16_t child_count = tree.child_count_at(old);
+                    if (child_count == 0) {
+                        continue;
+                    }
+                    const std::uint32_t child_start = tree.child_start_at(old);
+                    if (static_cast<std::uint64_t>(child_start) + child_count > node_count) {
+                        return spark_lod_error("LoD child range exceeds node count");
+                    }
+                    if (child_count > kBatchSize) {
+                        return spark_lod_error("LoD node has more children than a Spark chunk can hold");
+                    }
+                    if (order.size() + child_count > end) {
+                        remaining.push_back(old);
+                        while (!queue.empty()) {
+                            remaining.push_back(queue.top().node);
+                            queue.pop();
+                        }
+                        break;
+                    }
+                    remapped_child_start[old] = static_cast<std::uint32_t>(order.size());
+                    remapped_child_count[old] = child_count;
+                    for (std::uint32_t child = child_start; child < child_start + child_count; ++child) {
+                        if (old_to_new[child] != kInvalid) {
+                            return spark_lod_error("LoD tree references a child more than once");
+                        }
+                        old_to_new[child] = static_cast<std::uint32_t>(order.size());
+                        order.push_back(child);
+                        queue.push(Candidate{.size = tree.size_at(child), .node = child});
+                    }
+                }
+
+                split_remaining(remaining);
+            }
+
+            if (order.size() != node_count) {
+                return spark_lod_error("Spark LoD ordering did not visit every node");
+            }
+
+            Tensor out_means = Tensor::empty({node_count, std::size_t{3}}, Device::CPU, lfs::core::DataType::Float32);
+            Tensor out_sh0 = Tensor::empty({node_count, std::size_t{1}, std::size_t{3}}, Device::CPU, lfs::core::DataType::Float32);
+            Tensor out_scaling = Tensor::empty({node_count, std::size_t{3}}, Device::CPU, lfs::core::DataType::Float32);
+            Tensor out_rotation = Tensor::empty({node_count, std::size_t{4}}, Device::CPU, lfs::core::DataType::Float32);
+            Tensor out_opacity = Tensor::empty({node_count, std::size_t{1}}, Device::CPU, lfs::core::DataType::Float32);
+            Tensor out_shN;
+            if (sh_coeffs > 0) {
+                out_shN = Tensor::empty({node_count, static_cast<std::size_t>(sh_coeffs), std::size_t{3}},
+                                        Device::CPU, lfs::core::DataType::Float32);
+            }
+
+            float* const out_means_ptr = out_means.ptr<float>();
+            float* const out_sh0_ptr = out_sh0.ptr<float>();
+            float* const out_scaling_ptr = out_scaling.ptr<float>();
+            float* const out_rotation_ptr = out_rotation.ptr<float>();
+            float* const out_opacity_ptr = out_opacity.ptr<float>();
+            float* const out_shN_ptr = sh_coeffs > 0 ? out_shN.ptr<float>() : nullptr;
+
+            auto out_tree = std::make_unique<lfs::core::SplatLodTree>();
+            out_tree->child_count.resize(node_count);
+            out_tree->child_start.resize(node_count);
+            out_tree->lod_level.resize(node_count);
+            out_tree->centers.resize(node_count);
+            out_tree->sizes.resize(node_count);
+            out_tree->lod_opacity_encoded = tree.lod_opacity_encoded;
+
+            for (std::size_t new_index = 0; new_index < node_count; ++new_index) {
+                const std::size_t old = order[new_index];
+                std::memcpy(out_means_ptr + new_index * 3u, means + old * 3u, 3u * sizeof(float));
+                std::memcpy(out_sh0_ptr + new_index * 3u, sh0 + old * 3u, 3u * sizeof(float));
+                std::memcpy(out_scaling_ptr + new_index * 3u, scaling_raw + old * 3u, 3u * sizeof(float));
+                std::memcpy(out_rotation_ptr + new_index * 4u, rotation + old * 4u, 4u * sizeof(float));
+                out_opacity_ptr[new_index] = opacity[old];
+                if (out_shN_ptr != nullptr) {
+                    std::memcpy(out_shN_ptr + new_index * static_cast<std::size_t>(sh_coeffs) * 3u,
+                                shN + old * static_cast<std::size_t>(sh_coeffs) * 3u,
+                                static_cast<std::size_t>(sh_coeffs) * 3u * sizeof(float));
+                }
+                out_tree->child_count[new_index] = remapped_child_count[old];
+                out_tree->child_start[new_index] = remapped_child_start[old];
+                out_tree->lod_level[new_index] = tree.level_at(old);
+                out_tree->centers[new_index] = tree.center_at(old);
+                out_tree->sizes[new_index] = tree.size_at(old);
+            }
+
+            SplatData output(sh_degree,
+                             std::move(out_means),
+                             std::move(out_sh0),
+                             std::move(out_shN),
+                             std::move(out_scaling),
+                             std::move(out_rotation),
+                             std::move(out_opacity),
+                             input.get_scene_scale(),
+                             SplatData::ShNLayout::Canonical);
+            output.lod_tree = std::move(out_tree);
+            return output;
+        }
+
         // ============================================================================
         // RAD Encoder
         // ============================================================================
@@ -2433,7 +2773,9 @@ namespace lfs::io {
 
                 std::optional<SplatData> visible_splat_data;
                 std::optional<SplatData> lod_splat_data;
+                std::optional<SplatData> spark_lod_splat_data;
                 const SplatData* export_source = &splat_data;
+                const bool spark_compatible = file_chunk_size_ == SPARK_CHUNK_SIZE;
 
                 const bool has_deleted = splat_data.has_deleted_mask() && splat_data.deleted().count_nonzero() > 0;
 
@@ -2451,11 +2793,25 @@ namespace lfs::io {
                     auto lod_progress = [&](float p, const std::string& stage) -> bool {
                         return report_progress(p * 0.1f, stage);
                     };
-                    auto lod_result = lfs::core::build_bhatt_lod(*export_source, 1.25f, lod_progress);
+                    auto lod_result = lfs::core::build_bhatt_lod(*export_source,
+                                                                 spark_compatible ? 1.75f : 1.25f,
+                                                                 lod_progress);
                     if (lod_result && (*lod_result)->lod_tree && (*lod_result)->lod_tree->has_tree()) {
                         lod_splat_data = std::move(**lod_result);
                         export_source = &lod_splat_data.value();
                     }
+                }
+
+                if (spark_compatible && export_source->lod_tree && export_source->lod_tree->has_tree()) {
+                    auto reordered = reorder_lod_for_spark_chunks(*export_source);
+                    if (!reordered) {
+                        throw std::runtime_error(
+                            std::format("{}: {}",
+                                        reordered.error().user_message(),
+                                        reordered.error().detail()));
+                    }
+                    spark_lod_splat_data = std::move(*reordered);
+                    export_source = &spark_lod_splat_data.value();
                 }
 
                 // 0.1: Packing splat data
@@ -2493,8 +2849,10 @@ namespace lfs::io {
                 meta.max_sh = sh_degree;
                 meta.lod_tree = lod_tree ? std::optional<bool>(true) : std::nullopt;
                 meta.chunk_size = file_chunk_size_;
+                nlohmann::json splat_encoding;
                 if (lod_tree) {
-                    meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
+                    splat_encoding = make_lod_splat_encoding(packed, spark_compatible);
+                    meta.splat_encoding = splat_encoding;
                 }
                 if (provenance_) {
                     meta.comment = core::provenance_to_json(*provenance_);
@@ -2540,7 +2898,8 @@ namespace lfs::io {
                                 lod_tree,
                                 compression_level_,
                                 nullptr,
-                                chunk_progress_cb);
+                                chunk_progress_cb,
+                                lod_tree ? &splat_encoding : nullptr);
 
                             chunk_ranges[chunk_idx].base = base;
                             chunk_ranges[chunk_idx].count = count;
@@ -2626,6 +2985,79 @@ namespace lfs::io {
                 std::vector<uint16_t> child_count;
                 std::vector<uint32_t> child_start;
             };
+
+            static float percentile(std::vector<float>& values, const float fraction) {
+                if (values.empty()) {
+                    return 0.0f;
+                }
+                const std::size_t index = std::min<std::size_t>(
+                    static_cast<std::size_t>(std::round(static_cast<float>(values.size()) * fraction)),
+                    values.size() - 1u);
+                std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(index), values.end());
+                return values[index];
+            }
+
+            static float sh_band_max(const PackedSplatData& packed, const int coeff_start, const int coeff_count) {
+                if (packed.shN == nullptr || coeff_start + coeff_count > packed.sh_coeffs) {
+                    return 1.0f;
+                }
+                std::vector<float> values;
+                values.reserve(packed.count * static_cast<std::size_t>(coeff_count) * 3u);
+                for (std::size_t i = 0; i < packed.count; ++i) {
+                    const float* const base =
+                        packed.shN + i * static_cast<std::size_t>(packed.sh_coeffs) * 3u;
+                    for (int coeff = coeff_start; coeff < coeff_start + coeff_count; ++coeff) {
+                        for (int channel = 0; channel < 3; ++channel) {
+                            values.push_back(base[static_cast<std::size_t>(coeff) * 3u +
+                                                  static_cast<std::size_t>(channel)]);
+                        }
+                    }
+                }
+                std::vector<float> high = values;
+                const float low_value = percentile(values, 0.05f);
+                const float high_value = percentile(high, 0.95f);
+                return std::max({std::abs(low_value), std::abs(high_value), 1.0f});
+            }
+
+            static nlohmann::json make_lod_splat_encoding(const PackedSplatData& packed,
+                                                          const bool spark_compatible) {
+                nlohmann::json encoding{{"lodOpacity", true}};
+                if (!spark_compatible || packed.count == 0) {
+                    return encoding;
+                }
+
+                std::vector<float> rgb(packed.sh0, packed.sh0 + packed.count * 3u);
+                std::vector<float> rgb_high = rgb;
+                const float rgb_min = std::min(percentile(rgb, 0.01f), 0.0f);
+                const float rgb_max = std::max(percentile(rgb_high, 0.99f), 1.0f);
+
+                std::vector<float> scale_values;
+                scale_values.reserve(packed.count * 2u);
+                for (std::size_t i = 0; i < packed.count; ++i) {
+                    std::array<float, 3> splat_scales = {
+                        packed.scales[i * 3u + 0u],
+                        packed.scales[i * 3u + 1u],
+                        packed.scales[i * 3u + 2u],
+                    };
+                    std::ranges::sort(splat_scales);
+                    scale_values.push_back(splat_scales[1]);
+                    scale_values.push_back(splat_scales[2]);
+                }
+                std::vector<float> scale_high = scale_values;
+                const float scale1 = percentile(scale_values, 0.01f);
+                const float scale99 = percentile(scale_high, 0.99f);
+                const float ln_scale_min = std::min(std::log(std::max(scale1, 1.0e-30f)), -12.0f);
+                const float ln_scale_max = std::max(std::log(std::max(scale99, 1.0e-30f)), 9.0f);
+
+                encoding["rgbMin"] = rgb_min;
+                encoding["rgbMax"] = rgb_max;
+                encoding["lnScaleMin"] = ln_scale_min;
+                encoding["lnScaleMax"] = ln_scale_max;
+                encoding["sh1Max"] = sh_band_max(packed, 0, 3);
+                encoding["sh2Max"] = sh_band_max(packed, 3, 5);
+                encoding["sh3Max"] = sh_band_max(packed, 8, 7);
+                return encoding;
+            }
 
             static PackedSplatData pack_splat_data(const SplatData& splat_data, bool flip_y = false) {
                 PackedSplatData packed;
@@ -2717,8 +3149,13 @@ namespace lfs::io {
                 }
                 if (splat_data.lod_tree && splat_data.lod_tree->has_tree()) {
                     packed.lod_tree = true;
-                    packed.child_count = splat_data.lod_tree->child_count;
-                    packed.child_start = splat_data.lod_tree->child_start;
+                    const std::size_t nodes = splat_data.lod_tree->total_nodes();
+                    packed.child_count.resize(nodes);
+                    packed.child_start.resize(nodes);
+                    for (std::size_t i = 0; i < nodes; ++i) {
+                        packed.child_count[i] = splat_data.lod_tree->child_count_at(i);
+                        packed.child_start[i] = splat_data.lod_tree->child_start_at(i);
+                    }
                 }
 
                 return packed;

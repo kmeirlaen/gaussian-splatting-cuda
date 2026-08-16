@@ -482,6 +482,91 @@ TEST(ArgumentParserTest, ConvertNoProvenanceDisablesStamp) {
     EXPECT_FALSE(mode->params.include_provenance);
 }
 
+TEST(ArgumentParserTest, ConvertRejectsTilesForStreamRadMode) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_stream_tiles");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "rad",
+        "--tiles",
+        "2x1"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--tiles requires --none-stream"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, ConvertAllowsTilesForNonStreamRadMode) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_non_stream_tiles");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "rad",
+        "--none-stream",
+        "--tiles",
+        "2x1"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_EQ(mode->params.rad_export_mode, lfs::core::param::RadExportMode::NonStream);
+    EXPECT_EQ(mode->params.tiles_x, 2u);
+    EXPECT_EQ(mode->params.tiles_y, 1u);
+}
+
+TEST(ArgumentParserTest, ConvertRejectsOctreeLodBuilderForStreamRadMode) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_stream_octree");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "rad",
+        "--lod-builder",
+        "octree"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--lod-builder octree requires --none-stream"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, ConvertRejectsRemovedRadProfileFlag) {
+    const auto dir = make_test_path("lfs_convert_arg_parser_rad_profile");
+    const auto input = std::filesystem::path(dir) / "input.ply";
+    std::ofstream(input).put('\n');
+
+    const std::string input_str = input.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "convert",
+        input_str.c_str(),
+        "-f",
+        "rad",
+        "--rad-profile",
+        "spark-build-lod"};
+
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    EXPECT_FALSE(parsed.has_value());
+}
+
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {
     const auto dir = make_test_path("lfs_arg_parser_add_splat");
     const auto data_path = std::filesystem::path(dir) / "data";

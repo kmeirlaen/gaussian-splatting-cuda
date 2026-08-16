@@ -1523,6 +1523,102 @@ TEST_F(PythonIOTest, RadSaveLoadRoundtripPreservesCompactSplat) {
     EXPECT_EQ(leaf_positions, expected_positions);
 }
 
+TEST_F(PythonIOTest, RadStreamSaveRealPlyUsesSparkSizedForwardLodChunks) {
+    const fs::path source_path = data_dir / "kerstbol-isolated-rotated_137502.ply";
+    if (!fs::exists(source_path)) {
+        GTEST_SKIP() << "real PLY fixture not available at " << source_path;
+    }
+
+    auto loader = Loader::create();
+    auto loaded_source = loader->load(source_path);
+    ASSERT_TRUE(loaded_source.has_value()) << loaded_source.error().format();
+
+    auto* splat_ptr = std::get_if<std::shared_ptr<SplatData>>(&loaded_source->data);
+    ASSERT_NE(splat_ptr, nullptr);
+    ASSERT_TRUE(*splat_ptr);
+
+    const fs::path output_path = temp_dir / "kerstbol_stream.rad";
+    RadSaveOptions options;
+    options.output_path = output_path;
+    options.compression_level = 1;
+    options.chunk_size = kRadStreamableChunkSplats;
+
+    const auto saved = save_rad(**splat_ptr, options);
+    ASSERT_TRUE(saved.has_value()) << saved.error().format();
+
+    const auto chunk_size = rad_lod_file_chunk_size(output_path);
+    ASSERT_TRUE(chunk_size.has_value()) << chunk_size.error();
+    ASSERT_TRUE(chunk_size->has_value());
+    EXPECT_EQ(**chunk_size, kRadStreamableChunkSplats);
+
+    std::ifstream rad_stream(output_path, std::ios::binary);
+    ASSERT_TRUE(rad_stream.is_open());
+    std::array<std::uint8_t, 8> rad_header{};
+    rad_stream.read(reinterpret_cast<char*>(rad_header.data()),
+                    static_cast<std::streamsize>(rad_header.size()));
+    ASSERT_TRUE(rad_stream.good());
+    const auto read_u32 = [](const std::uint8_t* bytes) {
+        return static_cast<std::uint32_t>(bytes[0]) |
+               (static_cast<std::uint32_t>(bytes[1]) << 8u) |
+               (static_cast<std::uint32_t>(bytes[2]) << 16u) |
+               (static_cast<std::uint32_t>(bytes[3]) << 24u);
+    };
+    const auto pad8 = [](const std::size_t size) {
+        return (size + 7u) & ~std::size_t{7u};
+    };
+    const std::uint32_t metadata_size = read_u32(rad_header.data() + 4);
+    std::string metadata_json(metadata_size, '\0');
+    rad_stream.read(metadata_json.data(), static_cast<std::streamsize>(metadata_json.size()));
+    ASSERT_TRUE(rad_stream.good());
+
+    const auto metadata = nlohmann::json::parse(metadata_json);
+    ASSERT_TRUE(metadata.contains("splatEncoding"));
+    const auto& splat_encoding = metadata.at("splatEncoding");
+    for (const char* key : {"rgbMin", "rgbMax", "lnScaleMin", "lnScaleMax",
+                            "sh1Max", "sh2Max", "sh3Max"}) {
+        ASSERT_TRUE(splat_encoding.contains(key)) << key;
+        EXPECT_TRUE(splat_encoding.at(key).is_number()) << key;
+    }
+    ASSERT_TRUE(metadata.at("chunks").is_array());
+    ASSERT_FALSE(metadata.at("chunks").empty());
+
+    const auto first_chunk_offset =
+        8u + pad8(metadata_size) +
+        metadata.at("chunks").front().at("offset").get<std::uint64_t>();
+    rad_stream.seekg(static_cast<std::streamoff>(first_chunk_offset), std::ios::beg);
+    ASSERT_TRUE(rad_stream.good());
+    std::array<std::uint8_t, 8> chunk_header{};
+    rad_stream.read(reinterpret_cast<char*>(chunk_header.data()),
+                    static_cast<std::streamsize>(chunk_header.size()));
+    ASSERT_TRUE(rad_stream.good());
+    const std::uint32_t chunk_metadata_size = read_u32(chunk_header.data() + 4);
+    std::string chunk_metadata_json(chunk_metadata_size, '\0');
+    rad_stream.read(chunk_metadata_json.data(),
+                    static_cast<std::streamsize>(chunk_metadata_json.size()));
+    ASSERT_TRUE(rad_stream.good());
+    const auto chunk_metadata = nlohmann::json::parse(chunk_metadata_json);
+    ASSERT_TRUE(chunk_metadata.contains("splatEncoding"));
+    EXPECT_EQ(chunk_metadata.at("splatEncoding"), splat_encoding);
+
+    const auto loaded_rad = load_rad(output_path);
+    ASSERT_TRUE(loaded_rad.has_value()) << loaded_rad.error();
+    ASSERT_TRUE(loaded_rad->lod_tree);
+    ASSERT_TRUE(loaded_rad->lod_tree->has_tree());
+    EXPECT_GT(loaded_rad->size(), (*splat_ptr)->size());
+
+    const auto& tree = *loaded_rad->lod_tree;
+    for (std::size_t i = 0; i < tree.total_nodes(); ++i) {
+        const std::uint16_t child_count = tree.child_count_at(i);
+        if (child_count == 0) {
+            continue;
+        }
+        const std::uint32_t child_start = tree.child_start_at(i);
+        EXPECT_GT(child_start, i);
+        EXPECT_LE(static_cast<std::uint64_t>(child_start) + child_count,
+                  static_cast<std::uint64_t>(tree.total_nodes()));
+    }
+}
+
 // Test progress callback
 TEST_F(PythonIOTest, ProgressCallback) {
     const size_t num_points = 1000;

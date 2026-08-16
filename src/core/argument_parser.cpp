@@ -1528,6 +1528,15 @@ namespace {
         }
         params.rad_export_mode = rad_none_stream ? param::RadExportMode::NonStream
                                                  : param::RadExportMode::Stream;
+        if (params.format == param::OutputFormat::RAD &&
+            params.rad_export_mode == param::RadExportMode::Stream) {
+            if (params.tiles_x > 1 || params.tiles_y > 1) {
+                return std::unexpected("--tiles requires --none-stream; streamable RAD uses Spark-compatible global LOD");
+            }
+            if (params.lod_builder == param::LodBuilder::OCTREE) {
+                return std::unexpected("--lod-builder octree requires --none-stream; streamable RAD uses Spark build-lod ordering");
+            }
+        }
 
         return core_args::ConvertMode{params};
     }
