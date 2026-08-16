@@ -2473,20 +2473,16 @@ namespace lfs::io {
             });
         }
 
-        float normalized_quat_component(const float* q, const int component) {
+        SparkAabb spark_splat_aabb(const float* center, const float* scale, const float* rotation) {
             double sum = 0.0;
             for (int i = 0; i < 4; ++i) {
-                sum += q[i] * q[i];
+                sum += rotation[i] * rotation[i];
             }
             const float inv = 1.0f / std::max(std::sqrt(static_cast<float>(sum)), 1.0e-12f);
-            return q[component] * inv;
-        }
-
-        SparkAabb spark_splat_aabb(const float* center, const float* scale, const float* rotation) {
-            const float x = normalized_quat_component(rotation, 0);
-            const float y = normalized_quat_component(rotation, 1);
-            const float z = normalized_quat_component(rotation, 2);
-            const float w = normalized_quat_component(rotation, 3);
+            const float x = rotation[0] * inv;
+            const float y = rotation[1] * inv;
+            const float z = rotation[2] * inv;
+            const float w = rotation[3] * inv;
             const glm::mat3 rmat = glm::mat3_cast(glm::quat(w, x, y, z));
             const glm::vec3 r{
                 std::max(scale[0], 1.0e-3f) * 1.5f,
@@ -3013,9 +3009,8 @@ namespace lfs::io {
                         }
                     }
                 }
-                std::vector<float> high = values;
                 const float low_value = percentile(values, 0.05f);
-                const float high_value = percentile(high, 0.95f);
+                const float high_value = percentile(values, 0.95f);
                 return std::max({std::abs(low_value), std::abs(high_value), 1.0f});
             }
 
@@ -3027,9 +3022,8 @@ namespace lfs::io {
                 }
 
                 std::vector<float> rgb(packed.sh0, packed.sh0 + packed.count * 3u);
-                std::vector<float> rgb_high = rgb;
                 const float rgb_min = std::min(percentile(rgb, 0.01f), 0.0f);
-                const float rgb_max = std::max(percentile(rgb_high, 0.99f), 1.0f);
+                const float rgb_max = std::max(percentile(rgb, 0.99f), 1.0f);
 
                 std::vector<float> scale_values;
                 scale_values.reserve(packed.count * 2u);
@@ -3043,9 +3037,8 @@ namespace lfs::io {
                     scale_values.push_back(splat_scales[1]);
                     scale_values.push_back(splat_scales[2]);
                 }
-                std::vector<float> scale_high = scale_values;
                 const float scale1 = percentile(scale_values, 0.01f);
-                const float scale99 = percentile(scale_high, 0.99f);
+                const float scale99 = percentile(scale_values, 0.99f);
                 const float ln_scale_min = std::min(std::log(std::max(scale1, 1.0e-30f)), -12.0f);
                 const float ln_scale_max = std::max(std::log(std::max(scale99, 1.0e-30f)), 9.0f);
 
