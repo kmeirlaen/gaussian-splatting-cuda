@@ -2074,45 +2074,6 @@ class OptimizationParams:
     def far_decay_scale(self, arg: float, /) -> None: ...
 
     @property
-    def growth_score_mode(self) -> str:
-        """MRNF growth score mode: 'sum' or 'max'"""
-
-    @growth_score_mode.setter
-    def growth_score_mode(self, arg: str, /) -> None: ...
-
-    @property
-    def growth_mode(self) -> str:
-        """MRNF growth mode: 'threshold' or 'always'"""
-
-    @growth_mode.setter
-    def growth_mode(self, arg: str, /) -> None: ...
-
-    @property
-    def growth_target_factor(self) -> float:
-        """Always-mode multiplicative growth per MRNF refine window"""
-
-    @growth_target_factor.setter
-    def growth_target_factor(self, arg: float, /) -> None: ...
-
-    @property
-    def far_unseen_cull_windows(self) -> int:
-        """
-        Prune far-field splats unseen for this many MRNF refine windows (0 disables)
-        """
-
-    @far_unseen_cull_windows.setter
-    def far_unseen_cull_windows(self, arg: int, /) -> None: ...
-
-    @property
-    def max_screen_clip_frac(self) -> float:
-        """
-        Soft-clip MRNF world scale when projected radius exceeds this fraction of min(W,H)
-        """
-
-    @max_screen_clip_frac.setter
-    def max_screen_clip_frac(self, arg: float, /) -> None: ...
-
-    @property
     def mean_step_mode(self) -> str:
         """MRNF position step mode: 'global' or 'per_splat'"""
 

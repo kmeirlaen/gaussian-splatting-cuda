@@ -81,13 +81,6 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--seed-opacity", "seed_opacity", Float},
             OptimizationCliBinding{"--far-growth-cap", "far_growth_cap", Float},
             OptimizationCliBinding{"--far-decay-scale", "far_decay_scale", Float},
-            OptimizationCliBinding{"--growth-score-mode", "growth_score_mode", Enum, false,
-                                   "; values: sum, max"},
-            OptimizationCliBinding{"--growth-mode", "growth_mode", Enum, false,
-                                   "; values: threshold, always"},
-            OptimizationCliBinding{"--growth-target-factor", "growth_target_factor", Float},
-            OptimizationCliBinding{"--far-unseen-cull-windows", "far_unseen_cull_windows", Integer},
-            OptimizationCliBinding{"--max-screen-clip-frac", "max_screen_clip_frac", Float},
             OptimizationCliBinding{"--mean-step-mode", "mean_step_mode", Enum, false,
                                    "; values: global, per_splat"},
             OptimizationCliBinding{"--mean-step-ratio-max", "mean_step_ratio_max", Float},
@@ -403,11 +396,6 @@ namespace {
             ::args::ValueFlag<float> seed_opacity(training_group, "seed_opacity", lfs::core::args::optimization_cli_help("--seed-opacity"), {"seed-opacity"});
             ::args::ValueFlag<float> far_growth_cap(training_group, "far_growth_cap", lfs::core::args::optimization_cli_help("--far-growth-cap"), {"far-growth-cap"});
             ::args::ValueFlag<float> far_decay_scale(training_group, "far_decay_scale", lfs::core::args::optimization_cli_help("--far-decay-scale"), {"far-decay-scale"});
-            ::args::ValueFlag<std::string> growth_score_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--growth-score-mode"), {"growth-score-mode"});
-            ::args::ValueFlag<std::string> growth_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--growth-mode"), {"growth-mode"});
-            ::args::ValueFlag<float> growth_target_factor(training_group, "factor", lfs::core::args::optimization_cli_help("--growth-target-factor"), {"growth-target-factor"});
-            ::args::ValueFlag<int> far_unseen_cull_windows(training_group, "windows", lfs::core::args::optimization_cli_help("--far-unseen-cull-windows"), {"far-unseen-cull-windows"});
-            ::args::ValueFlag<float> max_screen_clip_frac(training_group, "frac", lfs::core::args::optimization_cli_help("--max-screen-clip-frac"), {"max-screen-clip-frac"});
             ::args::ValueFlag<std::string> mean_step_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--mean-step-mode"), {"mean-step-mode"});
             ::args::ValueFlag<float> mean_step_ratio_max(training_group, "ratio", lfs::core::args::optimization_cli_help("--mean-step-ratio-max"), {"mean-step-ratio-max"});
             ::args::ValueFlag<float> far_mask_orbits(training_group, "orbits", lfs::core::args::optimization_cli_help("--far-mask-orbits"), {"far-mask-orbits"});
@@ -1102,11 +1090,6 @@ namespace {
                                         seed_opacity_val = cli_option_present({"--seed-opacity"}) ? std::optional<float>(::args::get(seed_opacity)) : std::optional<float>(),
                                         far_growth_cap_val = cli_option_present({"--far-growth-cap"}) ? std::optional<float>(::args::get(far_growth_cap)) : std::optional<float>(),
                                         far_decay_scale_val = cli_option_present({"--far-decay-scale"}) ? std::optional<float>(::args::get(far_decay_scale)) : std::optional<float>(),
-                                        growth_score_mode_val = cli_option_present({"--growth-score-mode"}) ? std::optional<std::string>(::args::get(growth_score_mode)) : std::optional<std::string>(),
-                                        growth_mode_val = cli_option_present({"--growth-mode"}) ? std::optional<std::string>(::args::get(growth_mode)) : std::optional<std::string>(),
-                                        growth_target_factor_val = cli_option_present({"--growth-target-factor"}) ? std::optional<float>(::args::get(growth_target_factor)) : std::optional<float>(),
-                                        far_unseen_cull_windows_val = cli_option_present({"--far-unseen-cull-windows"}) ? std::optional<int>(::args::get(far_unseen_cull_windows)) : std::optional<int>(),
-                                        max_screen_clip_frac_val = cli_option_present({"--max-screen-clip-frac"}) ? std::optional<float>(::args::get(max_screen_clip_frac)) : std::optional<float>(),
                                         mean_step_mode_val = cli_option_present({"--mean-step-mode"}) ? std::optional<std::string>(::args::get(mean_step_mode)) : std::optional<std::string>(),
                                         mean_step_ratio_max_val = cli_option_present({"--mean-step-ratio-max"}) ? std::optional<float>(::args::get(mean_step_ratio_max)) : std::optional<float>(),
                                         far_mask_orbits_val = cli_option_present({"--far-mask-orbits"}) ? std::optional<float>(::args::get(far_mask_orbits)) : std::optional<float>(),
@@ -1237,23 +1220,6 @@ namespace {
                 setVal(seed_opacity_val, opt.seed_opacity);
                 setVal(far_growth_cap_val, opt.far_growth_cap);
                 setVal(far_decay_scale_val, opt.far_decay_scale);
-                if (growth_score_mode_val) {
-                    if (const auto parsed = lfs::core::param::growth_score_mode_from_string(*growth_score_mode_val)) {
-                        opt.growth_score_mode = *parsed;
-                    } else {
-                        opt.growth_score_mode = static_cast<lfs::core::param::GrowthScoreMode>(-1);
-                    }
-                }
-                if (growth_mode_val) {
-                    if (const auto parsed = lfs::core::param::growth_mode_from_string(*growth_mode_val)) {
-                        opt.growth_mode = *parsed;
-                    } else {
-                        opt.growth_mode = static_cast<lfs::core::param::GrowthMode>(-1);
-                    }
-                }
-                setVal(growth_target_factor_val, opt.growth_target_factor);
-                setVal(far_unseen_cull_windows_val, opt.far_unseen_cull_windows);
-                setVal(max_screen_clip_frac_val, opt.max_screen_clip_frac);
                 if (mean_step_mode_val) {
                     if (const auto parsed = lfs::core::param::mean_step_mode_from_string(*mean_step_mode_val)) {
                         opt.mean_step_mode = *parsed;

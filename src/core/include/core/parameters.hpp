@@ -38,60 +38,10 @@ namespace lfs::core {
             World,
         };
 
-        enum class GrowthScoreMode {
-            Sum,
-            Max,
-        };
-
-        enum class GrowthMode {
-            Threshold,
-            Always,
-        };
-
         enum class MeanStepMode {
             Global,
             PerSplat,
         };
-
-        [[nodiscard]] inline constexpr std::string_view growth_score_mode_name(
-            const GrowthScoreMode mode) noexcept {
-            switch (mode) {
-            case GrowthScoreMode::Sum:
-                return "sum";
-            case GrowthScoreMode::Max:
-                return "max";
-            }
-            return "sum";
-        }
-
-        [[nodiscard]] inline constexpr std::optional<GrowthScoreMode> growth_score_mode_from_string(
-            const std::string_view value) noexcept {
-            if (value == "sum")
-                return GrowthScoreMode::Sum;
-            if (value == "max")
-                return GrowthScoreMode::Max;
-            return std::nullopt;
-        }
-
-        [[nodiscard]] inline constexpr std::string_view growth_mode_name(
-            const GrowthMode mode) noexcept {
-            switch (mode) {
-            case GrowthMode::Threshold:
-                return "threshold";
-            case GrowthMode::Always:
-                return "always";
-            }
-            return "threshold";
-        }
-
-        [[nodiscard]] inline constexpr std::optional<GrowthMode> growth_mode_from_string(
-            const std::string_view value) noexcept {
-            if (value == "threshold")
-                return GrowthMode::Threshold;
-            if (value == "always")
-                return GrowthMode::Always;
-            return std::nullopt;
-        }
 
         [[nodiscard]] inline constexpr std::string_view mean_step_mode_name(
             const MeanStepMode mode) noexcept {
@@ -303,11 +253,6 @@ namespace lfs::core {
             float seed_opacity = 0.03f;
             float far_growth_cap = 0.3f;
             float far_decay_scale = 0.25f;
-            GrowthScoreMode growth_score_mode = GrowthScoreMode::Sum;
-            GrowthMode growth_mode = GrowthMode::Threshold;
-            float growth_target_factor = 1.05f;
-            int far_unseen_cull_windows = 0;
-            float max_screen_clip_frac = 0.0f;
             MeanStepMode mean_step_mode = MeanStepMode::PerSplat;
             float mean_step_ratio_max = 300.0f;
             float far_mask_orbits = 2.0f;

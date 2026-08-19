@@ -456,11 +456,6 @@ EXPECTED_ADVANCED_IDS = (
     "seed_opacity",
     "far_growth_cap",
     "far_decay_scale",
-    "growth_score_mode",
-    "growth_mode",
-    "growth_target_factor",
-    "far_unseen_cull_windows",
-    "max_screen_clip_frac",
     "mean_step_mode",
     "mean_step_ratio_max",
     "far_mask_orbits",
@@ -501,7 +496,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 85
+    assert len(rendered) == len(set(rendered)) == 80
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)
@@ -561,11 +556,6 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "seed_opacity",
         "far_growth_cap",
         "far_decay_scale",
-        "growth_score_mode",
-        "growth_mode",
-        "growth_target_factor",
-        "far_unseen_cull_windows",
-        "max_screen_clip_frac",
         "mean_step_mode",
         "mean_step_ratio_max",
         "far_mask_orbits",

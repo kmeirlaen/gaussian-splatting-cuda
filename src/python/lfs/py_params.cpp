@@ -928,51 +928,6 @@ namespace lfs::python {
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_decay_scale = v; }); },
                 "Scale MRNF opacity/scale decay for far-field splats (1 disables)")
             .def_prop_rw(
-                "growth_score_mode",
-                [](PyOptimizationParams& self) {
-                    return std::string(growth_score_mode_name(self.params().growth_score_mode));
-                },
-                [](PyOptimizationParams&, const std::string& v) {
-                    modify_params([&v](auto& p) {
-                        if (const auto parsed = growth_score_mode_from_string(v)) {
-                            p.growth_score_mode = *parsed;
-                        } else {
-                            p.growth_score_mode = static_cast<GrowthScoreMode>(-1);
-                        }
-                    });
-                },
-                "MRNF growth score mode: 'sum' or 'max'")
-            .def_prop_rw(
-                "growth_mode",
-                [](PyOptimizationParams& self) {
-                    return std::string(growth_mode_name(self.params().growth_mode));
-                },
-                [](PyOptimizationParams&, const std::string& v) {
-                    modify_params([&v](auto& p) {
-                        if (const auto parsed = growth_mode_from_string(v)) {
-                            p.growth_mode = *parsed;
-                        } else {
-                            p.growth_mode = static_cast<GrowthMode>(-1);
-                        }
-                    });
-                },
-                "MRNF growth mode: 'threshold' or 'always'")
-            .def_prop_rw(
-                "growth_target_factor",
-                [](PyOptimizationParams& self) { return self.params().growth_target_factor; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.growth_target_factor = v; }); },
-                "Always-mode multiplicative growth per MRNF refine window")
-            .def_prop_rw(
-                "far_unseen_cull_windows",
-                [](PyOptimizationParams& self) { return self.params().far_unseen_cull_windows; },
-                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.far_unseen_cull_windows = v; }); },
-                "Prune far-field splats unseen for this many MRNF refine windows (0 disables)")
-            .def_prop_rw(
-                "max_screen_clip_frac",
-                [](PyOptimizationParams& self) { return self.params().max_screen_clip_frac; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.max_screen_clip_frac = v; }); },
-                "Soft-clip MRNF world scale when projected radius exceeds this fraction of min(W,H)")
-            .def_prop_rw(
                 "mean_step_mode",
                 [](PyOptimizationParams& self) {
                     return std::string(mean_step_mode_name(self.params().mean_step_mode));

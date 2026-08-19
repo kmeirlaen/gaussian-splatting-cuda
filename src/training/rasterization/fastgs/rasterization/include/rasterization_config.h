@@ -10,8 +10,7 @@
 
 enum class DensificationType : int { None = 0,
                                      MCMC = 1,
-                                     MRNF = 2,
-                                     MRNFMax = 3 };
+                                     MRNF = 2 };
 
 namespace fast_lfs::rasterization::config {
     // rendering constants

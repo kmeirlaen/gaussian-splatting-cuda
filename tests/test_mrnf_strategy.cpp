@@ -1397,136 +1397,6 @@ TEST(MRNFStrategyTest, SumModeFoldIsBitIdentical) {
     ASSERT_TRUE(splat_data._densification_info.is_valid());
     EXPECT_EQ(splat_data._densification_info.shape()[0], 2u);
     EXPECT_EQ(splat_data._densification_info.shape()[1], splat_data.size());
-    EXPECT_FALSE(strategy.uses_max_growth_score());
-    EXPECT_FALSE(strategy.uses_always_growth());
-}
-
-TEST(MRNFStrategyTest, MaxModeFoldUsesViewMaxRow) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.iterations = 1'000;
-    opt_params.max_cap = 32;
-    opt_params.growth_score_mode = param::GrowthScoreMode::Max;
-    strategy.initialize(opt_params);
-    ASSERT_TRUE(splat_data._densification_info.is_valid());
-    EXPECT_EQ(splat_data._densification_info.shape()[0], 3u);
-    EXPECT_TRUE(strategy.uses_max_growth_score());
-
-    const size_t n = splat_data.size();
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
-    std::vector<float> flat(n * 3, 0.f);
-    flat[0] = 2.0f;
-    flat[n] = 0.2f;
-    flat[2 * n] = 1.7f;
-    splat_data._densification_info = Tensor::from_vector(flat, {size_t{3}, n}, Device::CUDA);
-    mrnf_strategy::launch_fold_densification_and_zero(
-        strategy._vis_count.ptr<float>(),
-        strategy._refine_weight_max.ptr<float>(),
-        splat_data._densification_info.ptr<float>(),
-        n,
-        nullptr,
-        3,
-        true);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    EXPECT_FLOAT_EQ(strategy._vis_count.cpu().ptr<float>()[0], 2.0f);
-    EXPECT_FLOAT_EQ(strategy._refine_weight_max.cpu().ptr<float>()[0], 1.7f);
-}
-
-TEST(MRNFStrategyTest, FarUnseenCullIncrementsOnlyFarInvisible) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.iterations = 1'000;
-    opt_params.max_cap = 32;
-    opt_params.far_unseen_cull_windows = 2;
-    strategy.initialize(opt_params);
-    install_test_camera_hull(strategy);
-    ASSERT_TRUE(strategy._camera_hull_valid);
-    splat_data.set_frozen_ranges({SplatData::FrozenRange{.start = 9, .count = 1}});
-
-    const size_t n = splat_data.size();
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
-    std::vector<float> vis(n, 0.f);
-    vis[3] = 1.0f;
-    vis[1] = 0.0f;
-    strategy._vis_count = Tensor::from_vector(vis, {n}, Device::CUDA);
-
-    auto prune = Tensor::zeros_bool({n}, Device::CUDA);
-    strategy.apply_far_unseen_cull(prune);
-    ASSERT_TRUE(strategy._far_unseen_windows.is_valid());
-    const auto c1 = strategy._far_unseen_windows.cpu().to_vector_uint8();
-    const auto p1 = prune.cpu();
-    const auto means = splat_data.means().cpu();
-    const float* m = means.ptr<float>();
-    const bool* pruned = p1.ptr<bool>();
-    for (size_t i = 0; i < n; ++i) {
-        const bool far = is_far_of_test_hull(m[i * 3], m[i * 3 + 1], m[i * 3 + 2]);
-        if (i == 9) {
-            EXPECT_EQ(c1[i], 0) << "frozen";
-            EXPECT_FALSE(pruned[i]);
-            continue;
-        }
-        if (far && vis[i] == 0.f) {
-            EXPECT_EQ(c1[i], 1) << i;
-            EXPECT_FALSE(pruned[i]);
-        } else {
-            EXPECT_EQ(c1[i], 0) << i;
-            EXPECT_FALSE(pruned[i]);
-        }
-    }
-
-    strategy.apply_far_unseen_cull(prune);
-    const auto c2 = strategy._far_unseen_windows.cpu().to_vector_uint8();
-    const auto p2 = prune.cpu();
-    const bool* pruned2 = p2.ptr<bool>();
-    for (size_t i = 0; i < n; ++i) {
-        const bool far = is_far_of_test_hull(m[i * 3], m[i * 3 + 1], m[i * 3 + 2]);
-        if (i == 9) {
-            EXPECT_FALSE(pruned2[i]);
-            continue;
-        }
-        if (far && vis[i] == 0.f) {
-            EXPECT_EQ(c2[i], 2) << i;
-            EXPECT_TRUE(pruned2[i]) << i;
-        } else {
-            EXPECT_EQ(c2[i], 0) << i;
-            EXPECT_FALSE(pruned2[i]) << i;
-        }
-    }
-
-    vis[5] = 1.0f;
-    strategy._vis_count = Tensor::from_vector(vis, {n}, Device::CUDA);
-    prune = Tensor::zeros_bool({n}, Device::CUDA);
-    strategy.apply_far_unseen_cull(prune);
-    const auto c3 = strategy._far_unseen_windows.cpu().to_vector_uint8();
-    EXPECT_EQ(c3[5], 0);
-}
-
-TEST(MRNFStrategyTest, AlwaysModeGrowthAddsTargetAndIgnoresGates) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.iterations = 10'000;
-    opt_params.sh_degree_interval = 10'000;
-    opt_params.max_cap = 32;
-    opt_params.growth_grad_threshold = 10.0f;
-    opt_params.grow_fraction = 0.0f;
-    opt_params.grow_until_iter = 10'000;
-    opt_params.growth_mode = param::GrowthMode::Always;
-    opt_params.growth_target_factor = 1.5f;
-    opt_params.far_growth_cap = 1.0f;
-    opt_params.use_edge_map = false;
-    strategy.initialize(opt_params);
-
-    const size_t n = splat_data.size();
-    const size_t active = strategy.active_count();
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
-    strategy.grow_and_split(100, 0);
-    const int expected = static_cast<int>(std::round(0.5f * static_cast<float>(active)));
-    EXPECT_EQ(static_cast<int>(strategy.active_count()), static_cast<int>(active) + expected);
 }
 
 TEST(MRNFStrategyTest, ThresholdModeMatchesCurrentSelection) {
@@ -1539,7 +1409,6 @@ TEST(MRNFStrategyTest, ThresholdModeMatchesCurrentSelection) {
     opt_params.growth_grad_threshold = 10.0f;
     opt_params.grow_fraction = 1.0f;
     opt_params.grow_until_iter = 10'000;
-    opt_params.growth_mode = param::GrowthMode::Threshold;
     opt_params.far_growth_cap = 1.0f;
     strategy.initialize(opt_params);
 
@@ -1549,54 +1418,6 @@ TEST(MRNFStrategyTest, ThresholdModeMatchesCurrentSelection) {
     strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
     strategy.grow_and_split(100, 0);
     EXPECT_EQ(strategy.active_count(), active);
-}
-
-TEST(MRNFStrategyTest, ScreenClipScalesOnlyOverLimitRows) {
-    auto splat_data = create_mrnf_test_splat_data();
-    MRNF strategy(splat_data);
-    auto opt_params = vanilla_mrnf_params();
-    opt_params.iterations = 1'000;
-    opt_params.max_cap = 32;
-    opt_params.max_screen_clip_frac = 0.3f;
-    strategy.initialize(opt_params);
-    splat_data.set_frozen_ranges({SplatData::FrozenRange{.start = 0, .count = 1}});
-
-    const size_t n = splat_data.size();
-    splat_data.scaling_raw().zero_();
-    const auto scales_before = splat_data.scaling_raw().clone();
-
-    RenderOutput empty;
-    opt_params.max_screen_clip_frac = 0.0f;
-    strategy.set_optimization_params(opt_params);
-    strategy.apply_screen_size_clip(empty);
-    {
-        const auto after = splat_data.scaling_raw().cpu();
-        const auto before = scales_before.cpu();
-        for (size_t i = 0; i < after.numel(); ++i) {
-            EXPECT_FLOAT_EQ(after.ptr<float>()[i], before.ptr<float>()[i]);
-        }
-    }
-
-    opt_params.max_screen_clip_frac = 0.3f;
-    strategy.set_optimization_params(opt_params);
-    auto camera = make_explore_camera(100, 100);
-    RenderOutput render;
-    render.camera = &camera;
-    render.width = 100;
-    render.height = 100;
-    std::vector<float> radii(n, 10.0f);
-    radii[0] = 90.0f;
-    radii[2] = 60.0f;
-    render.radii = Tensor::from_vector(radii, {n}, Device::CUDA);
-    strategy.apply_screen_size_clip(render);
-
-    const auto after = splat_data.scaling_raw().cpu();
-    const float* s = after.ptr<float>();
-    EXPECT_NEAR(s[0], 0.0f, 1e-6f);
-    EXPECT_NEAR(s[1 * 3], 0.0f, 1e-6f);
-    EXPECT_NEAR(s[2 * 3], std::log(30.0f / 60.0f), 1e-5f);
-    EXPECT_NEAR(s[2 * 3 + 1], std::log(30.0f / 60.0f), 1e-5f);
-    EXPECT_NEAR(s[2 * 3 + 2], std::log(30.0f / 60.0f), 1e-5f);
 }
 
 namespace {

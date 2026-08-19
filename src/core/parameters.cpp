@@ -281,14 +281,6 @@ namespace lfs::core {
                 return std::format("explore_splits must be nonnegative (got {})", explore_splits);
             if (explore_seeds < 0)
                 return std::format("explore_seeds must be nonnegative (got {})", explore_seeds);
-            if (far_unseen_cull_windows < 0)
-                return std::format("far_unseen_cull_windows must be nonnegative (got {})",
-                                   far_unseen_cull_windows);
-            if (growth_score_mode != GrowthScoreMode::Sum &&
-                growth_score_mode != GrowthScoreMode::Max)
-                return "growth_score_mode must be 'sum' or 'max'";
-            if (growth_mode != GrowthMode::Threshold && growth_mode != GrowthMode::Always)
-                return "growth_mode must be 'threshold' or 'always'";
             if (mean_step_mode != MeanStepMode::Global && mean_step_mode != MeanStepMode::PerSplat)
                 return "mean_step_mode must be 'global' or 'per_splat'";
             if (!std::isfinite(mean_step_ratio_max) || mean_step_ratio_max < 1.0f)
@@ -305,12 +297,6 @@ namespace lfs::core {
             if (!std::isfinite(seed_depth_orbits) || seed_depth_orbits < 0.0f)
                 return std::format("seed_depth_orbits must be finite and nonnegative (got {})",
                                    seed_depth_orbits);
-            if (!std::isfinite(growth_target_factor) || growth_target_factor < 1.0f)
-                return std::format("growth_target_factor must be finite and >= 1 (got {})",
-                                   growth_target_factor);
-            if (!std::isfinite(max_screen_clip_frac) || max_screen_clip_frac < 0.0f)
-                return std::format("max_screen_clip_frac must be finite and nonnegative (got {})",
-                                   max_screen_clip_frac);
             if (!std::isfinite(seed_opacity) || seed_opacity <= 0.0f || seed_opacity >= 1.0f)
                 return std::format("seed_opacity must be finite and within (0, 1) (got {})", seed_opacity);
             if (!std::isfinite(mask_opacity_penalty_power) || mask_opacity_penalty_power <= 0.0f)

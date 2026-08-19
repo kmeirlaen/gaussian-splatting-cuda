@@ -144,7 +144,7 @@ namespace lfs::training::mrnf_strategy {
 
     /**
      * fold densification_info into vis_count (add row0) and refine_weight_max
-     * (max of row1, or row2 when use_view_max_row), then zero n_rows rows.
+     * (max of row1), then zero n_rows rows.
      */
     void launch_fold_densification_and_zero(
         float* vis_count,
@@ -152,8 +152,7 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         void* stream = nullptr,
-        size_t n_rows = 2,
-        bool use_view_max_row = false);
+        size_t n_rows = 2);
 
     void launch_project_visible_centers(
         const float* means,
@@ -217,36 +216,6 @@ namespace lfs::training::mrnf_strategy {
         float* out_rgb,
         float* out_alpha,
         float* out_depth,
-        void* stream = nullptr);
-
-    void launch_update_far_unseen_windows(
-        uint8_t* counters,
-        bool* cull_mask,
-        const float* vis_count,
-        const bool* far_mask,
-        const bool* frozen_mask,
-        size_t frozen_mask_size,
-        const bool* free_mask,
-        size_t free_mask_size,
-        int k,
-        size_t N,
-        void* stream = nullptr);
-
-    void launch_zero_u8_at_indices(
-        uint8_t* values,
-        const int64_t* indices,
-        size_t K,
-        void* stream = nullptr);
-
-    void launch_clip_screen_size(
-        float* log_scales,
-        const float* radii,
-        const bool* frozen_mask,
-        size_t frozen_mask_size,
-        const bool* free_mask,
-        size_t free_mask_size,
-        float limit,
-        size_t N,
         void* stream = nullptr);
 
 } // namespace lfs::training::mrnf_strategy

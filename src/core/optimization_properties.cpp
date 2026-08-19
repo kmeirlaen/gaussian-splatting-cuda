@@ -540,56 +540,6 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
-            .enum_prop(&OptimizationParameters::growth_score_mode,
-                       "growth_score_mode", "Growth Score Mode", d.growth_score_mode,
-                       {{"sum", GrowthScoreMode::Sum, "training.options.growth_score_mode.sum", "sum"},
-                        {"max", GrowthScoreMode::Max, "training.options.growth_score_mode.max", "max"}},
-                       "MRNF growth score: sum of err*alpha*T, or per-view max over pixels")
-            .locale("training.advanced.growth_score_mode")
-            .tooltip("training.tooltip.growth_score_mode")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
-            .enum_prop(&OptimizationParameters::growth_mode,
-                       "growth_mode", "Growth Mode", d.growth_mode,
-                       {{"threshold", GrowthMode::Threshold, "training.options.growth_mode.threshold", "threshold"},
-                        {"always", GrowthMode::Always, "training.options.growth_mode.always", "always"}},
-                       "MRNF growth: threshold-gated (default) or unconditional target factor")
-            .locale("training.advanced.growth_mode")
-            .tooltip("training.tooltip.growth_mode")
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
-            .float_prop(&OptimizationParameters::growth_target_factor,
-                        "growth_target_factor", "Growth Target Factor", d.growth_target_factor, 1.0f, 2.0f,
-                        "Always-mode multiplicative growth per refine window (1.05 = +5%)")
-            .locale("training.advanced.growth_target_factor")
-            .tooltip("training.tooltip.growth_target_factor")
-            .precision(3)
-            .ui_step(0.01)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
-            .int_prop(&OptimizationParameters::far_unseen_cull_windows,
-                      "far_unseen_cull_windows", "Far Unseen Cull Windows", d.far_unseen_cull_windows, 0, 32,
-                      "Prune far-field splats unseen for this many refine windows (0 disables)")
-            .locale("training.advanced.far_unseen_cull_windows")
-            .tooltip("training.tooltip.far_unseen_cull_windows")
-            .precision(0)
-            .ui_step(1)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
-            .float_prop(&OptimizationParameters::max_screen_clip_frac,
-                        "max_screen_clip_frac", "Max Screen Clip Frac", d.max_screen_clip_frac, 0.0f, 1.0f,
-                        "Soft-clip world scale when projected radius exceeds this fraction of min(W,H) (0 = off)")
-            .locale("training.advanced.max_screen_clip_frac")
-            .tooltip("training.tooltip.max_screen_clip_frac")
-            .precision(3)
-            .ui_step(0.05)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
             .enum_prop(&OptimizationParameters::mean_step_mode,
                        "mean_step_mode", "Mean Step Mode", d.mean_step_mode,
                        {{"global", MeanStepMode::Global, "training.options.mean_step_mode.global", "global"},

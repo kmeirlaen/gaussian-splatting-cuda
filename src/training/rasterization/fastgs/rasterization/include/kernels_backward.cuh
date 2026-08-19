@@ -32,12 +32,6 @@ namespace fast_lfs::rasterization::kernels::backward {
         return make_float4(clamp_grad(g.x), clamp_grad(g.y), clamp_grad(g.z), clamp_grad(g.w));
     }
 
-    // Non-negative IEEE-754 floats share integer order, so atomicMax on the
-    // bit pattern is a valid float max. densification scores are alpha*T*error >= 0.
-    __device__ __forceinline__ void atomic_max_nonneg_float(float* addr, float val) {
-        atomicMax(reinterpret_cast<int*>(addr), __float_as_int(val));
-    }
-
     // minBlocks=3 budgets registers so shN Adam no longer lives across
     // the geometry backward (sweep 2..4; 3 is the measured default).
     template <bool MIP_FILTER, int ACTIVE_SH_BASES>
@@ -480,11 +474,10 @@ namespace fast_lfs::rasterization::kernels::backward {
         float normal_z;
         float densification_weight;
         float densification_error_weighted;
-        float densification_error_max;
     };
 
     __device__ __forceinline__ BlendBackwardAccum make_zero_blend_backward_accum() {
-        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
     // ---------------------------------------------------------------------------
@@ -907,15 +900,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                             accum.densification_weight += blending_weight;
                             accum.densification_error_weighted += blending_weight * pixel_error;
                         }
-                        if constexpr (DENSIFICATION_TYPE == DensificationType::MRNFMax) {
-                            const float pixel_error = (densification_error_map != nullptr)
-                                                          ? densification_error_map[pidx]
-                                                          : 1.0f;
-                            const float weighted_error = blending_weight * pixel_error;
-                            accum.densification_weight += blending_weight;
-                            accum.densification_error_weighted += weighted_error;
-                            accum.densification_error_max = fmaxf(accum.densification_error_max, weighted_error);
-                        }
 
                         T = transmittance_before;
                         grad_T = dot(grad_c, alpha * color) +
@@ -947,14 +931,10 @@ namespace fast_lfs::rasterization::kernels::backward {
                             normal_y = warp_reduce_sum(has_contribution ? accum.normal_y : 0.0f);
                             normal_z = warp_reduce_sum(has_contribution ? accum.normal_z : 0.0f);
                         }
-                        float dens_w = 0.0f, dens_e = 0.0f, dens_m = 0.0f;
+                        float dens_w = 0.0f, dens_e = 0.0f;
                         if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
                             dens_w = warp_reduce_sum(has_contribution ? accum.densification_weight : 0.0f);
                             dens_e = warp_reduce_sum(has_contribution ? accum.densification_error_weighted : 0.0f);
-                        }
-                        if constexpr (DENSIFICATION_TYPE == DensificationType::MRNFMax) {
-                            using lfs::core::warp_ops::warp_reduce_max;
-                            dens_m = warp_reduce_max(has_contribution ? accum.densification_error_max : 0.0f);
                         }
                         if (lane_id == 0u) {
                             atomicAdd(&grad_mean2d[primitive_idx].x, clamp_grad(mean_x));
@@ -975,10 +955,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                             if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
                                 atomicAdd(&densification_info[primitive_idx], dens_w);
                                 atomicAdd(&densification_info[n_primitives + primitive_idx], dens_e);
-                            }
-                            if constexpr (DENSIFICATION_TYPE == DensificationType::MRNFMax) {
-                                atomic_max_nonneg_float(
-                                    &densification_info[2u * n_primitives + primitive_idx], dens_m);
                             }
                         }
                     }

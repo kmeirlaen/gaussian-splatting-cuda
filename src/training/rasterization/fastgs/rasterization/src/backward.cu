@@ -122,9 +122,7 @@ void fast_lfs::rasterization::backward(
                 launch_blend_backward_typed.template operator()<DENS_TYPE, false>();
             }
         };
-        if (densification_type == DensificationType::MRNFMax && densification_info != nullptr) {
-            launch_blend_backward.template operator()<DensificationType::MRNFMax>();
-        } else if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
+        if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
             launch_blend_backward.template operator()<DensificationType::MRNF>();
         } else if (densification_info != nullptr && densification_error_map != nullptr) {
             launch_blend_backward.template operator()<DensificationType::MCMC>();

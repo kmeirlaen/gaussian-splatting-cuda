@@ -37,12 +37,8 @@ class MRNFStrategyTest_FarFieldClassificationStableAfterFarInserts_Test;
 class MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
 class MRNFStrategyTest_SeedFromViewInsertsRequestedRows_Test;
 class MRNFStrategyTest_ExploreScoreIgnoresNonPositiveRadii_Test;
-class MRNFStrategyTest_MaxModeFoldUsesViewMaxRow_Test;
 class MRNFStrategyTest_SumModeFoldIsBitIdentical_Test;
-class MRNFStrategyTest_FarUnseenCullIncrementsOnlyFarInvisible_Test;
-class MRNFStrategyTest_AlwaysModeGrowthAddsTargetAndIgnoresGates_Test;
 class MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
-class MRNFStrategyTest_ScreenClipScalesOnlyOverLimitRows_Test;
 class MRNFStrategyTest_GlobalModeMeanStepIsBitIdenticalAcrossCodepaths_Test;
 class MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
 class MRNFStrategyTest_PerSplatMeanStepDecaysIdentically_Test;
@@ -121,12 +117,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
         friend class ::MRNFStrategyTest_SeedFromViewInsertsRequestedRows_Test;
         friend class ::MRNFStrategyTest_ExploreScoreIgnoresNonPositiveRadii_Test;
-        friend class ::MRNFStrategyTest_MaxModeFoldUsesViewMaxRow_Test;
         friend class ::MRNFStrategyTest_SumModeFoldIsBitIdentical_Test;
-        friend class ::MRNFStrategyTest_FarUnseenCullIncrementsOnlyFarInvisible_Test;
-        friend class ::MRNFStrategyTest_AlwaysModeGrowthAddsTargetAndIgnoresGates_Test;
         friend class ::MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
-        friend class ::MRNFStrategyTest_ScreenClipScalesOnlyOverLimitRows_Test;
         friend class ::MRNFStrategyTest_GlobalModeMeanStepIsBitIdenticalAcrossCodepaths_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepDecaysIdentically_Test;
@@ -180,13 +172,7 @@ namespace lfs::training {
         [[nodiscard]] static float far_starvation_factor(float ratio, float full, float rich);
         void update_far_starvation();
         void begin_far_growth_window(size_t n, int reserved_seeds);
-        void apply_far_unseen_cull(lfs::core::Tensor& prune_mask);
-        void apply_screen_size_clip(const RenderOutput& render_output);
-        void cache_clip_view(const RenderOutput& render_output);
         [[nodiscard]] size_t densification_row_count() const;
-        [[nodiscard]] bool uses_max_growth_score() const;
-        [[nodiscard]] bool uses_always_growth() const;
-        void ensure_far_unseen_counter(size_t n);
         [[nodiscard]] lfs::core::Tensor sample_gumbel_with_far_guard(
             const lfs::core::Tensor& weights,
             int k,
@@ -259,12 +245,6 @@ namespace lfs::training {
         float _far_starvation = 1.0f;
         float _logged_far_starvation = -1.0f;
         lfs::core::Tensor _free_mask;
-        // Transient per-splat unseen-far window counter. Not serialized; reload restarts it.
-        lfs::core::Tensor _far_unseen_windows;
-        lfs::core::Camera* _clip_camera = nullptr;
-        int _clip_width = 0;
-        int _clip_height = 0;
-        lfs::core::Tensor _clip_radii;
 
         DensifyChildWorkspace _densify_ws;
         DensifyNScratch _densify_n_scratch;

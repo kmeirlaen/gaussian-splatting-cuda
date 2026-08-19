@@ -5649,10 +5649,7 @@ namespace lfs::training {
                 if (params_.optimization.strategy == "mcmc")
                     densification_type = DensificationType::MCMC;
                 else if (core::param::is_mrnf_strategy(params_.optimization.strategy))
-                    densification_type =
-                        params_.optimization.growth_score_mode == core::param::GrowthScoreMode::Max
-                            ? DensificationType::MRNFMax
-                            : DensificationType::MRNF;
+                    densification_type = DensificationType::MRNF;
                 const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
                 const bool run_fastgs_gaussian_backward =
                     fastgs_path &&

@@ -208,16 +208,14 @@ namespace lfs::training::mrnf_strategy {
         float* __restrict__ refine_weight_max,
         float* __restrict__ densification_info,
         size_t N,
-        size_t n_rows,
-        bool use_view_max_row) {
+        size_t n_rows) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
             return;
 
         const float vis = densification_info[idx];
-        const size_t err_row = (use_view_max_row && n_rows >= 3) ? 2 : 1;
-        const float err = densification_info[err_row * N + idx];
+        const float err = densification_info[N + idx];
         vis_count[idx] += vis;
         refine_weight_max[idx] = fmaxf(refine_weight_max[idx], err);
         for (size_t row = 0; row < n_rows; ++row) {
@@ -231,8 +229,7 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         void* stream,
-        size_t n_rows,
-        bool use_view_max_row) {
+        size_t n_rows) {
         if (N == 0)
             return;
         const size_t rows = n_rows >= 2 ? n_rows : 2;
@@ -240,7 +237,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         fold_densification_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            vis_count, refine_weight_max, densification_info, N, rows, use_view_max_row);
+            vis_count, refine_weight_max, densification_info, N, rows);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_and_zero");
     }
 
@@ -952,154 +949,6 @@ namespace lfs::training::mrnf_strategy {
             pixel_indices, K, hw, target, channels, alpha, depth,
             out_rgb, out_alpha, out_depth);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gather_seed_payloads");
-    }
-
-    __global__ void update_far_unseen_windows_kernel(
-        uint8_t* __restrict__ counters,
-        bool* __restrict__ cull_mask,
-        const float* __restrict__ vis_count,
-        const bool* __restrict__ far_mask,
-        const bool* __restrict__ frozen_mask,
-        size_t frozen_mask_size,
-        const bool* __restrict__ free_mask,
-        size_t free_mask_size,
-        int k,
-        size_t N) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= N)
-            return;
-
-        cull_mask[idx] = false;
-        if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx]) {
-            return;
-        }
-        if (free_mask != nullptr && idx < free_mask_size && free_mask[idx]) {
-            counters[idx] = 0;
-            return;
-        }
-
-        const bool far = far_mask != nullptr && far_mask[idx];
-        const bool unseen = vis_count[idx] == 0.0f;
-        if (far && unseen) {
-            uint8_t count = counters[idx];
-            if (count < 255u) {
-                ++count;
-            }
-            counters[idx] = count;
-            cull_mask[idx] = (static_cast<int>(count) >= k);
-        } else {
-            counters[idx] = 0;
-        }
-    }
-
-    void launch_update_far_unseen_windows(
-        uint8_t* counters,
-        bool* cull_mask,
-        const float* vis_count,
-        const bool* far_mask,
-        const bool* frozen_mask,
-        size_t frozen_mask_size,
-        const bool* free_mask,
-        size_t free_mask_size,
-        int k,
-        size_t N,
-        void* stream) {
-
-        if (N == 0 || k <= 0)
-            return;
-        LFS_ASSERT(counters != nullptr);
-        LFS_ASSERT(cull_mask != nullptr);
-        LFS_ASSERT(vis_count != nullptr);
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        update_far_unseen_windows_kernel<<<blocks, threads, 0, s>>>(
-            counters, cull_mask, vis_count, far_mask,
-            frozen_mask, frozen_mask_size, free_mask, free_mask_size, k, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.update_far_unseen_windows");
-    }
-
-    __global__ void clip_screen_size_kernel(
-        float* __restrict__ log_scales,
-        const float* __restrict__ radii,
-        const bool* __restrict__ frozen_mask,
-        size_t frozen_mask_size,
-        const bool* __restrict__ free_mask,
-        size_t free_mask_size,
-        float limit,
-        size_t N) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= N)
-            return;
-        if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx]) {
-            return;
-        }
-        if (free_mask != nullptr && idx < free_mask_size && free_mask[idx]) {
-            return;
-        }
-
-        const float radius = radii[idx];
-        if (!(radius > limit)) {
-            return;
-        }
-        const float log_factor = logf(limit / radius);
-        log_scales[idx * 3 + 0] += log_factor;
-        log_scales[idx * 3 + 1] += log_factor;
-        log_scales[idx * 3 + 2] += log_factor;
-    }
-
-    __global__ void zero_u8_at_indices_kernel(
-        uint8_t* __restrict__ values,
-        const int64_t* __restrict__ indices,
-        size_t K) {
-        const size_t i = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (i >= K)
-            return;
-        values[indices[i]] = 0;
-    }
-
-    void launch_zero_u8_at_indices(
-        uint8_t* values,
-        const int64_t* indices,
-        size_t K,
-        void* stream) {
-        if (K == 0)
-            return;
-        LFS_ASSERT(values != nullptr);
-        LFS_ASSERT(indices != nullptr);
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((K + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        zero_u8_at_indices_kernel<<<blocks, threads, 0, s>>>(values, indices, K);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.zero_u8_at_indices");
-    }
-
-    void launch_clip_screen_size(
-        float* log_scales,
-        const float* radii,
-        const bool* frozen_mask,
-        size_t frozen_mask_size,
-        const bool* free_mask,
-        size_t free_mask_size,
-        float limit,
-        size_t N,
-        void* stream) {
-
-        if (N == 0 || !(limit > 0.0f))
-            return;
-        LFS_ASSERT(log_scales != nullptr);
-        LFS_ASSERT(radii != nullptr);
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        clip_screen_size_kernel<<<blocks, threads, 0, s>>>(
-            log_scales, radii, frozen_mask, frozen_mask_size,
-            free_mask, free_mask_size, limit, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.clip_screen_size");
     }
 
 } // namespace lfs::training::mrnf_strategy

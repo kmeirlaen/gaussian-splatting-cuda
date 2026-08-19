@@ -47,8 +47,7 @@ namespace lfs::test::licht {
         "growth_grad_threshold grow_fraction grow_until_iter opacity_decay scale_decay "
         "means_noise_weight bounds_percentile use_error_map use_edge_map "
         "explore_splits explore_seeds seed_opacity far_growth_cap far_decay_scale "
-        "growth_score_mode growth_mode growth_target_factor far_unseen_cull_windows "
-        "max_screen_clip_frac mean_step_mode mean_step_ratio_max far_mask_orbits "
+        "mean_step_mode mean_step_ratio_max far_mask_orbits "
         "far_scene_min_fraction far_cap_ratio_full far_cap_ratio_rich seed_depth_orbits";
 
     struct PendingParameterExclusion {
