@@ -333,8 +333,21 @@ namespace lfs::training {
         if (!_params.optimization.enable_eval)
             return false;
 
-        return std::find(_params.optimization.eval_steps.cbegin(), _params.optimization.eval_steps.cend(), iteration) !=
-               _params.optimization.eval_steps.cend();
+        if (std::find(_params.optimization.eval_steps.cbegin(), _params.optimization.eval_steps.cend(), iteration) !=
+            _params.optimization.eval_steps.cend()) {
+            return true;
+        }
+
+        const int last_iter = _params.optimization.resolved_total_iterations();
+        if (iteration != last_iter) {
+            return false;
+        }
+        return std::none_of(
+            _params.optimization.eval_steps.cbegin(),
+            _params.optimization.eval_steps.cend(),
+            [iteration](const size_t step) {
+                return step > 0 && static_cast<int>(step) <= iteration;
+            });
     }
 
     lfs::core::Tensor MetricsEvaluator::load_eval_mask(lfs::core::Camera* cam,
