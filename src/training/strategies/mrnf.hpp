@@ -14,6 +14,7 @@
 #include "strategy_utils.hpp"
 #include <cassert>
 #include <memory>
+#include <optional>
 
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
@@ -41,6 +42,7 @@ class MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
 class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
+class MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
 
 namespace lfs::training {
 
@@ -124,6 +126,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
         friend class ::MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
         friend class ::MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
+        friend class ::MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
 
         struct FarGrowthState {
             bool active = false;
@@ -157,6 +160,7 @@ namespace lfs::training {
         [[nodiscard]] bool should_cache_seed_view(int iter) const;
         void seed_from_view(int iter, const RenderOutput& render_output);
         [[nodiscard]] bool far_field_requested() const;
+        [[nodiscard]] bool far_operators_active() const;
         void refresh_camera_hull();
         void refresh_far_field_mask(size_t n);
         void publish_mean_step_far_mask();
@@ -237,6 +241,8 @@ namespace lfs::training {
         float _orbit_radius = 0.0f;
         bool _camera_hull_valid = false;
         bool _scene_has_far_field = true;
+        bool _occlusion_class = false;
+        std::optional<float> _track_visibility;
         bool _logged_degenerate_hull = false;
         size_t _initial_sfm_point_count = 0;
         float _far_starvation = 1.0f;

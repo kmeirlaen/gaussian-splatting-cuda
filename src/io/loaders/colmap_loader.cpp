@@ -14,6 +14,7 @@
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -354,6 +355,13 @@ namespace lfs::io {
             } else if (!point_cloud) {
                 LOG_WARN("No point cloud found - will use random initialization");
                 point_cloud = std::make_shared<PointCloud>();
+            }
+
+            if (point_cloud && point_cloud->total_track_elements.has_value()) {
+                point_cloud->track_visibility = compute_track_visibility(
+                    *point_cloud->total_track_elements,
+                    static_cast<std::size_t>(std::max<int64_t>(point_cloud->size(), 0)),
+                    cameras.size());
             }
 
             // Centralize scene

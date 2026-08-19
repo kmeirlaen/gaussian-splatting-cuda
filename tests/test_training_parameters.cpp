@@ -426,28 +426,52 @@ namespace {
         const auto defaults = OptimizationParameters::mrnf_defaults();
         EXPECT_FALSE(defaults.error_vis_norm);
         EXPECT_FLOAT_EQ(defaults.error_dog_weight, 0.0f);
+        EXPECT_FLOAT_EQ(defaults.occlusion_visibility_max, 0.025f);
+        EXPECT_FLOAT_EQ(defaults.occlusion_dose_scale, 1.0f);
 
         const auto default_json = defaults.to_json();
         EXPECT_FALSE(default_json.contains("error_vis_norm"));
         EXPECT_FALSE(default_json.contains("error_dog_weight"));
+        EXPECT_FALSE(default_json.contains("occlusion_visibility_max"));
+        EXPECT_FALSE(default_json.contains("occlusion_dose_scale"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "error_vis_norm"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "error_dog_weight"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "occlusion_visibility_max"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "occlusion_dose_scale"));
 
         auto json = defaults.to_json();
         json["error_vis_norm"] = true;
         json["error_dog_weight"] = 1.0f;
+        json["occlusion_visibility_max"] = 0.01f;
+        json["occlusion_dose_scale"] = 0.5f;
         const auto parsed = OptimizationParameters::from_json(json);
         EXPECT_TRUE(parsed.error_vis_norm);
         EXPECT_FLOAT_EQ(parsed.error_dog_weight, 1.0f);
+        EXPECT_FLOAT_EQ(parsed.occlusion_visibility_max, 0.01f);
+        EXPECT_FLOAT_EQ(parsed.occlusion_dose_scale, 0.5f);
         EXPECT_TRUE(parsed.validate().empty());
 
         const auto enabled_json = parsed.to_json();
         EXPECT_TRUE(enabled_json.at("error_vis_norm").get<bool>());
         EXPECT_FLOAT_EQ(enabled_json.at("error_dog_weight").get<float>(), 1.0f);
+        EXPECT_FLOAT_EQ(enabled_json.at("occlusion_visibility_max").get<float>(), 0.01f);
+        EXPECT_FLOAT_EQ(enabled_json.at("occlusion_dose_scale").get<float>(), 0.5f);
 
         auto invalid = defaults;
         invalid.error_dog_weight = -1.0f;
         EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.occlusion_dose_scale = 0.0f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.occlusion_dose_scale = 4.1f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.occlusion_visibility_max = -0.1f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.occlusion_dose_scale = 4.0f;
+        EXPECT_TRUE(invalid.validate().empty());
     }
 
     TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {

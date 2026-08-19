@@ -22,6 +22,7 @@ class MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
 class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
+class MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -1586,10 +1587,77 @@ TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
     }
 }
 
+TEST(MRNFStrategyTest, OcclusionClassGateFromTrackVisibility) {
+    auto make_params = [](const int max_cap, const float min_frac) {
+        auto opt = vanilla_mrnf_params();
+        opt.use_far_field = true;
+        opt.iterations = 1'000;
+        opt.max_cap = max_cap;
+        opt.refine_every = 100;
+        opt.far_scene_min_fraction = min_frac;
+        return opt;
+    };
+
+    {
+        // census-inert + visibility 0.003 -> occlusion-class, capacity-annealed s
+        auto splat = create_mrnf_test_splat_data(10);
+        splat.set_track_visibility(0.003f);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(60, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_TRUE(strategy._occlusion_class);
+        EXPECT_TRUE(strategy._camera_hull_valid);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
+        EXPECT_TRUE(strategy._track_visibility.has_value());
+        EXPECT_FLOAT_EQ(*strategy._track_visibility, 0.003f);
+    }
+
+    {
+        // census-inert + visibility 0.035 -> inactive
+        auto splat = create_mrnf_test_splat_data(10);
+        splat.set_track_visibility(0.035f);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(60, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_FALSE(strategy._occlusion_class);
+        EXPECT_FALSE(strategy._camera_hull_valid);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
+    }
+
+    {
+        // census-inert + unset visibility -> inactive
+        auto splat = create_mrnf_test_splat_data(10);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(60, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_FALSE(strategy._occlusion_class);
+        EXPECT_FALSE(strategy._camera_hull_valid);
+        EXPECT_FALSE(strategy._track_visibility.has_value());
+    }
+
+    {
+        // census-active + low visibility: s = 1, not occlusion-class
+        auto splat = create_mrnf_test_splat_data(10);
+        splat.set_track_visibility(0.003f);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(60, 0.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_TRUE(strategy._scene_has_far_field);
+        EXPECT_FALSE(strategy._occlusion_class);
+        EXPECT_TRUE(strategy._camera_hull_valid);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
+    }
+}
+
 TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     const param::OptimizationParameters defaults{};
     EXPECT_TRUE(defaults.use_far_field);
     EXPECT_FLOAT_EQ(defaults.far_scene_min_fraction, 0.01f);
+    EXPECT_FLOAT_EQ(defaults.occlusion_visibility_max, 0.025f);
+    EXPECT_FLOAT_EQ(defaults.occlusion_dose_scale, 1.0f);
     EXPECT_EQ(kExploreSplits, 20);
     EXPECT_EQ(kExploreSeeds, 20);
     EXPECT_FLOAT_EQ(kSeedOpacity, 0.03f);

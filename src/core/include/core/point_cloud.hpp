@@ -5,6 +5,8 @@
 #pragma once
 
 #include "core/tensor.hpp"
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,8 @@ namespace lfs::core {
 
         // Metadata
         std::vector<std::string> attribute_names;
+        std::optional<std::size_t> total_track_elements;
+        std::optional<float> track_visibility;
 
         // Constructor for basic point cloud (means + colors only)
         PointCloud(Tensor pos, Tensor col)
@@ -55,6 +59,8 @@ namespace lfs::core {
             pc.scaling = scaling.is_valid() ? scaling.to(device) : scaling;
             pc.rotation = rotation.is_valid() ? rotation.to(device) : rotation;
             pc.attribute_names = attribute_names;
+            pc.total_track_elements = total_track_elements;
+            pc.track_visibility = track_visibility;
             return pc;
         }
 

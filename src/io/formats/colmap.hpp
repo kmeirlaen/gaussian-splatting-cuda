@@ -25,6 +25,15 @@ namespace lfs::io {
     using lfs::core::PointCloud;
     using lfs::core::Tensor;
 
+    [[nodiscard]] constexpr float compute_track_visibility(
+        const std::size_t total_track_elements,
+        const std::size_t n_points,
+        const std::size_t n_images) noexcept {
+        const float points = static_cast<float>(n_points < 1 ? 1 : n_points);
+        const float images = static_cast<float>(n_images < 1 ? 1 : n_images);
+        return (static_cast<float>(total_track_elements) / points) / images;
+    }
+
     struct ColmapPointCloudLoadStats {
         PointCloud point_cloud;
         std::size_t total_points = 0;

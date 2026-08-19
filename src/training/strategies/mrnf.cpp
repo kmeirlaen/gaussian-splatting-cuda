@@ -731,6 +731,8 @@ namespace lfs::training {
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         _initial_sfm_point_count = n;
+        _track_visibility = _splat_data->track_visibility();
+        _occlusion_class = false;
         const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
@@ -841,7 +843,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_accumulate_explore_sample(int iter) const {
-        return far_field_requested() && kExploreSplits > 0 && _scene_has_far_field &&
+        return far_field_requested() && kExploreSplits > 0 && far_operators_active() &&
                should_accumulate_view_sample(iter);
     }
 
@@ -1384,6 +1386,10 @@ namespace lfs::training {
         return _params && _params->use_far_field;
     }
 
+    bool MRNF::far_operators_active() const {
+        return _scene_has_far_field || _occlusion_class;
+    }
+
     void MRNF::refresh_camera_hull() {
         _camera_hull_valid = false;
         _cam_centroid[0] = 0.0f;
@@ -1393,6 +1399,7 @@ namespace lfs::training {
 
         if (!far_field_requested()) {
             _scene_has_far_field = false;
+            _occlusion_class = false;
             _far_field_mask = {};
             update_far_starvation();
             return;
@@ -1400,6 +1407,7 @@ namespace lfs::training {
 
         const size_t n_cam = _views ? _views->size() : 0;
         if (n_cam < 2) {
+            _occlusion_class = false;
             update_far_starvation();
             if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 training cameras); far-field guard is inert");
@@ -1437,6 +1445,7 @@ namespace lfs::training {
         }
 
         if (counted < 2) {
+            _occlusion_class = false;
             update_far_starvation();
             if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 valid cameras); far-field guard is inert");
@@ -1461,6 +1470,7 @@ namespace lfs::training {
         const float radius_eps =
             32.0f * std::numeric_limits<float>::epsilon() * std::max(centroid_norm, 1.0f);
         if (!std::isfinite(radius) || radius <= radius_eps) {
+            _occlusion_class = false;
             update_far_starvation();
             if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull degenerate (orbit radius {:.6g}); far-field guard is inert",
@@ -1499,12 +1509,20 @@ namespace lfs::training {
                      far_frac, kDeepFarRadiusOrbits, far_scene_min_fraction,
                      _scene_has_far_field ? "active" : "inert");
 
-            if (!_scene_has_far_field) {
+            _occlusion_class = false;
+            if (!_scene_has_far_field && _params && _track_visibility.has_value() &&
+                *_track_visibility < _params->occlusion_visibility_max) {
+                _occlusion_class = true;
+                LOG_INFO("MRNF: occlusion-class scene (visibility {:.2f}%, threshold {:.2f}%)",
+                         *_track_visibility * 100.0f, _params->occlusion_visibility_max * 100.0f);
+            }
+
+            if (!far_operators_active()) {
                 _camera_hull_valid = false;
                 _far_field_mask = lfs::core::Tensor();
             }
             update_far_starvation();
-            if (_scene_has_far_field) {
+            if (far_operators_active()) {
                 refresh_far_field_mask(n_now);
             }
         } else {
@@ -1521,8 +1539,11 @@ namespace lfs::training {
     }
 
     int MRNF::starved_cadence_count(const int count) const {
-        return static_cast<int>(std::lround(static_cast<double>(cadence_scaled(count)) *
-                                            static_cast<double>(_far_starvation)));
+        double n = static_cast<double>(cadence_scaled(count)) * static_cast<double>(_far_starvation);
+        if (_occlusion_class && _params) {
+            n *= static_cast<double>(_params->occlusion_dose_scale);
+        }
+        return static_cast<int>(std::lround(n));
     }
 
     float MRNF::effective_far_growth_cap() const {
@@ -1904,7 +1925,7 @@ namespace lfs::training {
 
         Tensor explore_inds;
         if (iter < static_cast<int>(_params->grow_until_iter) && far_field_requested() &&
-            kExploreSplits > 0 && _scene_has_far_field) {
+            kExploreSplits > 0 && far_operators_active()) {
             const int growth_count = (growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0);
             const int remaining_budget = std::max(0, budget - actual_replace - growth_count);
             int n_explore = std::min(starved_cadence_count(kExploreSplits), remaining_budget);
@@ -3307,6 +3328,8 @@ namespace lfs::training {
         std::swap(_orbit_radius, source._orbit_radius);
         std::swap(_camera_hull_valid, source._camera_hull_valid);
         std::swap(_scene_has_far_field, source._scene_has_far_field);
+        std::swap(_occlusion_class, source._occlusion_class);
+        std::swap(_track_visibility, source._track_visibility);
         std::swap(_logged_degenerate_hull, source._logged_degenerate_hull);
         std::swap(_initial_sfm_point_count, source._initial_sfm_point_count);
         std::swap(_far_starvation, source._far_starvation);
