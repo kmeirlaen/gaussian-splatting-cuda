@@ -1466,32 +1466,47 @@ TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
     EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(6.0f, kFarCapRatioFull, kFarCapRatioRich), 0.0f);
     EXPECT_FLOAT_EQ(MRNF::far_starvation_factor(0.0f, 0.0f, kFarCapRatioRich), 0.0f);
 
-    auto starvation_params = [](const int max_cap) {
+    auto starvation_params = [](const int max_cap, const float min_frac = 0.0f) {
         auto opt = vanilla_mrnf_params();
         opt.use_far_field = true;
         opt.iterations = 1'000;
         opt.max_cap = max_cap;
         opt.refine_every = 100;
-        opt.far_scene_min_fraction = 0.0f;
+        opt.far_scene_min_fraction = min_frac;
         return opt;
     };
 
     {
+        // census-active + ratio 6 -> s == 1 (dose is not annealed on a true far field)
         auto splat = create_mrnf_test_splat_data(10);
         MRNF strategy(splat);
-        strategy.initialize(starvation_params(20));
+        strategy.initialize(starvation_params(60, 0.0f));
         install_test_camera_hull(strategy);
         EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
+        EXPECT_TRUE(strategy._scene_has_far_field);
         EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
     }
 
     {
+        // census-inert + ratio 6 -> s == 0
         auto splat = create_mrnf_test_splat_data(10);
         MRNF strategy(splat);
-        strategy.initialize(starvation_params(35));
+        strategy.initialize(starvation_params(60, 1.0f));
         install_test_camera_hull(strategy);
         EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
+        EXPECT_FALSE(strategy._scene_has_far_field);
         EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
+    }
+
+    {
+        // census-inert + ratio 1.5 -> s == 1
+        auto splat = create_mrnf_test_splat_data(10);
+        MRNF strategy(splat);
+        strategy.initialize(starvation_params(15, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
     }
 
     {
@@ -1506,11 +1521,25 @@ TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
     }
 
     {
+        // uncapped census-inert -> 0
         auto splat = create_mrnf_test_splat_data(10);
         MRNF strategy(splat);
-        strategy.initialize(starvation_params(0));
+        strategy.initialize(starvation_params(0, 1.0f));
+        install_test_camera_hull(strategy);
         EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
+        EXPECT_FALSE(strategy._scene_has_far_field);
         EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
+    }
+
+    {
+        // uncapped census-active -> 1
+        auto splat = create_mrnf_test_splat_data(10);
+        MRNF strategy(splat);
+        strategy.initialize(starvation_params(0, 0.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
+        EXPECT_TRUE(strategy._scene_has_far_field);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
     }
 }
 

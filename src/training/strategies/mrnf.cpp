@@ -1558,21 +1558,25 @@ namespace lfs::training {
         if (!_params || _initial_sfm_point_count == 0) {
             return;
         }
-        // max_cap == 0 is legal (uncapped): treat as the rich regime, s = 0.
+        // Census-active scenes keep s = 1 at any capacity. The cap/points ramp
+        // (uncapped = rich, s = 0) only tempers residual mask-gated features
+        // when the census is inert.
         const bool uncapped = _params->max_cap == 0;
         float s = 0.0f;
         float ratio = 0.0f;
-        if (!uncapped) {
+        if (_scene_has_far_field) {
+            s = 1.0f;
+        } else if (!uncapped) {
             const float max_cap = static_cast<float>(_params->max_cap);
             const float points = static_cast<float>(_initial_sfm_point_count);
             ratio = max_cap / points;
-            const float full = kFarCapRatioFull;
-            const float rich = kFarCapRatioRich;
-            s = far_starvation_factor(ratio, full, rich);
+            s = far_starvation_factor(ratio, kFarCapRatioFull, kFarCapRatioRich);
         }
         _far_starvation = s;
         if (std::abs(s - _logged_far_starvation) > 0.1f) {
-            if (uncapped) {
+            if (_scene_has_far_field) {
+                LOG_INFO("MRNF: far starvation 1.00 (far-field scene)");
+            } else if (uncapped) {
                 LOG_INFO("MRNF: far starvation 0.00 (uncapped)");
             } else {
                 LOG_INFO("MRNF: far starvation {:.2f} (cap/points {:.2f})", s, ratio);
