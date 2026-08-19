@@ -22,11 +22,7 @@ namespace lfs::training {
         }
     } // namespace detail
 
-    /**
-     * Grow-only Gumbel-top-k sort buffers + CUB workspace.
-     * Pre-size to max_cap (and H*W for seed draws) so post-refine
-     * trim_memory_pool cannot force a driver alloc on every window.
-     */
+    // Grow-only Gumbel-top-k sort buffers + CUB workspace, pre-sized to max_cap.
     struct GumbelTopKScratch {
         lfs::core::Tensor keys;
         lfs::core::Tensor indices;
@@ -70,11 +66,7 @@ namespace lfs::training {
         }
     };
 
-    /**
-     * Grow-only positive-median workspace (compact buffer, sorted keys, CUB temps).
-     * Math is identical to the allocating launch; callers that omit the scratch
-     * keep the original malloc path.
-     */
+    // Grow-only positive-median workspace; omitting scratch keeps the malloc path.
     struct PositiveMedianScratch {
         lfs::core::Tensor selected;
         lfs::core::Tensor sorted;

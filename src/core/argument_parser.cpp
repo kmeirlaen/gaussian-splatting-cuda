@@ -48,6 +48,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
+            OptimizationCliBinding{"--no-far-field", "use_far_field", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
                                    "; values: solidcolor, modulation, image, random", "solid_color", "solidcolor"},
             OptimizationCliBinding{"--random", "random", Bool},
@@ -76,19 +77,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
-            OptimizationCliBinding{"--explore-splits", "explore_splits", Integer},
-            OptimizationCliBinding{"--explore-seeds", "explore_seeds", Integer},
-            OptimizationCliBinding{"--seed-opacity", "seed_opacity", Float},
-            OptimizationCliBinding{"--far-growth-cap", "far_growth_cap", Float},
-            OptimizationCliBinding{"--far-decay-scale", "far_decay_scale", Float},
-            OptimizationCliBinding{"--mean-step-mode", "mean_step_mode", Enum, false,
-                                   "; values: global, per_splat"},
-            OptimizationCliBinding{"--mean-step-ratio-max", "mean_step_ratio_max", Float},
-            OptimizationCliBinding{"--far-mask-orbits", "far_mask_orbits", Float},
             OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
-            OptimizationCliBinding{"--far-cap-ratio-full", "far_cap_ratio_full", Float},
-            OptimizationCliBinding{"--far-cap-ratio-rich", "far_cap_ratio_rich", Float},
-            OptimizationCliBinding{"--seed-depth-orbits", "seed_depth_orbits", Float},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
         };
@@ -391,18 +380,8 @@ namespace {
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
-            ::args::ValueFlag<int> explore_splits(training_group, "explore_splits", lfs::core::args::optimization_cli_help("--explore-splits"), {"explore-splits"});
-            ::args::ValueFlag<int> explore_seeds(training_group, "explore_seeds", lfs::core::args::optimization_cli_help("--explore-seeds"), {"explore-seeds"});
-            ::args::ValueFlag<float> seed_opacity(training_group, "seed_opacity", lfs::core::args::optimization_cli_help("--seed-opacity"), {"seed-opacity"});
-            ::args::ValueFlag<float> far_growth_cap(training_group, "far_growth_cap", lfs::core::args::optimization_cli_help("--far-growth-cap"), {"far-growth-cap"});
-            ::args::ValueFlag<float> far_decay_scale(training_group, "far_decay_scale", lfs::core::args::optimization_cli_help("--far-decay-scale"), {"far-decay-scale"});
-            ::args::ValueFlag<std::string> mean_step_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--mean-step-mode"), {"mean-step-mode"});
-            ::args::ValueFlag<float> mean_step_ratio_max(training_group, "ratio", lfs::core::args::optimization_cli_help("--mean-step-ratio-max"), {"mean-step-ratio-max"});
-            ::args::ValueFlag<float> far_mask_orbits(training_group, "orbits", lfs::core::args::optimization_cli_help("--far-mask-orbits"), {"far-mask-orbits"});
+            ::args::Flag no_far_field(training_group, "no_far_field", lfs::core::args::optimization_cli_help("--no-far-field"), {"no-far-field"});
             ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
-            ::args::ValueFlag<float> far_cap_ratio_full(training_group, "ratio", lfs::core::args::optimization_cli_help("--far-cap-ratio-full"), {"far-cap-ratio-full"});
-            ::args::ValueFlag<float> far_cap_ratio_rich(training_group, "ratio", lfs::core::args::optimization_cli_help("--far-cap-ratio-rich"), {"far-cap-ratio-rich"});
-            ::args::ValueFlag<float> seed_depth_orbits(training_group, "orbits", lfs::core::args::optimization_cli_help("--seed-depth-orbits"), {"seed-depth-orbits"});
             ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
@@ -1085,18 +1064,8 @@ namespace {
                                         use_normal_loss_flag = bool(use_normal_loss),
                                         no_error_map_flag = bool(no_error_map),
                                         no_edge_map_flag = bool(no_edge_map),
-                                        explore_splits_val = cli_option_present({"--explore-splits"}) ? std::optional<int>(::args::get(explore_splits)) : std::optional<int>(),
-                                        explore_seeds_val = cli_option_present({"--explore-seeds"}) ? std::optional<int>(::args::get(explore_seeds)) : std::optional<int>(),
-                                        seed_opacity_val = cli_option_present({"--seed-opacity"}) ? std::optional<float>(::args::get(seed_opacity)) : std::optional<float>(),
-                                        far_growth_cap_val = cli_option_present({"--far-growth-cap"}) ? std::optional<float>(::args::get(far_growth_cap)) : std::optional<float>(),
-                                        far_decay_scale_val = cli_option_present({"--far-decay-scale"}) ? std::optional<float>(::args::get(far_decay_scale)) : std::optional<float>(),
-                                        mean_step_mode_val = cli_option_present({"--mean-step-mode"}) ? std::optional<std::string>(::args::get(mean_step_mode)) : std::optional<std::string>(),
-                                        mean_step_ratio_max_val = cli_option_present({"--mean-step-ratio-max"}) ? std::optional<float>(::args::get(mean_step_ratio_max)) : std::optional<float>(),
-                                        far_mask_orbits_val = cli_option_present({"--far-mask-orbits"}) ? std::optional<float>(::args::get(far_mask_orbits)) : std::optional<float>(),
+                                        no_far_field_flag = bool(no_far_field),
                                         far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
-                                        far_cap_ratio_full_val = cli_option_present({"--far-cap-ratio-full"}) ? std::optional<float>(::args::get(far_cap_ratio_full)) : std::optional<float>(),
-                                        far_cap_ratio_rich_val = cli_option_present({"--far-cap-ratio-rich"}) ? std::optional<float>(::args::get(far_cap_ratio_rich)) : std::optional<float>(),
-                                        seed_depth_orbits_val = cli_option_present({"--seed-depth-orbits"}) ? std::optional<float>(::args::get(seed_depth_orbits)) : std::optional<float>(),
                                         eval_steps_val = cli_option_present({"--eval-steps"}) ? std::optional<std::vector<int>>(::args::get(eval_steps)) : std::optional<std::vector<int>>(),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
@@ -1215,24 +1184,9 @@ namespace {
                     opt.use_error_map = false;
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
-                setVal(explore_splits_val, opt.explore_splits);
-                setVal(explore_seeds_val, opt.explore_seeds);
-                setVal(seed_opacity_val, opt.seed_opacity);
-                setVal(far_growth_cap_val, opt.far_growth_cap);
-                setVal(far_decay_scale_val, opt.far_decay_scale);
-                if (mean_step_mode_val) {
-                    if (const auto parsed = lfs::core::param::mean_step_mode_from_string(*mean_step_mode_val)) {
-                        opt.mean_step_mode = *parsed;
-                    } else {
-                        opt.mean_step_mode = static_cast<lfs::core::param::MeanStepMode>(-1);
-                    }
-                }
-                setVal(mean_step_ratio_max_val, opt.mean_step_ratio_max);
-                setVal(far_mask_orbits_val, opt.far_mask_orbits);
+                if (no_far_field_flag)
+                    opt.use_far_field = false;
                 setVal(far_scene_min_fraction_val, opt.far_scene_min_fraction);
-                setVal(far_cap_ratio_full_val, opt.far_cap_ratio_full);
-                setVal(far_cap_ratio_rich_val, opt.far_cap_ratio_rich);
-                setVal(seed_depth_orbits_val, opt.seed_depth_orbits);
                 if (eval_steps_val && !eval_steps_val->empty()) {
                     opt.eval_steps.clear();
                     for (const int step : *eval_steps_val) {

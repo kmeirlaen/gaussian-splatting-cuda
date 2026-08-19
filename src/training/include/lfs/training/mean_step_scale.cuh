@@ -4,11 +4,8 @@
 
 #pragma once
 
-// Per-splat mean-step ratio. Applied to the Adam step, never the raw gradient:
-// after Adam's second-moment normalize, scaling the gradient is a no-op.
-// r_i = clamp(geomean(exp(scaling_raw)) / median_splat_extent, r_min, r_max).
-// Callers apply this only to far-field rows (camera-hull mask). A null mask,
-// invalid hull, or inside-hull row must keep r_i = 1 (the global-mode step).
+// r_i = clamp(geomean(exp(scaling_raw)) / median, r_min, r_max); apply to the Adam
+// step (not the raw grad). Null/inside-hull mask keeps r_i = 1.
 namespace lfs::training {
 
     inline constexpr float kPerSplatMeanStepRatioMin = 1.0f;

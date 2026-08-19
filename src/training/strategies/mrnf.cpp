@@ -841,7 +841,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_accumulate_explore_sample(int iter) const {
-        return _params && _params->explore_splits > 0 && _scene_has_far_field &&
+        return far_field_requested() && kExploreSplits > 0 && _scene_has_far_field &&
                should_accumulate_view_sample(iter);
     }
 
@@ -976,7 +976,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_cache_seed_view(int iter) const {
-        if (!_params || _params->explore_seeds <= 0) {
+        if (!far_field_requested() || kExploreSeeds <= 0) {
             return false;
         }
         const int next_iter = iter + 1;
@@ -1325,14 +1325,13 @@ namespace lfs::training {
         }
 
         const bool growing = iter < static_cast<int>(_params->grow_until_iter);
-        const int reserved_seeds = (growing && _params->explore_seeds > 0)
-                                       ? starved_cadence_count(_params->explore_seeds)
-                                       : 0;
+        const bool seed_far = growing && far_field_requested() && kExploreSeeds > 0;
+        const int reserved_seeds = seed_far ? starved_cadence_count(kExploreSeeds) : 0;
         begin_far_growth_window(n, reserved_seeds);
 
         // Replacement should stay active even after growth stop.
         grow_and_split(iter, pruned_count);
-        if (growing && _params->explore_seeds > 0) {
+        if (seed_far) {
             seed_from_view(iter, render_output);
         }
         reset_explore_accumulator();
@@ -1380,6 +1379,10 @@ namespace lfs::training {
         lfs::core::Tensor::trim_memory_pool();
     }
 
+    bool MRNF::far_field_requested() const {
+        return _params && _params->use_far_field;
+    }
+
     void MRNF::refresh_camera_hull() {
         _camera_hull_valid = false;
         _cam_centroid[0] = 0.0f;
@@ -1387,12 +1390,17 @@ namespace lfs::training {
         _cam_centroid[2] = 0.0f;
         _orbit_radius = 0.0f;
 
+        if (!far_field_requested()) {
+            _scene_has_far_field = false;
+            _far_field_mask = {};
+            update_far_starvation();
+            return;
+        }
+
         const size_t n_cam = _views ? _views->size() : 0;
         if (n_cam < 2) {
             update_far_starvation();
-            if (!_logged_degenerate_hull && _params &&
-                (_params->explore_seeds > 0 || _params->far_growth_cap < 1.0f ||
-                 _params->far_decay_scale != 1.0f)) {
+            if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 training cameras); far-field guard is inert");
                 _logged_degenerate_hull = true;
             }
@@ -1429,9 +1437,7 @@ namespace lfs::training {
 
         if (counted < 2) {
             update_far_starvation();
-            if (!_logged_degenerate_hull && _params &&
-                (_params->explore_seeds > 0 || _params->far_growth_cap < 1.0f ||
-                 _params->far_decay_scale != 1.0f)) {
+            if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 valid cameras); far-field guard is inert");
                 _logged_degenerate_hull = true;
             }
@@ -1455,9 +1461,7 @@ namespace lfs::training {
             32.0f * std::numeric_limits<float>::epsilon() * std::max(centroid_norm, 1.0f);
         if (!std::isfinite(radius) || radius <= radius_eps) {
             update_far_starvation();
-            if (!_logged_degenerate_hull && _params &&
-                (_params->explore_seeds > 0 || _params->far_growth_cap < 1.0f ||
-                 _params->far_decay_scale != 1.0f)) {
+            if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull degenerate (orbit radius {:.6g}); far-field guard is inert",
                          radius);
                 _logged_degenerate_hull = true;
@@ -1472,9 +1476,6 @@ namespace lfs::training {
         _camera_hull_valid = true;
         _logged_degenerate_hull = false;
 
-        // Census at 8x orbit: below far_scene_min_fraction the hull is treated
-        // as invalid so seeds, the growth guard, decay relief, and per-splat
-        // mobility stay inert.
         constexpr float kDeepFarRadiusOrbits = 8.0f;
         const float far_scene_min_fraction =
             _params ? _params->far_scene_min_fraction : 0.01f;
@@ -1524,18 +1525,24 @@ namespace lfs::training {
     }
 
     float MRNF::effective_far_growth_cap() const {
-        const float cap = _params ? _params->far_growth_cap : 1.0f;
-        return 1.0f - _far_starvation * (1.0f - cap);
+        if (!far_field_requested()) {
+            return 1.0f;
+        }
+        return 1.0f - _far_starvation * (1.0f - kFarGrowthCap);
     }
 
     float MRNF::effective_far_decay_scale() const {
-        const float scale = _params ? _params->far_decay_scale : 1.0f;
-        return 1.0f - _far_starvation * (1.0f - scale);
+        if (!far_field_requested()) {
+            return 1.0f;
+        }
+        return 1.0f - _far_starvation * (1.0f - kFarDecayScale);
     }
 
     float MRNF::effective_mean_step_ratio_max() const {
-        const float rmax = _params ? _params->mean_step_ratio_max : kPerSplatMeanStepRatioMax;
-        return 1.0f + _far_starvation * (rmax - 1.0f);
+        if (!far_field_requested()) {
+            return 1.0f;
+        }
+        return 1.0f + _far_starvation * (kPerSplatMeanStepRatioMax - 1.0f);
     }
 
     float MRNF::far_starvation_factor(const float ratio, const float full, const float rich) {
@@ -1559,8 +1566,8 @@ namespace lfs::training {
             const float max_cap = static_cast<float>(_params->max_cap);
             const float points = static_cast<float>(_initial_sfm_point_count);
             ratio = max_cap / points;
-            const float full = _params->far_cap_ratio_full;
-            const float rich = _params->far_cap_ratio_rich;
+            const float full = kFarCapRatioFull;
+            const float rich = kFarCapRatioRich;
             s = far_starvation_factor(ratio, full, rich);
         }
         _far_starvation = s;
@@ -1593,13 +1600,12 @@ namespace lfs::training {
             _far_field_mask.numel() != n) {
             _far_field_mask = Tensor::zeros_bool({n}, Device::CUDA);
         }
-        const float far_mask_orbits = _params ? _params->far_mask_orbits : 2.0f;
         mrnf_strategy::launch_far_field_mask(
             _splat_data->means().ptr<float>(),
             _cam_centroid[0],
             _cam_centroid[1],
             _cam_centroid[2],
-            far_mask_orbits * _orbit_radius,
+            kFarMaskOrbits * _orbit_radius,
             _far_field_mask.ptr<bool>(),
             n);
         publish_mean_step_far_mask();
@@ -1609,9 +1615,7 @@ namespace lfs::training {
         if (!_optimizer) {
             return;
         }
-        const bool want_per_splat =
-            _params && _params->mean_step_mode == lfs::core::param::MeanStepMode::PerSplat;
-        if (!want_per_splat) {
+        if (!far_field_requested()) {
             _optimizer->set_mean_step_far_mask(nullptr, 0);
             return;
         }
@@ -1625,8 +1629,7 @@ namespace lfs::training {
     }
 
     void MRNF::ensure_mean_step_far_mask() {
-        if (!_params ||
-            _params->mean_step_mode != lfs::core::param::MeanStepMode::PerSplat) {
+        if (!far_field_requested()) {
             publish_mean_step_far_mask();
             return;
         }
@@ -1895,10 +1898,11 @@ namespace lfs::training {
         }
 
         Tensor explore_inds;
-        if (iter < static_cast<int>(_params->grow_until_iter) && _params->explore_splits > 0 && _scene_has_far_field) {
+        if (iter < static_cast<int>(_params->grow_until_iter) && far_field_requested() &&
+            kExploreSplits > 0 && _scene_has_far_field) {
             const int growth_count = (growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0);
             const int remaining_budget = std::max(0, budget - actual_replace - growth_count);
-            int n_explore = std::min(starved_cadence_count(_params->explore_splits), remaining_budget);
+            int n_explore = std::min(starved_cadence_count(kExploreSplits), remaining_budget);
             if (n_explore > 0) {
                 auto log_scales = _splat_data->scaling_raw();
                 if (log_scales.ndim() != 2 || log_scales.shape()[0] != n || log_scales.shape()[1] != 3) {
@@ -2322,7 +2326,7 @@ namespace lfs::training {
         const float train_t = static_cast<float>(iter) / static_cast<float>(_params->iterations);
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
         const bool scale_far =
-            _camera_hull_valid && _params->far_decay_scale != 1.0f;
+            far_field_requested() && _camera_hull_valid && kFarDecayScale != 1.0f;
         if (scale_far) {
             refresh_far_field_mask(n);
         }
@@ -2667,7 +2671,7 @@ namespace lfs::training {
 
     void MRNF::seed_from_view(int iter, const RenderOutput& render_output) {
         using namespace lfs::core;
-        if (!_params || _params->explore_seeds <= 0 ||
+        if (!far_field_requested() || kExploreSeeds <= 0 ||
             iter >= static_cast<int>(_params->grow_until_iter) ||
             !_camera_hull_valid || !_bounds_valid) {
             return;
@@ -2738,7 +2742,7 @@ namespace lfs::training {
         const int remaining_budget = (_params->max_cap > 0)
                                          ? std::max(0, _params->max_cap - static_cast<int>(active_count()))
                                          : static_cast<int>(std::min(hw, static_cast<size_t>(INT_MAX)));
-        int n_seed = std::min({starved_cadence_count(_params->explore_seeds), remaining_budget,
+        int n_seed = std::min({starved_cadence_count(kExploreSeeds), remaining_budget,
                                static_cast<int>(hw)});
         if (n_seed <= 0) {
             return;
@@ -2813,14 +2817,13 @@ namespace lfs::training {
             return;
         }
 
-        const float seed_depth_orbits = _params->seed_depth_orbits;
         const float d_hi = std::sqrt(
                                (cam_pos[0] - _cam_centroid[0]) * (cam_pos[0] - _cam_centroid[0]) +
                                (cam_pos[1] - _cam_centroid[1]) * (cam_pos[1] - _cam_centroid[1]) +
                                (cam_pos[2] - _cam_centroid[2]) * (cam_pos[2] - _cam_centroid[2])) +
-                           seed_depth_orbits * _orbit_radius;
+                           kSeedDepthOrbits * _orbit_radius;
 
-        const float raw_opacity = logit_clamped(_params->seed_opacity);
+        const float raw_opacity = logit_clamped(kSeedOpacity);
         const size_t sh_rest = _splat_data->max_sh_coeffs_rest();
         std::mt19937 rng{static_cast<unsigned int>(seed ^ 0x9E3779B9u)};
         std::uniform_real_distribution<float> unit(0.0f, 1.0f);
@@ -2880,7 +2883,7 @@ namespace lfs::training {
             const float far_dx = wx - _cam_centroid[0];
             const float far_dy = wy - _cam_centroid[1];
             const float far_dz = wz - _cam_centroid[2];
-            const float far_limit = _params->far_mask_orbits * _orbit_radius;
+            const float far_limit = kFarMaskOrbits * _orbit_radius;
             const bool outside =
                 (far_dx * far_dx + far_dy * far_dy + far_dz * far_dz) > (far_limit * far_limit);
             if (_far_growth.active && outside && outside_kept >= remaining_out) {
@@ -3037,9 +3040,7 @@ namespace lfs::training {
         if (!_optimizer || !_bounds_valid)
             return;
         _optimizer->set_param_lr(ParamType::Means, _mean_lr_unscaled * _bounds.median_size);
-        const bool want_per_splat =
-            _params && _params->mean_step_mode == lfs::core::param::MeanStepMode::PerSplat;
-        if (want_per_splat && _median_splat_extent_valid) {
+        if (far_field_requested() && _median_splat_extent_valid) {
             _optimizer->set_per_splat_mean_step(
                 true, _median_splat_extent, kPerSplatMeanStepRatioMin,
                 effective_mean_step_ratio_max());

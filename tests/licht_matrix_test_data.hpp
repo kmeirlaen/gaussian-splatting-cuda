@@ -46,9 +46,7 @@ namespace lfs::test::licht {
         "normal_loss_weight normal_consistency_weight normal_flatten_weight normal_loss_space "
         "growth_grad_threshold grow_fraction grow_until_iter opacity_decay scale_decay "
         "means_noise_weight bounds_percentile use_error_map use_edge_map "
-        "explore_splits explore_seeds seed_opacity far_growth_cap far_decay_scale "
-        "mean_step_mode mean_step_ratio_max far_mask_orbits "
-        "far_scene_min_fraction far_cap_ratio_full far_cap_ratio_rich seed_depth_orbits";
+        "use_far_field far_scene_min_fraction";
 
     struct PendingParameterExclusion {
         std::string_view field;

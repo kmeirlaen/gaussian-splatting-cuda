@@ -132,18 +132,8 @@ namespace {
             {"bounds_percentile", {"mrnf"}},
             {"use_error_map", {"mrnf"}},
             {"use_edge_map", {"mrnf"}},
-            {"explore_splits", {"mrnf"}},
-            {"explore_seeds", {"mrnf"}},
-            {"seed_opacity", {"mrnf"}},
-            {"far_growth_cap", {"mrnf"}},
-            {"far_decay_scale", {"mrnf"}},
-            {"mean_step_mode", {"mrnf"}},
-            {"mean_step_ratio_max", {"mrnf"}},
-            {"far_mask_orbits", {"mrnf"}},
+            {"use_far_field", {"mrnf"}},
             {"far_scene_min_fraction", {"mrnf"}},
-            {"far_cap_ratio_full", {"mrnf"}},
-            {"far_cap_ratio_rich", {"mrnf"}},
-            {"seed_depth_orbits", {"mrnf"}},
             {"prune_opacity", {"igs+"}},
             {"reset_every", {"igs+"}},
             {"min_opacity", {"mcmc"}},
@@ -403,7 +393,7 @@ namespace {
 
     TEST_F(TrainingParametersTest, EvalBenchmarkConfigsParseAsIs) {
         const auto mcmc_path = eval_config_path("mcmc_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mcmc_path), 0x5296bbd8725d137eULL);
+        EXPECT_EQ(frozen_config_fingerprint(mcmc_path), 0x627939cba4bdc0bbULL);
         const auto mcmc_result = lfs::core::param::read_optim_params_from_json(mcmc_path);
         ASSERT_TRUE(mcmc_result.has_value()) << mcmc_result.error();
         EXPECT_FLOAT_EQ(mcmc_result->opacity_lr, 0.0335f);
@@ -413,7 +403,7 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0x40c65afdecde5828ULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0x34461733f20c7388ULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
         EXPECT_FLOAT_EQ(mrnf_result->means_lr, 0.000128f);
@@ -422,7 +412,7 @@ namespace {
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
 
         const auto igs_path = eval_config_path("improvedGSplus_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(igs_path), 0x2cf8daf2e3da1198ULL);
+        EXPECT_EQ(frozen_config_fingerprint(igs_path), 0xf86e40494df20d22ULL);
         const auto igs_result = lfs::core::param::read_optim_params_from_json(igs_path);
         ASSERT_TRUE(igs_result.has_value()) << igs_result.error();
         EXPECT_FLOAT_EQ(igs_result->init_opacity, 0.3f);

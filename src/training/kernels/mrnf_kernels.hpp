@@ -100,11 +100,7 @@ namespace lfs::training::mrnf_strategy {
         MRNFBounds* bounds,
         void* stream = nullptr);
 
-    /**
-     * Median of geomean(exp(scaling_raw)) over the provided rows.
-     * Non-finite or non-positive extents are dropped. out_valid is false
-     * when no usable extent remains (caller falls back to the global step).
-     */
+    // Median of geomean(exp(scaling_raw)); out_valid is false when no usable extent remains.
     void launch_median_geomean_extent(
         const float* scaling_raw,
         size_t N,

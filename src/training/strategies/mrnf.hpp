@@ -33,23 +33,26 @@ class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
 class MRNFStrategyTest_ExploreSplitsAreDisjointAndRespectMaxCap_Test;
 class MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
-class MRNFStrategyTest_FarFieldClassificationStableAfterFarInserts_Test;
 class MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
 class MRNFStrategyTest_SeedFromViewInsertsRequestedRows_Test;
-class MRNFStrategyTest_ExploreScoreIgnoresNonPositiveRadii_Test;
 class MRNFStrategyTest_SumModeFoldIsBitIdentical_Test;
 class MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
-class MRNFStrategyTest_GlobalModeMeanStepIsBitIdenticalAcrossCodepaths_Test;
 class MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
-class MRNFStrategyTest_PerSplatMeanStepDecaysIdentically_Test;
-class MRNFStrategyTest_PerSplatMeanStepFusedStateUsesUnscaledLr_Test;
-class MRNFStrategyTest_PerSplatInvalidMedianFallsBackToGlobal_Test;
-class MRNFStrategyTest_MedianSplatExtentMatchesActiveGeomean_Test;
 class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
-class MRNFStrategyTest_OptimizationParametersDefaultsAreFarFieldOn_Test;
+class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 
 namespace lfs::training {
+
+    inline constexpr int kExploreSplits = 20;
+    inline constexpr int kExploreSeeds = 20;
+    inline constexpr float kSeedOpacity = 0.03f;
+    inline constexpr float kFarGrowthCap = 0.3f;
+    inline constexpr float kFarDecayScale = 0.25f;
+    inline constexpr float kFarMaskOrbits = 2.0f;
+    inline constexpr float kSeedDepthOrbits = 32.0f;
+    inline constexpr float kFarCapRatioFull = 2.0f;
+    inline constexpr float kFarCapRatioRich = 3.5f;
 
     class MRNF : public IStrategy, public ICheckpointStateAdopter {
     public:
@@ -113,21 +116,14 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
         friend class ::MRNFStrategyTest_ExploreSplitsAreDisjointAndRespectMaxCap_Test;
         friend class ::MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
-        friend class ::MRNFStrategyTest_FarFieldClassificationStableAfterFarInserts_Test;
         friend class ::MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
         friend class ::MRNFStrategyTest_SeedFromViewInsertsRequestedRows_Test;
-        friend class ::MRNFStrategyTest_ExploreScoreIgnoresNonPositiveRadii_Test;
         friend class ::MRNFStrategyTest_SumModeFoldIsBitIdentical_Test;
         friend class ::MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
-        friend class ::MRNFStrategyTest_GlobalModeMeanStepIsBitIdenticalAcrossCodepaths_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
-        friend class ::MRNFStrategyTest_PerSplatMeanStepDecaysIdentically_Test;
-        friend class ::MRNFStrategyTest_PerSplatMeanStepFusedStateUsesUnscaledLr_Test;
-        friend class ::MRNFStrategyTest_PerSplatInvalidMedianFallsBackToGlobal_Test;
-        friend class ::MRNFStrategyTest_MedianSplatExtentMatchesActiveGeomean_Test;
         friend class ::MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
         friend class ::MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
-        friend class ::MRNFStrategyTest_OptimizationParametersDefaultsAreFarFieldOn_Test;
+        friend class ::MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 
         struct FarGrowthState {
             bool active = false;
@@ -160,6 +156,7 @@ namespace lfs::training {
         void cache_seed_view(int iter, const RenderOutput& render_output);
         [[nodiscard]] bool should_cache_seed_view(int iter) const;
         void seed_from_view(int iter, const RenderOutput& render_output);
+        [[nodiscard]] bool far_field_requested() const;
         void refresh_camera_hull();
         void refresh_far_field_mask(size_t n);
         void publish_mean_step_far_mask();

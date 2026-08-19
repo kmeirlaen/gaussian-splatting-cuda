@@ -72,8 +72,6 @@ namespace lfs::training::mrnf_strategy {
         if (weight < 1e-12f)
             return;
 
-        // Philox: counter-setup only (no XORWOW skip-ahead). curand_normal4
-        // yields 3 usable normals + 1 discarded — matches microbench.
         curandStatePhilox4_32_10_t rng;
         curand_init(seed, idx, 0, &rng);
         const float4 n = curand_normal4(&rng);

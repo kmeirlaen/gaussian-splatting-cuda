@@ -465,7 +465,6 @@ TEST(DualRepOptimizer, MRNF_PerSplatMeanStepWithQuantizedAdamIsFinite) {
     opt_params.iterations = 200;
     opt_params.max_cap = 32;
     opt_params.sh_degree_interval = 10000;
-    opt_params.mean_step_mode = param::MeanStepMode::PerSplat;
     ASSERT_NO_THROW(strategy.initialize(opt_params));
 
     std::vector<float> log_s(8 * 3);

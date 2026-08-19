@@ -38,31 +38,6 @@ namespace lfs::core {
             World,
         };
 
-        enum class MeanStepMode {
-            Global,
-            PerSplat,
-        };
-
-        [[nodiscard]] inline constexpr std::string_view mean_step_mode_name(
-            const MeanStepMode mode) noexcept {
-            switch (mode) {
-            case MeanStepMode::Global:
-                return "global";
-            case MeanStepMode::PerSplat:
-                return "per_splat";
-            }
-            return "global";
-        }
-
-        [[nodiscard]] inline constexpr std::optional<MeanStepMode> mean_step_mode_from_string(
-            const std::string_view value) noexcept {
-            if (value == "global")
-                return MeanStepMode::Global;
-            if (value == "per_splat")
-                return MeanStepMode::PerSplat;
-            return std::nullopt;
-        }
-
         [[nodiscard]] inline constexpr std::string_view normal_loss_space_name(
             const NormalLossSpace space) noexcept {
             switch (space) {
@@ -248,18 +223,8 @@ namespace lfs::core {
             float bounds_percentile = 0.8f;
             bool use_error_map = true;
             bool use_edge_map = true;
-            int explore_splits = 20;
-            int explore_seeds = 20;
-            float seed_opacity = 0.03f;
-            float far_growth_cap = 0.3f;
-            float far_decay_scale = 0.25f;
-            MeanStepMode mean_step_mode = MeanStepMode::PerSplat;
-            float mean_step_ratio_max = 300.0f;
-            float far_mask_orbits = 2.0f;
-            float far_scene_min_fraction = 0.01f;
-            float far_cap_ratio_full = 2.0f;
-            float far_cap_ratio_rich = 3.5f;
-            float seed_depth_orbits = 32.0f;
+            bool use_far_field = true;
+            float far_scene_min_fraction = 0.01f; // 0 forces far features on
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM

@@ -429,17 +429,13 @@ namespace fast_lfs::rasterization::kernels::backward {
             }
         } // visible geometry
 
-        // Apply geometry Adam after sh0 and shN have already been updated.
-        // Scale the applied mean step (not the raw gradient): Adam's 2nd-moment
-        // normalize would cancel a gradient scale.
+        // Scale the applied mean step, not the raw gradient.
         const bool far_mean_step =
             fused_adam.per_splat_mean_step &&
             mean_step_far_mask != nullptr &&
             primitive_idx < static_cast<uint>(mean_step_far_mask_n) &&
             mean_step_far_mask[primitive_idx];
-        // Single adam_step_row call site: with quantized Adam state the helper
-        // runs block-wide bounds reductions, so divergent duplicate calls
-        // deadlock at mismatched barriers.
+        // single call site: helper runs block-wide reductions; divergent duplicates deadlock
         FusedAdamParam means_p = fused_adam.means;
         if (far_mean_step && fused_adam.scaling.param != nullptr) {
             const uint sb = primitive_idx * 3u;
