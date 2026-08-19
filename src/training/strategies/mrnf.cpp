@@ -937,7 +937,6 @@ namespace lfs::training {
             account_tensor("vis_count", _vis_count);
             account_tensor("free_mask", _free_mask);
             account_tensor("refine_counts_device", _refine_counts_dev);
-            account_tensor("refine_counts_host_device", _refine_counts_host);
             account_tensor("edge.precomputed_scores", _precomputed_edge_scores);
             account_tensor("edge.score_sum", _edge_score_sum);
             account_tensor("edge.canny_nms", _edge_canny_nms_output);
@@ -1086,7 +1085,6 @@ namespace lfs::training {
             render_output.image.ndim() < 3 ||
             render_output.target_image.ndim() < 3 ||
             !same_spatial(render_output.image, render_output.target_image)) {
-            LOG_DEBUG("MRNF: skip explore-score sample at iter {} (invalid image/target)", iter);
             return;
         }
 
@@ -1094,7 +1092,6 @@ namespace lfs::training {
             !_explore_error_hw.is_valid() || _explore_error_hw.ndim() != 2 ||
             _explore_error_hw.device() != Device::CUDA ||
             _explore_error_hw.dtype() != DataType::Float32) {
-            LOG_DEBUG("MRNF: skip explore-score sample at iter {} (invalid error map)", iter);
             return;
         }
 
@@ -1132,18 +1129,12 @@ namespace lfs::training {
         }
 
         if (!used_render_buffers) {
-            if (!_logged_invalid_means2d) {
-                LOG_INFO("MRNF: means2d/radii missing on RenderOutput; projecting splat centers for explore scores");
-                _logged_invalid_means2d = true;
-            }
             if (!render_output.camera) {
-                LOG_DEBUG("MRNF: skip explore-score sample at iter {} (no camera for projection)", iter);
                 return;
             }
             const auto [fx, fy, cx, cy] = render_output.camera->get_intrinsics();
             const float* w2c = render_output.camera->world_view_transform_ptr();
             if (w2c == nullptr || !(fx > 0.0f) || !(fy > 0.0f)) {
-                LOG_DEBUG("MRNF: skip explore-score sample at iter {} (invalid camera projection)", iter);
                 return;
             }
             ensure_cuda_float(_explore_means2d, TensorShape({n, 2}));
@@ -1541,15 +1532,9 @@ namespace lfs::training {
         _camera_hull_valid = true;
         _logged_degenerate_hull = false;
 
-        // Far-field machinery only earns its budget on scenes that HAVE a far
-        // field. Below this fraction the hull is treated as invalid so seeds,
-        // the growth guard, decay relief, and per-splat mobility all stay
-        // inert and compact/indoor scenes train bit-identical to baseline.
-        // Deep-far census: features only earn their budget on scenes with
-        // genuinely distant content. Points beyond 8x orbit separate
-        // mountain-class scenes (Giant_Bicycle 12%, stump 11%, bicycle 2%)
-        // from compact ones (garden 0.2%, indoor ~0%), where the same
-        // machinery only diverts budget.
+        // Census at 8x orbit: below far_scene_min_fraction the hull is treated
+        // as invalid so seeds, the growth guard, decay relief, and per-splat
+        // mobility stay inert.
         constexpr float kDeepFarRadiusOrbits = 8.0f;
         const float far_scene_min_fraction =
             _params ? _params->far_scene_min_fraction : 0.01f;
@@ -1694,11 +1679,6 @@ namespace lfs::training {
         if (!_camera_hull_valid || n == 0 || !_far_field_mask.is_valid() ||
             _far_field_mask.numel() != n) {
             _optimizer->set_mean_step_far_mask(nullptr, 0);
-            if (!_logged_mean_step_no_far_mask) {
-                LOG_DEBUG("MRNF: per_splat far-field mask unavailable (null or invalid hull); "
-                          "r_i=1 everywhere");
-                _logged_mean_step_no_far_mask = true;
-            }
             return;
         }
         _optimizer->set_mean_step_far_mask(_far_field_mask.ptr<bool>(), static_cast<int>(n));
@@ -2950,7 +2930,6 @@ namespace lfs::training {
         if (!_params || _params->explore_seeds <= 0 ||
             iter >= static_cast<int>(_params->grow_until_iter) ||
             !_camera_hull_valid || !_bounds_valid) {
-            LOG_DEBUG("MRNF: skip explore seeding at iter {}", iter);
             return;
         }
         LOG_TIMER("MRNF::seed_from_view");
@@ -2980,7 +2959,6 @@ namespace lfs::training {
                 width = _cached_seed_width;
                 height = _cached_seed_height;
             } else {
-                LOG_DEBUG("MRNF: skip explore seeding at iter {} (invalid RenderOutput)", iter);
                 return;
             }
         }
@@ -2989,7 +2967,6 @@ namespace lfs::training {
         target = to_float01_cuda(target);
         alpha = to_float01_cuda(alpha);
         if (image.ndim() != 3 || target.ndim() != 3) {
-            LOG_DEBUG("MRNF: skip explore seeding at iter {} (image rank)", iter);
             return;
         }
         if (width <= 0 || height <= 0) {
@@ -2997,18 +2974,15 @@ namespace lfs::training {
             width = static_cast<int>(image.shape()[2]);
         }
         if (width <= 0 || height <= 0) {
-            LOG_DEBUG("MRNF: skip explore seeding at iter {} (empty image)", iter);
             return;
         }
 
         if (!fill_mean_abs_error_hw(image, target, _explore_error_hw)) {
-            LOG_DEBUG("MRNF: skip explore seeding at iter {} (invalid seed weights)", iter);
             return;
         }
         auto alpha_flat = flatten_hw(alpha);
         if (!_explore_error_hw.is_valid() || !alpha_flat.is_valid() ||
             _explore_error_hw.numel() != alpha_flat.numel()) {
-            LOG_DEBUG("MRNF: skip explore seeding at iter {} (invalid seed weights)", iter);
             return;
         }
         const size_t error_n = _explore_error_hw.numel();
@@ -3096,7 +3070,6 @@ namespace lfs::training {
         const float* R = R_cpu.ptr<float>();
         const auto [fx, fy, cx, cy] = camera->get_intrinsics();
         if (!(fx > 0.0f) || R_cpu.ndim() != 2 || R_cpu.shape()[0] != 3 || R_cpu.shape()[1] != 3) {
-            LOG_DEBUG("MRNF: skip explore seeding at iter {} (invalid camera)", iter);
             return;
         }
 
@@ -3219,7 +3192,6 @@ namespace lfs::training {
         _far_growth.outside_used += outside_kept;
         _far_growth.reserved_for_seeds = 0;
         LFS_COUNTER_ADD("strategy.mrnf.explore_seed", kept);
-        LOG_DEBUG("MRNF: seeded {} splats at iter {} (outside {})", kept, iter, outside_kept);
     }
 
     void MRNF::compute_bounds() {
@@ -3317,9 +3289,6 @@ namespace lfs::training {
         _median_splat_extent = median_extent;
         _median_splat_extent_valid =
             median_ok && std::isfinite(median_extent) && median_extent > 0.0f;
-        _bounds.median_splat_extent = _median_splat_extent_valid ? median_extent : 0.0f;
-        LOG_DEBUG("MRNF: median_splat_extent={} valid={} scene_median_size={}",
-                  _median_splat_extent, _median_splat_extent_valid, _bounds.median_size);
 
         sync_mean_learning_rate();
     }
@@ -3348,11 +3317,6 @@ namespace lfs::training {
             _optimizer->set_per_splat_mean_step(
                 false, 0.0f, kPerSplatMeanStepRatioMin,
                 effective_mean_step_ratio_max());
-            if (want_per_splat && !_logged_invalid_median_splat_extent) {
-                LOG_DEBUG("MRNF: median_splat_extent invalid; per_splat mean step "
-                          "falling back to global");
-                _logged_invalid_median_splat_extent = true;
-            }
         }
     }
 
@@ -3613,8 +3577,6 @@ namespace lfs::training {
         std::swap(_refine_windows_since_bounds, source._refine_windows_since_bounds);
         std::swap(_median_splat_extent, source._median_splat_extent);
         std::swap(_median_splat_extent_valid, source._median_splat_extent_valid);
-        std::swap(_logged_invalid_median_splat_extent, source._logged_invalid_median_splat_extent);
-        std::swap(_logged_mean_step_no_far_mask, source._logged_mean_step_no_far_mask);
         publish_mean_step_far_mask();
         std::swap(_mean_lr_unscaled, source._mean_lr_unscaled);
         std::swap(_scale_lr_current, source._scale_lr_current);

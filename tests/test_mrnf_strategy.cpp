@@ -55,11 +55,6 @@ using namespace lfs::core;
 using namespace lfs::training;
 
 namespace {
-    // Joint (u,log_s) is the only Adam codec. Tests that previously forced the
-    // removed legacy uint8+scales path now run under joint (production) semantics.
-} // namespace
-
-namespace {
 
     SplatData create_mrnf_test_splat_data(const int n_gaussians = 10, const int sh_degree = 3) {
         const size_t n = static_cast<size_t>(n_gaussians);
@@ -1017,9 +1012,8 @@ namespace {
         return std::make_shared<CameraDataset>(std::move(cams), cfg, CameraDataset::Split::ALL);
     }
 
-    // Row 7 moves beyond the 8x-orbit deep-far census radius so the
-    // scene-level far gate stays active in mean-step fixtures; it remains a
-    // far row for the 2x runtime mask exactly as before.
+    // Place a row beyond the 8x-orbit census radius so the scene-level far
+    // gate stays active; the row is still far for the 2x runtime mask.
     void place_deep_far_probe_at(SplatData& splat_data, const int row) {
         const int n = static_cast<int>(splat_data.size());
         std::vector<float> means(static_cast<size_t>(n) * 3, 0.0f);

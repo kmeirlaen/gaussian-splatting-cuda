@@ -325,7 +325,6 @@ namespace lfs::training::mrnf_strategy {
         std::sort(sorted_ext, sorted_ext + 3);
         bounds->median_size = sorted_ext[1] * 2.0f;
         bounds->max_extent = sorted_ext[2];
-        bounds->median_splat_extent = 0.0f;
     }
 
     __global__ void geomean_extent_kernel(

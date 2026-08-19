@@ -240,7 +240,6 @@ namespace lfs::training {
         lfs::core::Tensor _explore_radii;
         int _explore_sample_count = 0;
         int _explore_last_sample_iter = -1;
-        bool _logged_invalid_means2d = false;
         lfs::core::Tensor _cached_seed_image;
         lfs::core::Tensor _cached_seed_target;
         lfs::core::Tensor _cached_seed_alpha;
@@ -272,7 +271,6 @@ namespace lfs::training {
         GumbelTopKScratch _gumbel_scratch;
         PositiveMedianScratch _median_scratch;
         lfs::core::Tensor _refine_counts_dev;
-        lfs::core::Tensor _refine_counts_host; // pinned staging optional; use vector
 
         std::size_t _strategy_required_peak_bytes = 0;
         std::size_t _strategy_allocated_peak_bytes = 0;
@@ -286,8 +284,6 @@ namespace lfs::training {
         int _refine_windows_since_bounds = 0;
         float _median_splat_extent = 0.0f;
         bool _median_splat_extent_valid = false;
-        bool _logged_invalid_median_splat_extent = false;
-        bool _logged_mean_step_no_far_mask = false;
 
         // MRNF uses independent exponential schedules for mean and scale learning rates.
         double _mean_lr_unscaled = 0.0;

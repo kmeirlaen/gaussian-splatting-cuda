@@ -18,7 +18,6 @@ namespace lfs::training::mrnf_strategy {
         float extent[3];
         float median_size;
         float max_extent;
-        float median_splat_extent;
     };
 
     /**
