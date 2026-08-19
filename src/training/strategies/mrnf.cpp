@@ -1195,7 +1195,8 @@ namespace lfs::training {
                 _splat_data->_densification_info.ptr<float>(),
                 n,
                 nullptr,
-                densification_row_count());
+                densification_row_count(),
+                _params && _params->error_vis_norm);
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             zero_frozen_scores_inplace(*_splat_data, _vis_count);
         } else if (info.is_valid() && info.numel() > 0) {

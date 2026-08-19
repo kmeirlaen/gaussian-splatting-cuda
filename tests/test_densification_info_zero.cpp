@@ -128,3 +128,97 @@ TEST(DensificationInfoZeroTest, McmcMaxMatchesMultiStepReference) {
         EXPECT_FLOAT_EQ(a[i], b[i]) << "error max i=" << i;
     }
 }
+
+TEST(DensificationInfoZeroTest, MrnfFoldVisNormDividesErrByVis) {
+    constexpr size_t N = 4;
+    auto vis = Tensor::zeros({N}, Device::CUDA);
+    auto refine_max = Tensor::zeros({N}, Device::CUDA);
+    // vis 0.1 / err 0.05 -> attributed 0.5. Other rows stay 0.
+    auto info = make_info({0.1f, 0.0f, 0.0f, 0.0f}, {0.05f, 0.0f, 0.0f, 0.0f});
+
+    mrnf_strategy::launch_fold_densification_and_zero(
+        vis.ptr<float>(),
+        refine_max.ptr<float>(),
+        info.ptr<float>(),
+        N,
+        nullptr,
+        2,
+        true);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto vis_h = to_host(vis);
+    const auto ref_h = to_host(refine_max);
+    EXPECT_FLOAT_EQ(vis_h[0], 0.1f);
+    EXPECT_FLOAT_EQ(ref_h[0], 0.05f / 0.1f);
+    for (size_t i = 1; i < N; ++i) {
+        EXPECT_FLOAT_EQ(vis_h[i], 0.f);
+        EXPECT_FLOAT_EQ(ref_h[i], 0.f);
+    }
+    for (float v : to_host(info)) {
+        EXPECT_FLOAT_EQ(v, 0.f);
+    }
+}
+
+TEST(DensificationInfoZeroTest, MrnfFoldVisNormClampsAtFloor) {
+    constexpr size_t N = 3;
+    auto vis = Tensor::zeros({N}, Device::CUDA);
+    auto refine_max = Tensor::zeros({N}, Device::CUDA);
+    const float vis_below = mrnf_strategy::kVisNormFloor * 0.2f; // 0.01
+    auto info = make_info({vis_below, 0.0f, 0.0f}, {0.05f, 0.0f, 0.0f});
+
+    mrnf_strategy::launch_fold_densification_and_zero(
+        vis.ptr<float>(),
+        refine_max.ptr<float>(),
+        info.ptr<float>(),
+        N,
+        nullptr,
+        2,
+        true);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto vis_h = to_host(vis);
+    const auto ref_h = to_host(refine_max);
+    EXPECT_FLOAT_EQ(vis_h[0], vis_below);
+    EXPECT_FLOAT_EQ(ref_h[0], 0.05f / mrnf_strategy::kVisNormFloor);
+}
+
+TEST(DensificationInfoZeroTest, MrnfFoldVisNormDisabledKeepsRawErr) {
+    constexpr size_t N = 3;
+    auto vis = Tensor::zeros({N}, Device::CUDA);
+    auto refine_max = Tensor::zeros({N}, Device::CUDA);
+    auto info = make_info({0.1f, 0.01f, 0.0f}, {0.05f, 0.05f, 0.0f});
+    auto info_enabled = info.clone();
+
+    mrnf_strategy::launch_fold_densification_and_zero(
+        vis.ptr<float>(),
+        refine_max.ptr<float>(),
+        info.ptr<float>(),
+        N,
+        nullptr,
+        2,
+        false);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto vis_h = to_host(vis);
+    const auto ref_h = to_host(refine_max);
+    EXPECT_FLOAT_EQ(vis_h[0], 0.1f);
+    EXPECT_FLOAT_EQ(vis_h[1], 0.01f);
+    EXPECT_FLOAT_EQ(ref_h[0], 0.05f);
+    EXPECT_FLOAT_EQ(ref_h[1], 0.05f);
+
+    auto vis_on = Tensor::zeros({N}, Device::CUDA);
+    auto refine_on = Tensor::zeros({N}, Device::CUDA);
+    mrnf_strategy::launch_fold_densification_and_zero(
+        vis_on.ptr<float>(),
+        refine_on.ptr<float>(),
+        info_enabled.ptr<float>(),
+        N,
+        nullptr,
+        2,
+        true);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto ref_on = to_host(refine_on);
+    EXPECT_FLOAT_EQ(ref_on[0], 0.5f);
+    EXPECT_FLOAT_EQ(ref_on[1], 0.05f / mrnf_strategy::kVisNormFloor);
+    EXPECT_NE(ref_h[0], ref_on[0]);
+}

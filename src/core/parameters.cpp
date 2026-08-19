@@ -227,6 +227,10 @@ namespace lfs::core {
             opt_json["bg_color"] = {bg_color[0], bg_color[1], bg_color[2]};
             if (!bg_image_path.empty())
                 opt_json["bg_image_path"] = path_to_utf8(bg_image_path);
+            if (error_vis_norm)
+                opt_json["error_vis_norm"] = error_vis_norm;
+            if (error_dog_weight != 0.0f)
+                opt_json["error_dog_weight"] = error_dog_weight;
 
             return opt_json;
         }
@@ -306,6 +310,7 @@ namespace lfs::core {
                 std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
                 std::pair{"init_rho", init_rho},
+                std::pair{"error_dog_weight", error_dog_weight},
             };
             for (const auto& [name, value] : nonnegative_fields) {
                 if (auto error = invalid_nonnegative(value, name); !error.empty())
@@ -598,6 +603,10 @@ namespace lfs::core {
                 params.bg_image_path =
                     utf8_to_path(json.at("bg_image_path").get<std::string>());
             }
+            if (json.contains("error_vis_norm"))
+                params.error_vis_norm = json.at("error_vis_norm");
+            if (json.contains("error_dog_weight"))
+                params.error_dog_weight = json.at("error_dog_weight");
 
             if (json.contains("depth_loss_mode") &&
                 (params.depth_loss_mode == "pearson" ||

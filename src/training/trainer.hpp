@@ -808,6 +808,9 @@ namespace lfs::training {
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;
 
+        // Grow-only [3,H,W] workspace for the experimental DoG residual (error_dog_weight > 0)
+        core::Tensor densification_dog_scratch_;
+
         // Reusable buffer for Sobel edge map (lfs edge-importance densification)
         core::Tensor edge_map_buffer_;
 

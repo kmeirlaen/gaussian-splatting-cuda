@@ -138,9 +138,14 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    // Floor for error_vis_norm: err / max(vis, floor). Prevents blow-up on
+    // barely-seen splats. Experimental; config-file / C++ only.
+    inline constexpr float kVisNormFloor = 0.05f;
+
     /**
      * fold densification_info into vis_count (add row0) and refine_weight_max
      * (max of row1), then zero n_rows rows.
+     * When error_vis_norm is true, the folded score is err / max(vis, kVisNormFloor).
      */
     void launch_fold_densification_and_zero(
         float* vis_count,
@@ -148,7 +153,8 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         void* stream = nullptr,
-        size_t n_rows = 2);
+        size_t n_rows = 2,
+        bool error_vis_norm = false);
 
     void launch_project_visible_centers(
         const float* means,

@@ -422,6 +422,34 @@ namespace {
         EXPECT_EQ(igs_result->strategy, "igs+");
     }
 
+    TEST_F(TrainingParametersTest, ExperimentalErrorFieldsAreConfigResidue) {
+        const auto defaults = OptimizationParameters::mrnf_defaults();
+        EXPECT_FALSE(defaults.error_vis_norm);
+        EXPECT_FLOAT_EQ(defaults.error_dog_weight, 0.0f);
+
+        const auto default_json = defaults.to_json();
+        EXPECT_FALSE(default_json.contains("error_vis_norm"));
+        EXPECT_FALSE(default_json.contains("error_dog_weight"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "error_vis_norm"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "error_dog_weight"));
+
+        auto json = defaults.to_json();
+        json["error_vis_norm"] = true;
+        json["error_dog_weight"] = 1.0f;
+        const auto parsed = OptimizationParameters::from_json(json);
+        EXPECT_TRUE(parsed.error_vis_norm);
+        EXPECT_FLOAT_EQ(parsed.error_dog_weight, 1.0f);
+        EXPECT_TRUE(parsed.validate().empty());
+
+        const auto enabled_json = parsed.to_json();
+        EXPECT_TRUE(enabled_json.at("error_vis_norm").get<bool>());
+        EXPECT_FLOAT_EQ(enabled_json.at("error_dog_weight").get<float>(), 1.0f);
+
+        auto invalid = defaults;
+        invalid.error_dog_weight = -1.0f;
+        EXPECT_FALSE(invalid.validate().empty());
+    }
+
     TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {
         std::array<std::pair<std::string_view, OptimizationParameters>, 3> factories = {{
             {"mcmc", OptimizationParameters::mcmc_defaults()},

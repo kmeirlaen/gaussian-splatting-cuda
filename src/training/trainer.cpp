@@ -3356,6 +3356,7 @@ namespace lfs::training {
         normal_prior_depth_scalar_ = {};
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
+        densification_dog_scratch_ = {};
         edge_map_buffer_ = {};
         strategy_.reset();
         bilateral_grid_.reset();
@@ -6858,6 +6859,101 @@ namespace lfs::training {
                                     tile_error_map = abs_diff;
                                 }
                                 tile_error_map = tile_error_map.contiguous();
+                            }
+
+                            const float dog_weight = params_.optimization.error_dog_weight;
+                            if (dog_weight > 0.0f &&
+                                tile_error_map.is_valid() &&
+                                tile_error_map.ndim() == 2 &&
+                                tile_error_map.dtype() == lfs::core::DataType::Float32 &&
+                                tile_error_map.device() == lfs::core::Device::CUDA) {
+                                if (!tile_error_map.is_contiguous()) {
+                                    tile_error_map = tile_error_map.contiguous();
+                                }
+                                const int err_h = static_cast<int>(tile_error_map.shape()[0]);
+                                const int err_w = static_cast<int>(tile_error_map.shape()[1]);
+
+                                struct DogRgbView {
+                                    const float* f32 = nullptr;
+                                    const std::uint8_t* u8 = nullptr;
+                                    bool chw = true;
+                                    bool ok = false;
+                                    lfs::core::Tensor keep;
+                                };
+                                const auto as_dog_rgb =
+                                    [err_h, err_w](const lfs::core::Tensor& img) -> DogRgbView {
+                                    DogRgbView view;
+                                    if (!img.is_valid() || img.device() != lfs::core::Device::CUDA) {
+                                        return view;
+                                    }
+                                    view.keep = img.is_contiguous() ? img : img.contiguous();
+                                    const auto& t = view.keep;
+                                    const bool is_f32 = t.dtype() == lfs::core::DataType::Float32;
+                                    const bool is_u8 = t.dtype() == lfs::core::DataType::UInt8;
+                                    if (!is_f32 && !is_u8) {
+                                        return view;
+                                    }
+                                    int h = 0;
+                                    int w = 0;
+                                    if (t.ndim() == 3 && t.shape()[0] == 3) {
+                                        view.chw = true;
+                                        h = static_cast<int>(t.shape()[1]);
+                                        w = static_cast<int>(t.shape()[2]);
+                                    } else if (t.ndim() == 3 && t.shape()[2] == 3) {
+                                        view.chw = false;
+                                        h = static_cast<int>(t.shape()[0]);
+                                        w = static_cast<int>(t.shape()[1]);
+                                    } else if (t.ndim() == 4 && t.shape()[0] == 1 && t.shape()[1] == 3) {
+                                        view.chw = true;
+                                        h = static_cast<int>(t.shape()[2]);
+                                        w = static_cast<int>(t.shape()[3]);
+                                    } else {
+                                        return view;
+                                    }
+                                    if (h != err_h || w != err_w) {
+                                        return view;
+                                    }
+                                    if (is_u8) {
+                                        view.u8 = t.ptr<std::uint8_t>();
+                                    } else {
+                                        view.f32 = t.ptr<float>();
+                                    }
+                                    view.ok = true;
+                                    return view;
+                                };
+
+                                const DogRgbView gt_view = as_dog_rgb(gt_tile);
+                                const DogRgbView render_view = as_dog_rgb(corrected_image);
+                                if (gt_view.ok && render_view.ok && render_view.f32 != nullptr) {
+                                    if (!densification_dog_scratch_.is_valid() ||
+                                        densification_dog_scratch_.ndim() != 3 ||
+                                        densification_dog_scratch_.shape()[0] != 3 ||
+                                        densification_dog_scratch_.shape()[1] !=
+                                            static_cast<size_t>(err_h) ||
+                                        densification_dog_scratch_.shape()[2] !=
+                                            static_cast<size_t>(err_w)) {
+                                        densification_dog_scratch_ = core::Tensor::empty(
+                                            {size_t{3},
+                                             static_cast<size_t>(err_h),
+                                             static_cast<size_t>(err_w)},
+                                            core::Device::CUDA);
+                                    }
+                                    lfs::core::pin_operands({&tile_error_map,
+                                                             &gt_view.keep,
+                                                             &render_view.keep,
+                                                             &densification_dog_scratch_});
+                                    lfs::training::kernels::launch_add_dog_residual(
+                                        gt_view.f32,
+                                        gt_view.u8,
+                                        gt_view.chw,
+                                        render_view.f32,
+                                        render_view.chw,
+                                        tile_error_map.ptr<float>(),
+                                        err_h,
+                                        err_w,
+                                        dog_weight,
+                                        densification_dog_scratch_.ptr<float>());
+                                }
                             }
 
                             if (use_mask &&

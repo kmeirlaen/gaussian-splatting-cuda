@@ -225,6 +225,10 @@ namespace lfs::core {
             bool use_edge_map = true;
             bool use_far_field = true;
             float far_scene_min_fraction = 0.01f; // 0 forces far features on
+            // Experimental densification-error attribution. Config-file / C++ only
+            // (no registry, GUI, locale, or CLI). Defaults keep the production path.
+            bool error_vis_norm = false;
+            float error_dog_weight = 0.0f;
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM

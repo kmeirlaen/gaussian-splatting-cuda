@@ -206,7 +206,8 @@ namespace lfs::training::mrnf_strategy {
         float* __restrict__ refine_weight_max,
         float* __restrict__ densification_info,
         size_t N,
-        size_t n_rows) {
+        size_t n_rows,
+        bool error_vis_norm) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -215,7 +216,8 @@ namespace lfs::training::mrnf_strategy {
         const float vis = densification_info[idx];
         const float err = densification_info[N + idx];
         vis_count[idx] += vis;
-        refine_weight_max[idx] = fmaxf(refine_weight_max[idx], err);
+        const float attributed = error_vis_norm ? (err / fmaxf(vis, kVisNormFloor)) : err;
+        refine_weight_max[idx] = fmaxf(refine_weight_max[idx], attributed);
         for (size_t row = 0; row < n_rows; ++row) {
             densification_info[row * N + idx] = 0.f;
         }
@@ -227,7 +229,8 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         void* stream,
-        size_t n_rows) {
+        size_t n_rows,
+        bool error_vis_norm) {
         if (N == 0)
             return;
         const size_t rows = n_rows >= 2 ? n_rows : 2;
@@ -235,7 +238,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         fold_densification_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            vis_count, refine_weight_max, densification_info, N, rows);
+            vis_count, refine_weight_max, densification_info, N, rows, error_vis_norm);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_and_zero");
     }
 
