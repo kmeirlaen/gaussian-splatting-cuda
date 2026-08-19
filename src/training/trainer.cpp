@@ -2029,6 +2029,7 @@ namespace lfs::training {
             nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
             nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
             createSyncPrimitives();
+            PerfBenchCollector::instance().set_timing_stream(training_stream_);
         } catch (...) {
             // A C++ destructor is not invoked when its constructor throws.
             // Roll back every member handle published by this transaction.
@@ -5483,6 +5484,7 @@ namespace lfs::training {
                 if (PerfBenchCollector::enabled()) {
                     PerfBenchCollector::instance().on_step_begin(iter);
                 }
+                PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::StepBegin, iter);
                 if (live_vram_profiler_enabled()) {
                     auto& profiler = lfs::diagnostics::VramProfiler::instance();
                     profiler.beginIteration(iter);
@@ -5903,6 +5905,7 @@ namespace lfs::training {
 
                     // Render the tile
                     nvtxRangePush("rasterize_forward");
+                    PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::FwdBegin, iter);
 
                     // Storage for render output (used by both paths)
                     RenderOutput output;
@@ -6118,6 +6121,7 @@ namespace lfs::training {
 
                         // Photometric loss
                         nvtxRangePush("compute_photometric_loss");
+                        PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
 
@@ -6254,6 +6258,7 @@ namespace lfs::training {
                         }
 
                         nvtxRangePush("compute_photometric_loss");
+                        PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
                         lfs::core::Tensor tile_grad_raw;
@@ -7052,6 +7057,7 @@ namespace lfs::training {
 
                         current_phase = StepPhase::Backward;
                         nvtxRangePush("rasterize_backward");
+                        PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::BwdBegin, iter);
                         {
                             LFS_VRAM_SCOPE("train.rasterize_backward");
                             LOG_VRAM_DIFF("train.rasterize_backward");
@@ -7112,6 +7118,7 @@ namespace lfs::training {
                     current_phase = StepPhase::OptimizerCommit;
                     // Controller phase: only update controller weights
                     nvtxRangePush("controller_optimizer_step");
+                    PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     LFS_VRAM_SCOPE("train.optimizer.ppisp_controller_step");
                     LOG_VRAM_DIFF("train.optimizer.ppisp_controller_step");
                     ppisp_controller_pool_->optimizer_step(ppisp_cam_idx);
@@ -7121,6 +7128,9 @@ namespace lfs::training {
                     persistent_commit = true;
                     nvtxRangePop();
                 } else {
+                    // Default path has no controller_optimizer_step NVTX; mark the
+                    // same OptBegin boundary at the start of the optimizer region.
+                    PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     // Normal phase: regularization losses + optimizer steps for all components
 
                     if (params_.optimization.scale_reg > 0.0f) {
@@ -7579,6 +7589,7 @@ namespace lfs::training {
                                                   &strategy_->get_optimizer());
                     lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
                 }
+                PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::StepEnd, iter);
                 if (PerfBenchCollector::enabled() && strategy_) {
                     auto& bench = PerfBenchCollector::instance();
                     const auto ledger = compute_training_state_ledger(

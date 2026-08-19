@@ -105,6 +105,7 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.TOGGLE_INDEPENDENT_SPLIT_VIEW,
             lf.keymap.Action.TOGGLE_GT_COMPARISON,
             lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS,
+            lf.keymap.Action.TOGGLE_GRID,
             lf.keymap.Action.CYCLE_PLY,
             lf.keymap.Action.CYCLE_SELECTION_VIS,
         ],

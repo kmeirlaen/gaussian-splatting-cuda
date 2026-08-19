@@ -101,6 +101,7 @@ ACTION_NAMES = (
     "OPEN_PREFERENCES",
     "TOGGLE_MCP_SERVER",
     "TOGGLE_MCP_BINDING",
+    "TOGGLE_GRID",
 )
 
 
@@ -530,6 +531,7 @@ def test_input_settings_global_mode_exposes_system_sections(input_settings_modul
     assert str(module.lf.keymap.Action.OPEN_PREFERENCES.value) in action_ids
     assert str(module.lf.keymap.Action.HISTOGRAM_ZOOM_MARKED.value) in action_ids
     assert str(module.lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS.value) in action_ids
+    assert str(module.lf.keymap.Action.TOGGLE_GRID.value) in action_ids
     assert str(module.lf.keymap.Action.SEQUENCER_PLAY_PAUSE.value) in action_ids
     assert str(module.lf.keymap.Action.TOGGLE_MCP_SERVER.value) in action_ids
     assert str(module.lf.keymap.Action.TOGGLE_MCP_BINDING.value) in action_ids
