@@ -1622,16 +1622,29 @@ namespace lfs::training {
     }
 
     void MRNF::update_far_starvation() {
-        const float max_cap = _params ? static_cast<float>(_params->max_cap) : 0.0f;
-        const float points = static_cast<float>(std::max(_initial_sfm_point_count, size_t{1}));
-        const float ratio = max_cap / points;
-        const float full = _params ? _params->far_cap_ratio_full : 2.0f;
-        const float rich = _params ? _params->far_cap_ratio_rich : 3.5f;
-        const float s = (_initial_sfm_point_count == 0) ? 0.0f
-                                                        : far_starvation_factor(ratio, full, rich);
+        // Params and P are bound at initialize(); skip the pre-init hull/setter pass.
+        if (!_params || _initial_sfm_point_count == 0) {
+            return;
+        }
+        // max_cap == 0 is legal (uncapped): treat as the rich regime, s = 0.
+        const bool uncapped = _params->max_cap == 0;
+        float s = 0.0f;
+        float ratio = 0.0f;
+        if (!uncapped) {
+            const float max_cap = static_cast<float>(_params->max_cap);
+            const float points = static_cast<float>(_initial_sfm_point_count);
+            ratio = max_cap / points;
+            const float full = _params->far_cap_ratio_full;
+            const float rich = _params->far_cap_ratio_rich;
+            s = far_starvation_factor(ratio, full, rich);
+        }
         _far_starvation = s;
         if (std::abs(s - _logged_far_starvation) > 0.1f) {
-            LOG_INFO("MRNF: far starvation {:.2f} (cap/points {:.2f})", s, ratio);
+            if (uncapped) {
+                LOG_INFO("MRNF: far starvation 0.00 (uncapped)");
+            } else {
+                LOG_INFO("MRNF: far starvation {:.2f} (cap/points {:.2f})", s, ratio);
+            }
             _logged_far_starvation = s;
         }
         if (_optimizer && _optimizer->per_splat_mean_step()) {

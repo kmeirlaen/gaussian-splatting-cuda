@@ -2019,6 +2019,14 @@ TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
         EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
         strategy._initial_sfm_point_count = 0;
         strategy.update_far_starvation();
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
+    }
+
+    {
+        auto splat = create_mrnf_test_splat_data(10);
+        MRNF strategy(splat);
+        strategy.initialize(starvation_params(0));
+        EXPECT_EQ(strategy._initial_sfm_point_count, 10u);
         EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
     }
 }
