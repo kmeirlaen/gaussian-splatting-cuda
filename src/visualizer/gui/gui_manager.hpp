@@ -58,9 +58,14 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
     class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
     class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+    class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+    class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
 
     namespace gui {
         class NativeScenePanel;
+
+        LFS_VIS_API void openPreferencesPanel(std::string section = {});
+        [[nodiscard]] LFS_VIS_API std::string consumePreferencesSectionRequest();
 
         struct GuiHitTestResult {
             bool blocks_pointer = false;
@@ -195,6 +200,8 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
             friend class lfs::vis::VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;

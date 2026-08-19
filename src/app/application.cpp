@@ -48,6 +48,7 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
+#include "visualizer/preferences.hpp"
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
@@ -1138,6 +1139,8 @@ namespace lfs::app {
             });
 
             constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
+            mcp::McpHttpServer mcp_http({.enable_resources = true});
+            const auto mcp_preferences = vis::loadMcpPreferences();
             const auto startup_project =
                 params->project_path
                     ? params->project_path
@@ -1149,6 +1152,50 @@ namespace lfs::app {
                 .antialiasing = false,
                 .show_startup_overlay = !disable_splash,
                 .safe_mode = safe_mode,
+                .mcp_status_provider = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    return vis::RuntimeServiceStatus{
+                        .enabled = status.enabled,
+                        .running = status.running,
+                        .phase = [&] {
+                            switch (status.phase) {
+                            case mcp::McpHttpPhase::Disabled:
+                                return vis::RuntimeServicePhase::Disabled;
+                            case mcp::McpHttpPhase::Starting:
+                                return vis::RuntimeServicePhase::Starting;
+                            case mcp::McpHttpPhase::Running:
+                                return vis::RuntimeServicePhase::Running;
+                            case mcp::McpHttpPhase::Stopping:
+                                return vis::RuntimeServicePhase::Stopping;
+                            case mcp::McpHttpPhase::Failed:
+                                return vis::RuntimeServicePhase::Failed;
+                            }
+                            return vis::RuntimeServicePhase::Failed; }(),
+                        .network_exposed = status.expose_network,
+                        .port = status.port,
+                        .request_count = status.request_count,
+                        .success_count = status.success_count,
+                        .error_count = status.error_count,
+                        .endpoints = status.endpoints,
+                        .request_logging = status.request_logging,
+                        .log_file = status.log_file,
+                        .error = status.error,
+                        .error_kind = [&] {
+                            switch (status.error_kind) {
+                            case mcp::McpHttpErrorKind::None:
+                                return vis::RuntimeServiceErrorKind::None;
+                            case mcp::McpHttpErrorKind::InvalidPort:
+                                return vis::RuntimeServiceErrorKind::InvalidPort;
+                            case mcp::McpHttpErrorKind::BindFailed:
+                                return vis::RuntimeServiceErrorKind::BindFailed;
+                            case mcp::McpHttpErrorKind::ListenerFailed:
+                                return vis::RuntimeServiceErrorKind::RuntimeFailure;
+                            }
+                            return vis::RuntimeServiceErrorKind::RuntimeFailure; }(),
+                        .error_address = status.error_address,
+                        .error_port = status.error_port,
+                    };
+                },
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
                 .startup_project = startup_project,
@@ -1190,15 +1237,64 @@ namespace lfs::app {
             register_gui_scene_tools(viewer.get());
             register_gui_scene_resources(viewer.get());
 
-            mcp::McpHttpServer mcp_http({.enable_resources = true});
+            mcp::setActiveMcpHttpServer(&mcp_http);
+            vis::setRuntimeServiceControls({
+                .toggle_mcp_enabled = [safe_mode] {
+                    if (safe_mode)
+                        return false;
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const mcp::McpHttpConfig config{
+                        .enabled = !status.enabled,
+                        .expose_network = status.expose_network,
+                        .port = status.port,
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = config.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+                .toggle_mcp_binding = [safe_mode] {
+                    if (safe_mode)
+                        return false;
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const mcp::McpHttpConfig config{
+                        .enabled = status.enabled,
+                        .expose_network = !status.expose_network,
+                        .port = status.port,
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = config.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+            });
             viewer->setShutdownRequestedCallback([&mcp_http]() {
+                vis::setRuntimeServiceControls({});
+                mcp::setActiveMcpHttpServer(nullptr);
                 mcp_http.stop();
             });
-            if (!mcp_http.start())
+            if (!mcp_http.start({
+                    .enabled = mcp_preferences.enabled,
+                    .expose_network = mcp_preferences.expose_network,
+                    .port = mcp_preferences.port,
+                    .request_logging = mcp_preferences.request_logging,
+                }))
                 LOG_ERROR("Failed to start MCP HTTP server");
 
             viewer->run();
 
+            vis::setRuntimeServiceControls({});
+            mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
 
             python::finalize();

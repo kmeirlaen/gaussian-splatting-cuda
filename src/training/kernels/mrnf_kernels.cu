@@ -513,9 +513,9 @@ namespace lfs::training::mrnf_strategy {
 
         if (K == N) {
             auto out_ptr = thrust::device_pointer_cast(output_indices);
-            lfs::core::tensor_ops::run_with_thrust_policy(s, [&](auto policy) {
-                thrust::sequence(policy, out_ptr, out_ptr + N);
-            });
+            // Caller may consume output_indices via a Tensor whose home stream
+            // is not `s` (scratch allocated earlier). Keep the host wait.
+            thrust::sequence(thrust::cuda::par.on(s), out_ptr, out_ptr + N);
             return;
         }
 
@@ -528,10 +528,9 @@ namespace lfs::training::mrnf_strategy {
                                            known_nnz, N));
                 active_count = known_nnz;
             } else {
-                lfs::core::tensor_ops::run_with_thrust_policy(s, [&](auto policy) {
-                    active_count = static_cast<size_t>(
-                        thrust::count_if(policy, weights_ptr, weights_ptr + N, positive_weight{}));
-                });
+                active_count = static_cast<size_t>(
+                    thrust::count_if(thrust::cuda::par.on(s), weights_ptr, weights_ptr + N,
+                                     positive_weight{}));
             }
         }
 
@@ -591,15 +590,13 @@ namespace lfs::training::mrnf_strategy {
         if (compact_active) {
             auto indices_ptr = thrust::device_pointer_cast(d_indices);
             auto counting_begin = thrust::make_counting_iterator<int64_t>(0);
-            lfs::core::tensor_ops::run_with_thrust_policy(s, [&](auto policy) {
-                thrust::copy_if(
-                    policy,
-                    counting_begin,
-                    counting_begin + static_cast<std::ptrdiff_t>(N),
-                    weights_ptr,
-                    indices_ptr,
-                    positive_weight{});
-            });
+            thrust::copy_if(
+                thrust::cuda::par.on(s),
+                counting_begin,
+                counting_begin + static_cast<std::ptrdiff_t>(N),
+                weights_ptr,
+                indices_ptr,
+                positive_weight{});
             gumbel_key_for_indices_kernel<<<blocks, threads, 0, s>>>(
                 weights, d_indices, d_keys, sort_count, seed);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_keys_indices");

@@ -4,6 +4,7 @@
 
 #include "py_ui.hpp"
 #include "control/command_api.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -14,6 +15,7 @@
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/user_paths.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -22,6 +24,7 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "mcp/mcp_http_server.hpp"
 #include "preferences.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
@@ -4806,6 +4809,123 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "get_mcp_preferences",
+            [] {
+                vis::McpPreferenceState state;
+                bool safe_mode = false;
+                {
+                    nb::gil_scoped_release release;
+                    state = vis::loadMcpPreferences();
+                    safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                }
+                nb::dict result;
+                result["enabled"] = !safe_mode && state.enabled;
+                result["expose_network"] = state.expose_network;
+                result["port"] = state.port;
+                result["request_logging"] = !safe_mode && state.request_logging;
+                result["safe_mode"] = safe_mode;
+                return result;
+            },
+            "Get effective MCP HTTP server preferences");
+
+        m.def(
+            "set_mcp_preferences",
+            [](const bool enabled, const bool expose_network, const int port,
+               const bool request_logging) {
+                if (port < 1 || port > 65535)
+                    throw nb::value_error("MCP port must be between 1 and 65535");
+                nb::gil_scoped_release release;
+                const vis::McpPreferenceState state{
+                    .enabled = enabled,
+                    .expose_network = expose_network,
+                    .port = port,
+                    .request_logging = request_logging,
+                };
+                vis::saveMcpPreferences(state);
+                return mcp::applyActiveMcpHttpConfig({
+                    .enabled = state.enabled,
+                    .expose_network = state.expose_network,
+                    .port = state.port,
+                    .request_logging = state.request_logging,
+                });
+            },
+            nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
+            nb::arg("request_logging") = false,
+            "Persist and immediately apply MCP HTTP server preferences");
+
+        m.def(
+            "get_mcp_status",
+            [] {
+                mcp::McpHttpStatus status;
+                bool safe_mode = false;
+                {
+                    nb::gil_scoped_release release;
+                    status = mcp::activeMcpHttpStatus();
+                    safe_mode = core::environment::flag("LFS_SAFE_MODE", false);
+                }
+                nb::dict result;
+                result["enabled"] = status.enabled;
+                result["running"] = status.running;
+                result["safe_mode"] = safe_mode;
+                switch (status.phase) {
+                case mcp::McpHttpPhase::Disabled: result["phase"] = "disabled"; break;
+                case mcp::McpHttpPhase::Starting: result["phase"] = "starting"; break;
+                case mcp::McpHttpPhase::Running: result["phase"] = "running"; break;
+                case mcp::McpHttpPhase::Stopping: result["phase"] = "stopping"; break;
+                case mcp::McpHttpPhase::Failed: result["phase"] = "failed"; break;
+                }
+                result["expose_network"] = status.expose_network;
+                result["port"] = status.port;
+                result["request_count"] = status.request_count;
+                result["success_count"] = status.success_count;
+                result["error_count"] = status.error_count;
+                result["endpoints"] = status.endpoints;
+                result["request_logging"] = status.request_logging;
+                result["log_file"] = status.log_file;
+                result["error"] = status.error;
+                switch (status.error_kind) {
+                case mcp::McpHttpErrorKind::None: result["error_kind"] = "none"; break;
+                case mcp::McpHttpErrorKind::InvalidPort:
+                    result["error_kind"] = "invalid_port";
+                    break;
+                case mcp::McpHttpErrorKind::BindFailed:
+                    result["error_kind"] = "bind_failed";
+                    break;
+                case mcp::McpHttpErrorKind::ListenerFailed:
+                    result["error_kind"] = "listener_failed";
+                    break;
+                }
+                result["error_address"] = status.error_address;
+                result["error_port"] = status.error_port;
+                return result;
+            },
+            "Get current MCP HTTP server runtime status");
+
+        m.def(
+            "get_mcp_log_directory",
+            [] {
+                std::string path;
+                std::string error;
+                {
+                    nb::gil_scoped_release release;
+                    const auto paths = core::UserPaths::resolve();
+                    if (paths)
+                        path = core::path_to_utf8(paths->mcpLogDir());
+                    else
+                        error = lfs::format_for_developer(paths.error());
+                }
+                if (!error.empty())
+                    throw std::runtime_error(error);
+                return path;
+            },
+            "Return the MCP per-session log directory");
+
+        m.def(
+            "take_preferences_section_request",
+            [] { return vis::gui::consumePreferencesSectionRequest(); },
+            "Consume a requested Preferences section name");
 
         m.def(
             "set_clipboard_text",

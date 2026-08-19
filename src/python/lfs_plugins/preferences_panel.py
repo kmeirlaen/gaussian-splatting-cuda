@@ -19,9 +19,10 @@ class PreferencesPanel(Panel):
     order = 100
     template = "rmlui/preferences.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
-    size = (780, 360)
+    size = (780, 440)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "dirty"
+    update_policy = "interval"
+    update_interval_ms = 50
 
     SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),
@@ -45,6 +46,7 @@ class PreferencesPanel(Panel):
         "navigation",
         "view_snap",
         "interface",
+        "mcp",
     )
 
     def __init__(self):
@@ -54,8 +56,17 @@ class PreferencesPanel(Panel):
         self._last_state = None
         self._section = "general"
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
+        self._mcp_enabled = True
+        self._mcp_expose_network = False
+        self._mcp_port = "45677"
+        self._mcp_applied_port = 45677
+        self._mcp_request_logging = False
+        self._mcp_safe_mode = False
+        self._last_mcp_runtime_config = None
+        self._document = None
 
     def on_bind_model(self, ctx):
+        self._read_mcp_preferences()
         model = ctx.create_data_model("preferences")
         if model is None:
             return
@@ -65,6 +76,7 @@ class PreferencesPanel(Panel):
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
         model.bind_func("show_interface", lambda: self._section == "interface")
+        model.bind_func("show_mcp", lambda: self._section == "mcp")
         model.bind_func("show_section_reset", lambda: True)
         model.bind_func("reset_section_label", self._reset_section_label)
         for section in self.EXPANDABLE_SECTIONS:
@@ -79,13 +91,29 @@ class PreferencesPanel(Panel):
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
-        model.bind_event("close", self._on_close)
+        model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
+        model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
+        model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
+        model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
+        model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
+        model.bind_func("mcp_status", self._mcp_status_text)
+        model.bind("mcp_endpoint_value", self._mcp_endpoint_text, lambda _value: None)
+        model.bind_func("mcp_error", self._mcp_error_text)
+        model.bind_func("mcp_has_error", lambda: bool(self._mcp_error_text()))
+        model.bind_func("mcp_log_file", self._mcp_log_file_text)
+        model.bind_func("mcp_has_log_file", lambda: bool(self._mcp_log_file_text()))
+        model.bind_event("accept_and_close", self._on_accept_and_close)
         model.bind_event("reset_current_section", self._on_reset_current_section)
         model.bind_event("reset_all_settings", self._on_reset_all_settings)
         model.bind_event("show_general", lambda *_: self._set_section("general"))
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
+        model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
+        model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
+        model.bind_event("mcp_port_change", self._on_mcp_port_change)
+        model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
+        model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
@@ -94,23 +122,37 @@ class PreferencesPanel(Panel):
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
-        super().on_mount(doc)
+        # The title bar is a cancellation boundary for the drafted MCP port,
+        # so it needs the specialized close handler instead of Panel's generic
+        # visibility-only listener.
+        close_btn = doc.get_element_by_id("close-btn") if doc else None
+        if close_btn:
+            close_btn.add_event_listener(
+                "click", lambda _ev: self._on_close(None, None, None)
+            )
+        self._document = doc
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
         self._rebuild_records()
+        self._load_mcp_preferences()
+        self._consume_section_request()
         self._last_state = self._state()
         self._refresh_selection()
 
     def on_unmount(self, doc):
+        self._document = None
         self._handle = None
         doc.remove_data_model("preferences")
 
     def on_update(self, doc):
+        self._consume_section_request()
+        self._sync_mcp_runtime()
         state = self._state()
         if state == self._last_state:
             return
         self._last_state = state
         self._dirty_selection()
+        self._dirty_mcp()
 
     def _state(self):
         return (
@@ -121,6 +163,7 @@ class PreferencesPanel(Panel):
             lf.get_camera_view_snap_enabled(),
             lf.ui.remember_camera_navigation(),
             lf.ui.remember_camera_view_snap(),
+            self._mcp_status_signature(),
         )
 
     def _rebuild_records(self):
@@ -249,7 +292,228 @@ class PreferencesPanel(Panel):
             lf.set_camera_view_snap_enabled(lf.get_camera_view_snap_enabled())
         self._refresh_selection()
 
+    def _read_mcp_preferences(self):
+        preferences = lf.ui.get_mcp_preferences()
+        self._mcp_enabled = bool(preferences.get("enabled", True))
+        self._mcp_expose_network = bool(preferences.get("expose_network", False))
+        self._mcp_port = str(preferences.get("port", 45677))
+        self._mcp_applied_port = int(self._mcp_port)
+        self._mcp_request_logging = bool(preferences.get("request_logging", False))
+        self._mcp_safe_mode = bool(preferences.get("safe_mode", False))
+        self._last_mcp_runtime_config = self._mcp_runtime_config_signature()
+
+    def _load_mcp_preferences(self):
+        self._read_mcp_preferences()
+        self._dirty_mcp()
+
+    def _set_mcp_enabled(self, enabled):
+        if self._mcp_safe_mode:
+            return
+        self._mcp_enabled = bool(enabled)
+        self._apply_mcp_preferences()
+
+    def _on_toggle_mcp_enabled(self, _handle, _event, _args):
+        self._set_mcp_enabled(not self._mcp_enabled)
+
+    def _set_mcp_expose_network(self, enabled):
+        if self._mcp_safe_mode:
+            return
+        self._mcp_expose_network = bool(enabled)
+        self._apply_mcp_preferences()
+
+    def _set_mcp_port(self, value):
+        if self._mcp_safe_mode:
+            return
+        self._mcp_port = str(value).strip()
+        self._dirty_mcp()
+
+    def _on_mcp_port_change(self, _handle, event, args):
+        if args:
+            self._set_mcp_port(args[0])
+        if event.get_bool_parameter("linebreak", False):
+            self._commit_mcp_port()
+
+    def _on_confirm_mcp_port(self, _handle, _event, _args):
+        self._commit_mcp_port()
+
+    def _commit_mcp_port(self):
+        port = self._validated_mcp_port()
+        if port is None:
+            self._dirty_mcp()
+            return False
+        if port == self._mcp_applied_port:
+            status = lf.ui.get_mcp_status()
+            if status.get("enabled") and status.get("phase") == "failed":
+                return self._apply_mcp_preferences(port)
+            return True
+        return self._apply_mcp_preferences(port)
+
+    def _set_mcp_request_logging(self, enabled):
+        if self._mcp_safe_mode:
+            return
+        self._mcp_request_logging = bool(enabled)
+        self._apply_mcp_preferences()
+
+    def _apply_mcp_preferences(self, port=None):
+        if self._mcp_safe_mode:
+            return False
+        port = self._mcp_applied_port if port is None else port
+        accepted = lf.ui.set_mcp_preferences(
+            self._mcp_enabled,
+            self._mcp_expose_network,
+            port,
+            self._mcp_request_logging,
+        )
+        if not accepted:
+            self._dirty_mcp()
+            return False
+        self._mcp_applied_port = port
+        self._last_mcp_runtime_config = self._mcp_runtime_config_signature()
+        self._dirty_mcp()
+        return True
+
+    def _validated_mcp_port(self):
+        try:
+            port = int(self._mcp_port)
+        except (TypeError, ValueError):
+            return None
+        return port if 1 <= port <= 65535 else None
+
+    def _mcp_status_signature(self):
+        status = lf.ui.get_mcp_status()
+        return (
+            bool(status.get("enabled")),
+            bool(status.get("running")),
+            str(status.get("phase", "")),
+            bool(status.get("expose_network")),
+            int(status.get("port", 0)),
+            int(status.get("request_count", 0)),
+            int(status.get("success_count", 0)),
+            int(status.get("error_count", 0)),
+            bool(status.get("request_logging")),
+            str(status.get("log_file", "")),
+            str(status.get("error", "")),
+            str(status.get("error_kind", "")),
+            str(status.get("error_address", "")),
+            int(status.get("error_port", 0)),
+            bool(status.get("safe_mode", False)),
+            tuple(str(endpoint) for endpoint in status.get("endpoints") or ()),
+        )
+
+    def _mcp_runtime_config_signature(self):
+        status = lf.ui.get_mcp_status()
+        return (
+            bool(status.get("enabled")),
+            bool(status.get("expose_network")),
+            int(status.get("port", 45677)),
+            bool(status.get("request_logging")),
+            bool(status.get("safe_mode", False)),
+        )
+
+    def _sync_mcp_runtime(self):
+        signature = self._mcp_runtime_config_signature()
+        if signature == self._last_mcp_runtime_config:
+            return
+        draft_port = self._mcp_port
+        has_unconfirmed_port = draft_port != str(self._mcp_applied_port)
+        self._load_mcp_preferences()
+        if has_unconfirmed_port:
+            self._mcp_port = draft_port
+            self._dirty_mcp()
+
+    def _mcp_status_text(self):
+        if self._validated_mcp_port() is None:
+            return lf.ui.tr("preferences.mcp_status_error")
+        status = lf.ui.get_mcp_status()
+        phase = status.get("phase")
+        if phase == "starting":
+            return lf.ui.tr("preferences.mcp_status_starting")
+        if phase == "stopping":
+            return lf.ui.tr("preferences.mcp_status_stopping")
+        if phase == "failed":
+            return lf.ui.tr("preferences.mcp_status_error")
+        if phase == "disabled" or not status.get("enabled"):
+            return lf.ui.tr("preferences.mcp_status_off")
+        if phase == "running" or status.get("running"):
+            return lf.ui.tr("preferences.mcp_status_running")
+        return lf.ui.tr("preferences.mcp_status_error")
+
+    def _mcp_endpoint_text(self):
+        status = lf.ui.get_mcp_status()
+        if not status.get("running"):
+            return lf.ui.tr("preferences.mcp_no_active_endpoint")
+        endpoints = status.get("endpoints") or []
+        if endpoints:
+            return "\n".join(str(endpoint) for endpoint in endpoints)
+        port = status.get("port", 45677)
+        return f"http://127.0.0.1:{port}/mcp\nhttp://localhost:{port}/mcp"
+
+    def _mcp_endpoint_rows(self):
+        return min(10, max(2, len(self._mcp_endpoint_text().splitlines())))
+
+    def _mcp_error_text(self):
+        if self._validated_mcp_port() is None:
+            return lf.ui.tr("preferences.mcp_invalid_port")
+        status = lf.ui.get_mcp_status()
+        error_kind = status.get("error_kind", "none")
+        if error_kind == "invalid_port":
+            return lf.ui.tr("preferences.mcp_invalid_port")
+        if error_kind == "bind_failed":
+            address = str(status.get("error_address", ""))
+            port = int(status.get("error_port", 0))
+            endpoint = f"{address}:{port}" if address and port else address
+            return lf.ui.tr("preferences.mcp_bind_failed").format(
+                endpoint=endpoint
+            )
+        return (
+            lf.ui.tr("status_bar.mcp_error_detail")
+            if error_kind not in ("", "none") or status.get("error")
+            else ""
+        )
+
+    def _mcp_log_file_text(self):
+        return str(lf.ui.get_mcp_status().get("log_file", ""))
+
+    def _on_open_mcp_log_folder(self, _handle, _event, _args):
+        lf.ui.open_url(lf.ui.get_mcp_log_directory())
+
+    def _consume_section_request(self):
+        section = lf.ui.take_preferences_section_request()
+        if section in ("general", "appearance", "input", "interface", "mcp"):
+            self._set_section(section)
+
+    def _dirty_mcp(self):
+        if not self._handle:
+            return
+        for name in (
+            "mcp_enabled",
+            "mcp_expose_network",
+            "mcp_port",
+            "mcp_request_logging",
+            "mcp_safe_mode",
+            "mcp_status",
+            "mcp_endpoint_value",
+            "mcp_error",
+            "mcp_has_error",
+            "mcp_log_file",
+            "mcp_has_log_file",
+        ):
+            self._handle.dirty(name)
+        if self._document:
+            endpoint_list = self._document.get_element_by_id("mcp-endpoints")
+            if endpoint_list:
+                endpoint_list.set_attribute("rows", str(self._mcp_endpoint_rows()))
+
     def _on_close(self, _handle, _event, _args):
+        # The floating-window title bar is cancellation: discard an unconfirmed
+        # port draft while preserving settings that were already applied live.
+        self._mcp_port = str(self._mcp_applied_port)
+        self._dirty_mcp()
+        lf.ui.set_panel_enabled(self.id, False)
+
+    def _on_accept_and_close(self, _handle, _event, _args):
+        if not self._commit_mcp_port():
+            return
         lf.ui.set_panel_enabled(self.id, False)
 
     def _set_section(self, section):
@@ -257,7 +521,7 @@ class PreferencesPanel(Panel):
             return
         self._section = section
         if self._handle:
-            for name in ("show_general", "show_appearance", "show_input", "show_interface",
+            for name in ("show_general", "show_appearance", "show_input", "show_interface", "show_mcp",
                           "show_section_reset", "reset_section_label"):
                 self._handle.dirty(name)
 
@@ -316,7 +580,10 @@ class PreferencesPanel(Panel):
         def _on_result(button):
             if button != reset_label:
                 return
-            errors = [self._reset_section(section) for section in ("general", "appearance", "input", "interface")]
+            errors = [
+                self._reset_section(section)
+                for section in ("general", "appearance", "input", "interface", "mcp")
+            ]
             errors.append(lf.ui.reset_window_state())
             error = next((item for item in errors if item), None)
             if error:
@@ -350,6 +617,10 @@ class PreferencesPanel(Panel):
             lf.set_camera_view_snap_enabled(False)
         elif section == "interface":
             return lf.ui.reset_layout()
+        elif section == "mcp":
+            if not self._mcp_safe_mode:
+                lf.ui.set_mcp_preferences(True, False, 45677, False)
+                self._load_mcp_preferences()
         self._refresh_selection()
         return None
 
@@ -366,3 +637,4 @@ class PreferencesPanel(Panel):
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")
+            self._dirty_mcp()

@@ -42,6 +42,49 @@ namespace lfs::vis {
         RecoveryPromptPending,
     };
 
+    enum class RuntimeServicePhase : std::uint8_t {
+        Disabled,
+        Starting,
+        Running,
+        Stopping,
+        Failed,
+    };
+
+    enum class RuntimeServiceErrorKind : std::uint8_t {
+        None,
+        InvalidPort,
+        BindFailed,
+        RuntimeFailure,
+    };
+
+    struct RuntimeServiceStatus {
+        bool enabled = false;
+        bool running = false;
+        RuntimeServicePhase phase = RuntimeServicePhase::Disabled;
+        bool network_exposed = false;
+        int port = 0;
+        std::uint64_t request_count = 0;
+        std::uint64_t success_count = 0;
+        std::uint64_t error_count = 0;
+        std::vector<std::string> endpoints;
+        bool request_logging = false;
+        std::string log_file;
+        std::string error;
+        RuntimeServiceErrorKind error_kind = RuntimeServiceErrorKind::None;
+        std::string error_address;
+        int error_port = 0;
+    };
+
+    struct RuntimeServiceControls {
+        std::function<bool()> toggle_mcp_enabled;
+        std::function<bool()> toggle_mcp_binding;
+    };
+
+    LFS_VIS_API void setRuntimeServiceControls(RuntimeServiceControls controls);
+    LFS_VIS_API bool toggleMcpRuntimeEnabled();
+    LFS_VIS_API bool toggleMcpRuntimeBinding();
+    [[nodiscard]] LFS_VIS_API std::uint64_t runtimeServiceRevision();
+
     struct LFS_VIS_API ProjectPayloadInfo {
         std::string chapter;
         std::string node_uuid;
@@ -107,6 +150,7 @@ namespace lfs::vis {
         bool antialiasing = false;
         bool show_startup_overlay = true;
         bool safe_mode = false;
+        std::function<RuntimeServiceStatus()> mcp_status_provider;
         bool gut = false;
         GraphicsBackend graphics_backend = GraphicsBackend::Vulkan;
         int monitor_x = 0; // Monitor hint for window placement
@@ -188,6 +232,11 @@ namespace lfs::vis {
         }
         virtual lfs::Result<void>
         projectClearRecentFiles() {
+            return {};
+        }
+        virtual lfs::Result<void>
+        projectRemoveRecentFile(
+            const std::filesystem::path&) {
             return {};
         }
 

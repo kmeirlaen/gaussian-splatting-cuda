@@ -1077,6 +1077,27 @@ NB_MODULE(lichtfeld, m) {
         },
         "Clear the most-recently-used .licht project list");
     m.def(
+        "project_remove_recent_file",
+        [](const std::string& path) {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return;
+            }
+            auto removed =
+                viewer->projectRemoveRecentFile(
+                    python_utf8_path(path));
+            if (!removed) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_remove_recent_file failed: {}",
+                        lfs::format_for_developer(
+                            removed.error())));
+            }
+        },
+        nb::arg("path"),
+        "Remove one path from the most-recently-used .licht project list");
+    m.def(
         "project_autosave_recovery_disposition",
         [](const std::string& path) -> std::string {
             const auto master_path =

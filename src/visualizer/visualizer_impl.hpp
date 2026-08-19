@@ -114,6 +114,8 @@ namespace lfs::vis {
         projectGetMenuInfo() override;
         lfs::Result<void>
         projectClearRecentFiles() override;
+        lfs::Result<void>
+        projectRemoveRecentFile(const std::filesystem::path& path) override;
         [[nodiscard]] bool projectContainsEmbeddedSecrets() const;
 
         // Getters for GUI (delegating to state manager)
@@ -283,11 +285,19 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
         friend class VisualizerImplResetTest_SelectedGaussiansAndSelectionToolSurviveSaveAndReopen_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutCheckpointReloadsTrainer_Test;
+        friend class VisualizerImplResetTest_MissingDatasetProjectArmsRelocationInsteadOfImport_Test;
+        friend class VisualizerImplResetTest_RelocateProjectDatasetRestoresTrainerFromNewRoot_Test;
+        friend class VisualizerImplResetTest_RelocateRejectsFolderWithoutDatasetElements_Test;
+        friend class VisualizerImplResetTest_OpeningAnotherProjectClearsPendingRelocation_Test;
+        friend class VisualizerImplResetTest_MissingCheckpointDatasetProjectArmsRelocationInsteadOfInstall_Test;
+        friend class VisualizerImplResetTest_RelocateCheckpointProjectDatasetRestoresTrainerFromNewRoot_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutReferenceIsNotRecoveredFromContainingDirectory_Test;
         friend class VisualizerImplResetTest_NonDatasetProjectInsideDatasetRootIsNotReimported_Test;
         friend class VisualizerImplResetTest_OpeningAnotherProjectCancelsPendingDatasetRestoreImport_Test;
         friend class VisualizerImplResetTest_NonDatasetSaveDoesNotBindStaleDatasetPath_Test;
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
+        friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
+        friend class VisualizerImplResetTest_CompletedCheckpointProjectStillReopensFinished_Test;
         friend class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
@@ -296,6 +306,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
         friend class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
         friend class VisualizerImplResetTest_NewProjectDiscardDeletesAutosaveSidecar_Test;
+        friend class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+        friend class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
