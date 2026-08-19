@@ -187,7 +187,7 @@ namespace lfs::training::mrnf_strategy {
         float centroid_y,
         float centroid_z,
         float far_radius,
-        bool* far,
+        bool* far_out,
         size_t N,
         void* stream = nullptr);
 

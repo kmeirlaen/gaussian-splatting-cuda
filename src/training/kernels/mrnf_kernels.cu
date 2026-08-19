@@ -776,7 +776,7 @@ namespace lfs::training::mrnf_strategy {
         float centroid_y,
         float centroid_z,
         float far_radius_sq,
-        bool* __restrict__ far,
+        bool* __restrict__ far_out,
         size_t N) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
@@ -786,7 +786,7 @@ namespace lfs::training::mrnf_strategy {
         const float dx = means[idx * 3 + 0] - centroid_x;
         const float dy = means[idx * 3 + 1] - centroid_y;
         const float dz = means[idx * 3 + 2] - centroid_z;
-        far[idx] = (dx * dx + dy * dy + dz * dz) > far_radius_sq;
+        far_out[idx] = (dx * dx + dy * dy + dz * dz) > far_radius_sq;
     }
 
     void launch_far_field_mask(
@@ -795,21 +795,21 @@ namespace lfs::training::mrnf_strategy {
         float centroid_y,
         float centroid_z,
         float far_radius,
-        bool* far,
+        bool* far_out,
         size_t N,
         void* stream) {
 
         if (N == 0)
             return;
         LFS_ASSERT(means != nullptr);
-        LFS_ASSERT(far != nullptr);
+        LFS_ASSERT(far_out != nullptr);
 
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         const float far_radius_sq = far_radius * far_radius;
         far_field_mask_kernel<<<blocks, threads, 0, s>>>(
-            means, centroid_x, centroid_y, centroid_z, far_radius_sq, far, N);
+            means, centroid_x, centroid_y, centroid_z, far_radius_sq, far_out, N);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.far_field_mask");
     }
 
