@@ -430,6 +430,9 @@ namespace {
         EXPECT_FLOAT_EQ(defaults.occ_vis_off, 0.03f);
         EXPECT_FLOAT_EQ(defaults.occlusion_dose_scale, 1.0f);
         EXPECT_FALSE(defaults.explore_starvation_weighting);
+        EXPECT_FLOAT_EQ(defaults.starv_eps, 0.05f);
+        EXPECT_FLOAT_EQ(defaults.starv_gamma, 1.0f);
+        EXPECT_FLOAT_EQ(defaults.persplat_dose_scale, 1.0f);
 
         const auto default_json = defaults.to_json();
         EXPECT_FALSE(default_json.contains("error_vis_norm"));
@@ -438,12 +441,18 @@ namespace {
         EXPECT_FALSE(default_json.contains("occ_vis_off"));
         EXPECT_FALSE(default_json.contains("occlusion_dose_scale"));
         EXPECT_FALSE(default_json.contains("explore_starvation_weighting"));
+        EXPECT_FALSE(default_json.contains("starv_eps"));
+        EXPECT_FALSE(default_json.contains("starv_gamma"));
+        EXPECT_FALSE(default_json.contains("persplat_dose_scale"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "error_vis_norm"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "error_dog_weight"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "occ_vis_full"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "occ_vis_off"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "occlusion_dose_scale"));
         EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "explore_starvation_weighting"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "starv_eps"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "starv_gamma"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "persplat_dose_scale"));
 
         auto json = defaults.to_json();
         json["error_vis_norm"] = true;
@@ -452,6 +461,9 @@ namespace {
         json["occ_vis_off"] = 0.04f;
         json["occlusion_dose_scale"] = 0.5f;
         json["explore_starvation_weighting"] = true;
+        json["starv_eps"] = 0.1f;
+        json["starv_gamma"] = 2.0f;
+        json["persplat_dose_scale"] = 0.5f;
         const auto parsed = OptimizationParameters::from_json(json);
         EXPECT_TRUE(parsed.error_vis_norm);
         EXPECT_FLOAT_EQ(parsed.error_dog_weight, 1.0f);
@@ -459,6 +471,9 @@ namespace {
         EXPECT_FLOAT_EQ(parsed.occ_vis_off, 0.04f);
         EXPECT_FLOAT_EQ(parsed.occlusion_dose_scale, 0.5f);
         EXPECT_TRUE(parsed.explore_starvation_weighting);
+        EXPECT_FLOAT_EQ(parsed.starv_eps, 0.1f);
+        EXPECT_FLOAT_EQ(parsed.starv_gamma, 2.0f);
+        EXPECT_FLOAT_EQ(parsed.persplat_dose_scale, 0.5f);
         EXPECT_TRUE(parsed.validate().empty());
 
         const auto enabled_json = parsed.to_json();
@@ -468,6 +483,9 @@ namespace {
         EXPECT_FLOAT_EQ(enabled_json.at("occ_vis_off").get<float>(), 0.04f);
         EXPECT_FLOAT_EQ(enabled_json.at("occlusion_dose_scale").get<float>(), 0.5f);
         EXPECT_TRUE(enabled_json.at("explore_starvation_weighting").get<bool>());
+        EXPECT_FLOAT_EQ(enabled_json.at("starv_eps").get<float>(), 0.1f);
+        EXPECT_FLOAT_EQ(enabled_json.at("starv_gamma").get<float>(), 2.0f);
+        EXPECT_FLOAT_EQ(enabled_json.at("persplat_dose_scale").get<float>(), 0.5f);
 
         auto invalid = defaults;
         invalid.error_dog_weight = -1.0f;
@@ -491,6 +509,36 @@ namespace {
         EXPECT_FALSE(invalid.validate().empty());
         invalid = defaults;
         invalid.occlusion_dose_scale = 4.0f;
+        EXPECT_TRUE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.starv_eps = -0.01f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.starv_eps = 1.1f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.starv_eps = 0.0f;
+        EXPECT_TRUE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.starv_eps = 1.0f;
+        EXPECT_TRUE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.starv_gamma = 0.0f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.starv_gamma = 4.1f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.starv_gamma = 4.0f;
+        EXPECT_TRUE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.persplat_dose_scale = 0.0f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.persplat_dose_scale = 4.1f;
+        EXPECT_FALSE(invalid.validate().empty());
+        invalid = defaults;
+        invalid.persplat_dose_scale = 4.0f;
         EXPECT_TRUE(invalid.validate().empty());
     }
 

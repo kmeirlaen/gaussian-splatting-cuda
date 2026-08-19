@@ -230,13 +230,16 @@ namespace lfs::training::mrnf_strategy {
         lfs::training::PositiveMedianScratch* scratch,
         void* stream = nullptr);
 
-    // weights[i] *= 0 if vis[i]==0, else (starv_eps + clamp(1 - vis[i]/max(median,eps), 0, 1)).
+    // weights[i] *= 0 if vis[i]==0, else (starv_eps + starv_i^starv_gamma)
+    // where starv_i = clamp(1 - vis[i]/max(median,eps), 0, 1).
+    // starv_gamma == 1.0f skips pow (bit-identical to starv_eps + starv_i).
     void launch_apply_explore_starvation_weights(
         float* weights,
         const float* vis_count,
         size_t n,
         float median_vis,
         float starv_eps,
+        float starv_gamma,
         void* stream = nullptr);
 
 } // namespace lfs::training::mrnf_strategy

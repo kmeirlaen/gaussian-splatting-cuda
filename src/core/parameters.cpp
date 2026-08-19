@@ -239,6 +239,12 @@ namespace lfs::core {
                 opt_json["occlusion_dose_scale"] = occlusion_dose_scale;
             if (explore_starvation_weighting)
                 opt_json["explore_starvation_weighting"] = explore_starvation_weighting;
+            if (starv_eps != 0.05f)
+                opt_json["starv_eps"] = starv_eps;
+            if (starv_gamma != 1.0f)
+                opt_json["starv_gamma"] = starv_gamma;
+            if (persplat_dose_scale != 1.0f)
+                opt_json["persplat_dose_scale"] = persplat_dose_scale;
 
             return opt_json;
         }
@@ -371,6 +377,15 @@ namespace lfs::core {
                 occlusion_dose_scale > 4.0f)
                 return std::format("occlusion_dose_scale must be finite and within (0, 4] (got {})",
                                    occlusion_dose_scale);
+            if (!std::isfinite(starv_eps) || starv_eps < 0.0f || starv_eps > 1.0f)
+                return std::format("starv_eps must be finite and within [0, 1] (got {})", starv_eps);
+            if (!std::isfinite(starv_gamma) || starv_gamma <= 0.0f || starv_gamma > 4.0f)
+                return std::format("starv_gamma must be finite and within (0, 4] (got {})",
+                                   starv_gamma);
+            if (!std::isfinite(persplat_dose_scale) || persplat_dose_scale <= 0.0f ||
+                persplat_dose_scale > 4.0f)
+                return std::format("persplat_dose_scale must be finite and within (0, 4] (got {})",
+                                   persplat_dose_scale);
             if (!std::isfinite(occ_vis_full) || !std::isfinite(occ_vis_off) ||
                 !(occ_vis_full > 0.0f) || !(occ_vis_off > occ_vis_full))
                 return std::format(
@@ -632,6 +647,12 @@ namespace lfs::core {
                 params.occlusion_dose_scale = json.at("occlusion_dose_scale");
             if (json.contains("explore_starvation_weighting"))
                 params.explore_starvation_weighting = json.at("explore_starvation_weighting");
+            if (json.contains("starv_eps"))
+                params.starv_eps = json.at("starv_eps");
+            if (json.contains("starv_gamma"))
+                params.starv_gamma = json.at("starv_gamma");
+            if (json.contains("persplat_dose_scale"))
+                params.persplat_dose_scale = json.at("persplat_dose_scale");
 
             if (json.contains("depth_loss_mode") &&
                 (params.depth_loss_mode == "pearson" ||

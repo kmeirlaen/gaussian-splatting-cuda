@@ -235,6 +235,11 @@ namespace lfs::core {
             float occ_vis_off = 0.03f;
             float occlusion_dose_scale = 1.0f;
             bool explore_starvation_weighting = false;
+            // Per-splat starvation-weight tunables. Config-file / C++ only.
+            // Inert unless explore_starvation_weighting is on.
+            float starv_eps = 0.05f;
+            float starv_gamma = 1.0f;
+            float persplat_dose_scale = 1.0f;
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM

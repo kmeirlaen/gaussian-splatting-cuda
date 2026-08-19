@@ -177,7 +177,11 @@ namespace lfs::training {
         [[nodiscard]] float effective_mean_step_ratio_max() const;
         [[nodiscard]] static float far_starvation_factor(float ratio, float full, float rich);
         [[nodiscard]] static float occlusion_visibility_ramp(float visibility, float vis_full, float vis_off);
-        [[nodiscard]] static float explore_starvation_multiplier(float vis_i, float median_vis);
+        [[nodiscard]] static float explore_starvation_multiplier(
+            float vis_i,
+            float median_vis,
+            float starv_eps = kStarvEps,
+            float starv_gamma = 1.0f);
         [[nodiscard]] bool explore_starvation_weighting_enabled() const;
         lfs::core::Tensor build_explore_split_weights(
             size_t n,

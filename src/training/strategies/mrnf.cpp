@@ -1554,7 +1554,10 @@ namespace lfs::training {
 
     int MRNF::starved_cadence_count(const int count) const {
         if (explore_starvation_weighting_enabled()) {
-            return cadence_scaled(count);
+            // persplat_dose_scale only; occlusion_dose_scale lives on the ramp
+            // path below. The two must not stack.
+            const double dose = (_params) ? static_cast<double>(_params->persplat_dose_scale) : 1.0;
+            return static_cast<int>(std::lround(static_cast<double>(cadence_scaled(count)) * dose));
         }
         double n = static_cast<double>(cadence_scaled(count)) * static_cast<double>(_far_starvation);
         if (_occlusion_class && _params) {
@@ -1598,13 +1601,15 @@ namespace lfs::training {
         return far_starvation_factor(visibility, vis_full, vis_off);
     }
 
-    float MRNF::explore_starvation_multiplier(const float vis_i, const float median_vis) {
+    float MRNF::explore_starvation_multiplier(const float vis_i, const float median_vis,
+                                              const float starv_eps, const float starv_gamma) {
         if (vis_i == 0.0f) {
             return 0.0f;
         }
         const float denom = std::max(median_vis, std::numeric_limits<float>::epsilon());
         const float starv_i = std::clamp(1.0f - vis_i / denom, 0.0f, 1.0f);
-        return kStarvEps + starv_i;
+        const float starv_term = (starv_gamma == 1.0f) ? starv_i : std::pow(starv_i, starv_gamma);
+        return starv_eps + starv_term;
     }
 
     void MRNF::update_far_starvation() {
@@ -1817,8 +1822,10 @@ namespace lfs::training {
             mrnf_strategy::launch_sorted_median(
                 live_vis.ptr<float>(), live_vis.numel(), &median_vis, &_median_scratch);
         }
+        const float starv_eps = _params ? _params->starv_eps : kStarvEps;
+        const float starv_gamma = _params ? _params->starv_gamma : 1.0f;
         mrnf_strategy::launch_apply_explore_starvation_weights(
-            weights.ptr<float>(), _vis_count.ptr<float>(), n, median_vis, kStarvEps);
+            weights.ptr<float>(), _vis_count.ptr<float>(), n, median_vis, starv_eps, starv_gamma);
     }
 
     lfs::core::Tensor MRNF::build_explore_split_weights(

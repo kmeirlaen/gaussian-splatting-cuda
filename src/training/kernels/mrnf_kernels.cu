@@ -1014,7 +1014,8 @@ namespace lfs::training::mrnf_strategy {
         const float* __restrict__ vis_count,
         size_t n,
         float median_vis,
-        float starv_eps) {
+        float starv_eps,
+        float starv_gamma) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= n)
@@ -1026,7 +1027,9 @@ namespace lfs::training::mrnf_strategy {
         }
         const float denom = fmaxf(median_vis, 1.19209290e-07f);
         const float starv_i = fminf(fmaxf(1.0f - vis_i / denom, 0.0f), 1.0f);
-        weights[idx] *= (starv_eps + starv_i);
+        // gamma == 1 must not call powf: powf(x, 1.0f) is not bit-identical to x.
+        const float starv_term = (starv_gamma == 1.0f) ? starv_i : powf(starv_i, starv_gamma);
+        weights[idx] *= (starv_eps + starv_term);
     }
 
     void launch_apply_explore_starvation_weights(
@@ -1035,6 +1038,7 @@ namespace lfs::training::mrnf_strategy {
         size_t n,
         float median_vis,
         float starv_eps,
+        float starv_gamma,
         void* stream) {
 
         if (n == 0)
@@ -1046,7 +1050,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((n + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         apply_explore_starvation_weights_kernel<<<blocks, threads, 0, s>>>(
-            weights, vis_count, n, median_vis, starv_eps);
+            weights, vis_count, n, median_vis, starv_eps, starv_gamma);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_starvation_weights");
     }
 

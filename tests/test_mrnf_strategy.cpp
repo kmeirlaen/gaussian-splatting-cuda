@@ -1667,6 +1667,11 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(0.0f, 4.0f), 0.0f);
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(4.0f, 4.0f), kStarvEps);
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f), 0.75f + kStarvEps);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.05f, 1.0f), 0.75f + 0.05f);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.05f, 2.0f), 0.5625f + 0.05f);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(4.0f, 4.0f, 0.0f, 1.0f), 0.0f);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.0f, 1.0f), 0.75f);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.1f, 1.0f), 0.85f);
 
     auto opt_params = vanilla_mrnf_params();
     opt_params.use_far_field = true;
@@ -1720,6 +1725,53 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
 
     EXPECT_TRUE(strategy.far_operators_active());
     EXPECT_TRUE(strategy._camera_hull_valid);
+    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
+
+    // gamma != 1: starv_i^2. vis==median stays eps (0^gamma); vis=0.25*median
+    // is 0.75^2 + eps. vis==0 stays 0.
+    opt_params.starv_gamma = 2.0f;
+    strategy.set_optimization_params(opt_params);
+    auto weights_g2 = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
+    ASSERT_TRUE(weights_g2.is_valid());
+    const auto g2_cpu = weights_g2.cpu();
+    const float* g2 = g2_cpu.ptr<float>();
+    EXPECT_FLOAT_EQ(g2[0], 0.0f);
+    EXPECT_FLOAT_EQ(g2[1], base[1] * kStarvEps);
+    EXPECT_FLOAT_EQ(g2[2], base[2] * (0.5625f + kStarvEps));
+
+    // eps = 0, gamma = 1: vis==median contributes 0; starved row is 0.75.
+    opt_params.starv_gamma = 1.0f;
+    opt_params.starv_eps = 0.0f;
+    strategy.set_optimization_params(opt_params);
+    auto weights_e0 = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
+    ASSERT_TRUE(weights_e0.is_valid());
+    const auto e0_cpu = weights_e0.cpu();
+    const float* e0 = e0_cpu.ptr<float>();
+    EXPECT_FLOAT_EQ(e0[0], 0.0f);
+    EXPECT_FLOAT_EQ(e0[1], 0.0f);
+    EXPECT_FLOAT_EQ(e0[2], base[2] * 0.75f);
+
+    // eps = 0.1, gamma = 1.
+    opt_params.starv_eps = 0.1f;
+    strategy.set_optimization_params(opt_params);
+    auto weights_e1 = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
+    ASSERT_TRUE(weights_e1.is_valid());
+    const auto e1_cpu = weights_e1.cpu();
+    const float* e1 = e1_cpu.ptr<float>();
+    EXPECT_FLOAT_EQ(e1[0], 0.0f);
+    EXPECT_FLOAT_EQ(e1[1], base[1] * 0.1f);
+    EXPECT_FLOAT_EQ(e1[2], base[2] * 0.85f);
+
+    // persplat_dose_scale multiplies explore counts only in this mode.
+    opt_params.starv_eps = kStarvEps;
+    opt_params.persplat_dose_scale = 0.5f;
+    strategy.set_optimization_params(opt_params);
+    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits / 2);
+
+    // occlusion_dose_scale must not stack with persplat_dose_scale.
+    opt_params.persplat_dose_scale = 1.0f;
+    opt_params.occlusion_dose_scale = 0.25f;
+    strategy.set_optimization_params(opt_params);
     EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
 }
 
@@ -1796,6 +1848,9 @@ TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     EXPECT_FLOAT_EQ(defaults.occ_vis_off, 0.03f);
     EXPECT_FLOAT_EQ(defaults.occlusion_dose_scale, 1.0f);
     EXPECT_FALSE(defaults.explore_starvation_weighting);
+    EXPECT_FLOAT_EQ(defaults.starv_eps, 0.05f);
+    EXPECT_FLOAT_EQ(defaults.starv_gamma, 1.0f);
+    EXPECT_FLOAT_EQ(defaults.persplat_dose_scale, 1.0f);
     EXPECT_EQ(kExploreSplits, 20);
     EXPECT_EQ(kExploreSeeds, 20);
     EXPECT_FLOAT_EQ(kSeedOpacity, 0.03f);
