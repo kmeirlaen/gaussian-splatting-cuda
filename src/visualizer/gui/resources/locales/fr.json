@@ -1369,6 +1369,7 @@
     "action.toggle_independent_split_view": "Basculer la vue divisée indépendante",
     "action.toggle_gt_comparison": "Basculer la comparaison GT",
     "action.toggle_camera_frustums": "Afficher/masquer les frustums de caméra",
+    "action.toggle_grid": "Afficher/masquer la grille",
     "action.toggle_depth_mode": "Basculer la boîte de profondeur",
     "action.cycle_ply": "Parcourir les PLY",
     "action.delete_selected": "Supprimer les gaussiennes sélectionnées",

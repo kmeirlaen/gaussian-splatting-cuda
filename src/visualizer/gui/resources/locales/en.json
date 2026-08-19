@@ -1369,6 +1369,7 @@
     "action.toggle_independent_split_view": "Toggle Independent Split View",
     "action.toggle_gt_comparison": "Toggle GT Comparison",
     "action.toggle_camera_frustums": "Toggle Camera Frustums",
+    "action.toggle_grid": "Toggle Grid",
     "action.toggle_depth_mode": "Toggle Depth Box",
     "action.cycle_ply": "Cycle PLY",
     "action.delete_selected": "Delete Selected Gaussians",

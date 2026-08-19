@@ -1369,6 +1369,7 @@
     "action.toggle_independent_split_view": "Onafhankelijke gesplitste weergave omschakelen",
     "action.toggle_gt_comparison": "GT-vergelijking omschakelen",
     "action.toggle_camera_frustums": "Camerafrustums in-/uitschakelen",
+    "action.toggle_grid": "Raster in-/uitschakelen",
     "action.toggle_depth_mode": "Diepteboog omschakelen",
     "action.cycle_ply": "PLY doorlopen",
     "action.delete_selected": "Geselecteerde gaussians verwijderen",
