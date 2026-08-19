@@ -733,6 +733,7 @@ namespace lfs::training {
         _initial_sfm_point_count = n;
         _track_visibility = _splat_data->track_visibility();
         _occlusion_class = false;
+        _occlusion_ramp = 0.0f;
         const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
@@ -1387,7 +1388,11 @@ namespace lfs::training {
     }
 
     bool MRNF::far_operators_active() const {
-        return _scene_has_far_field || _occlusion_class;
+        return _scene_has_far_field || _occlusion_class || explore_starvation_weighting_enabled();
+    }
+
+    bool MRNF::explore_starvation_weighting_enabled() const {
+        return _params && _params->explore_starvation_weighting;
     }
 
     void MRNF::refresh_camera_hull() {
@@ -1400,6 +1405,7 @@ namespace lfs::training {
         if (!far_field_requested()) {
             _scene_has_far_field = false;
             _occlusion_class = false;
+            _occlusion_ramp = 0.0f;
             _far_field_mask = {};
             update_far_starvation();
             return;
@@ -1408,6 +1414,7 @@ namespace lfs::training {
         const size_t n_cam = _views ? _views->size() : 0;
         if (n_cam < 2) {
             _occlusion_class = false;
+            _occlusion_ramp = 0.0f;
             update_far_starvation();
             if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 training cameras); far-field guard is inert");
@@ -1446,6 +1453,7 @@ namespace lfs::training {
 
         if (counted < 2) {
             _occlusion_class = false;
+            _occlusion_ramp = 0.0f;
             update_far_starvation();
             if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 valid cameras); far-field guard is inert");
@@ -1471,6 +1479,7 @@ namespace lfs::training {
             32.0f * std::numeric_limits<float>::epsilon() * std::max(centroid_norm, 1.0f);
         if (!std::isfinite(radius) || radius <= radius_eps) {
             _occlusion_class = false;
+            _occlusion_ramp = 0.0f;
             update_far_starvation();
             if (!_logged_degenerate_hull && far_field_requested()) {
                 LOG_INFO("MRNF: camera hull degenerate (orbit radius {:.6g}); far-field guard is inert",
@@ -1510,11 +1519,16 @@ namespace lfs::training {
                      _scene_has_far_field ? "active" : "inert");
 
             _occlusion_class = false;
-            if (!_scene_has_far_field && _params && _track_visibility.has_value() &&
-                *_track_visibility < _params->occlusion_visibility_max) {
-                _occlusion_class = true;
-                LOG_INFO("MRNF: occlusion-class scene (visibility {:.2f}%, threshold {:.2f}%)",
-                         *_track_visibility * 100.0f, _params->occlusion_visibility_max * 100.0f);
+            _occlusion_ramp = 0.0f;
+            if (!_scene_has_far_field && _params && _track_visibility.has_value()) {
+                const float s_occ = occlusion_visibility_ramp(
+                    *_track_visibility, _params->occ_vis_full, _params->occ_vis_off);
+                _occlusion_ramp = s_occ;
+                if (s_occ > 0.0f) {
+                    _occlusion_class = true;
+                    LOG_INFO("MRNF: occlusion-class scene (visibility {:.2f}%, ramp {:.2f})",
+                             *_track_visibility * 100.0f, s_occ);
+                }
             }
 
             if (!far_operators_active()) {
@@ -1539,9 +1553,13 @@ namespace lfs::training {
     }
 
     int MRNF::starved_cadence_count(const int count) const {
+        if (explore_starvation_weighting_enabled()) {
+            return cadence_scaled(count);
+        }
         double n = static_cast<double>(cadence_scaled(count)) * static_cast<double>(_far_starvation);
         if (_occlusion_class && _params) {
-            n *= static_cast<double>(_params->occlusion_dose_scale);
+            n *= static_cast<double>(_occlusion_ramp) *
+                 static_cast<double>(_params->occlusion_dose_scale);
         }
         return static_cast<int>(std::lround(n));
     }
@@ -1575,18 +1593,33 @@ namespace lfs::training {
         return std::clamp((rich - ratio) / (rich - full), 0.0f, 1.0f);
     }
 
+    float MRNF::occlusion_visibility_ramp(const float visibility, const float vis_full,
+                                          const float vis_off) {
+        return far_starvation_factor(visibility, vis_full, vis_off);
+    }
+
+    float MRNF::explore_starvation_multiplier(const float vis_i, const float median_vis) {
+        if (vis_i == 0.0f) {
+            return 0.0f;
+        }
+        const float denom = std::max(median_vis, std::numeric_limits<float>::epsilon());
+        const float starv_i = std::clamp(1.0f - vis_i / denom, 0.0f, 1.0f);
+        return kStarvEps + starv_i;
+    }
+
     void MRNF::update_far_starvation() {
         // Params and P are bound at initialize(); skip the pre-init hull/setter pass.
         if (!_params || _initial_sfm_point_count == 0) {
             return;
         }
-        // Census-active scenes keep s = 1 at any capacity. The cap/points ramp
-        // (uncapped = rich, s = 0) only tempers residual mask-gated features
-        // when the census is inert.
+        // Census-active scenes keep s = 1 at any capacity, unless experimental
+        // starvation weighting is on: then mask-gated features use the same
+        // capacity-annealed s as the occlusion path on every scene.
         const bool uncapped = _params->max_cap == 0;
+        const bool census_forces_full = _scene_has_far_field && !explore_starvation_weighting_enabled();
         float s = 0.0f;
         float ratio = 0.0f;
-        if (_scene_has_far_field) {
+        if (census_forces_full) {
             s = 1.0f;
         } else if (!uncapped) {
             const float max_cap = static_cast<float>(_params->max_cap);
@@ -1596,7 +1629,7 @@ namespace lfs::training {
         }
         _far_starvation = s;
         if (std::abs(s - _logged_far_starvation) > 0.1f) {
-            if (_scene_has_far_field) {
+            if (census_forces_full) {
                 LOG_INFO("MRNF: far starvation 1.00 (far-field scene)");
             } else if (uncapped) {
                 LOG_INFO("MRNF: far starvation 0.00 (uncapped)");
@@ -1768,6 +1801,65 @@ namespace lfs::training {
         return selected;
     }
 
+    void MRNF::apply_explore_starvation_weights(lfs::core::Tensor& weights, const size_t n) {
+        using namespace lfs::core;
+        if (!weights.is_valid() || weights.numel() != n ||
+            !_vis_count.is_valid() || _vis_count.numel() != n) {
+            return;
+        }
+
+        float median_vis = 0.0f;
+        Tensor live_vis = _vis_count;
+        if (_free_mask.is_valid() && _free_mask.numel() >= n) {
+            live_vis = _vis_count.masked_select(_free_mask.slice(0, 0, n).logical_not());
+        }
+        if (live_vis.is_valid() && live_vis.numel() > 0) {
+            mrnf_strategy::launch_sorted_median(
+                live_vis.ptr<float>(), live_vis.numel(), &median_vis, &_median_scratch);
+        }
+        mrnf_strategy::launch_apply_explore_starvation_weights(
+            weights.ptr<float>(), _vis_count.ptr<float>(), n, median_vis, kStarvEps);
+    }
+
+    lfs::core::Tensor MRNF::build_explore_split_weights(
+        const size_t n,
+        const lfs::core::Tensor& active_mask,
+        const lfs::core::Tensor& trainable_mask,
+        const lfs::core::Tensor& replace_mask,
+        const lfs::core::Tensor& growth_inds) {
+        using namespace lfs::core;
+        auto log_scales = _splat_data->scaling_raw();
+        auto score_mean = Tensor::zeros({n}, Device::CUDA);
+        if (_explore_score_sum.is_valid() &&
+            _explore_score_sum.ndim() == 1 &&
+            _explore_score_sum.numel() == n) {
+            const float denom = static_cast<float>(std::max(_explore_sample_count, 1));
+            score_mean = _explore_score_sum / denom;
+        }
+        auto logw = log_scales.sum(1) + (score_mean + MRNF_EXPLORE_SCORE_FLOOR).log();
+        auto explore_weights = (logw - logw.max()).exp();
+        if (explore_starvation_weighting_enabled()) {
+            apply_explore_starvation_weights(explore_weights, n);
+        }
+        if (active_mask.is_valid()) {
+            explore_weights = explore_weights * active_mask;
+        }
+        if (trainable_mask.is_valid()) {
+            explore_weights = explore_weights * trainable_mask;
+        }
+        explore_weights = apply_crop_damping_to_scores(*_optimizer, explore_weights);
+        if (replace_mask.is_valid()) {
+            explore_weights = explore_weights.masked_fill(replace_mask, 0.0f);
+        }
+        if (growth_inds.is_valid() && growth_inds.numel() > 0) {
+            auto growth_mask = Tensor::zeros_bool({n}, Device::CUDA);
+            auto true_vals = Tensor::ones_bool({growth_inds.numel()}, Device::CUDA);
+            growth_mask.index_put_(growth_inds, true_vals);
+            explore_weights = explore_weights.masked_fill(growth_mask, 0.0f);
+        }
+        return explore_weights;
+    }
+
     void MRNF::grow_and_split(int iter, int pruned_count) {
         LOG_TIMER("MRNF::grow_and_split");
         LFS_VRAM_SCOPE("MRNF::grow_and_split");
@@ -1934,49 +2026,29 @@ namespace lfs::training {
                 if (log_scales.ndim() != 2 || log_scales.shape()[0] != n || log_scales.shape()[1] != 3) {
                     n_explore = 0;
                 } else {
-                    auto score_mean = Tensor::zeros({n}, Device::CUDA);
-                    if (_explore_score_sum.is_valid() &&
-                        _explore_score_sum.ndim() == 1 &&
-                        _explore_score_sum.numel() == n) {
-                        const float denom = static_cast<float>(std::max(_explore_sample_count, 1));
-                        score_mean = _explore_score_sum / denom;
-                    }
-                    auto logw = log_scales.sum(1) + (score_mean + MRNF_EXPLORE_SCORE_FLOOR).log();
-                    auto explore_weights = (logw - logw.max()).exp();
-                    if (active_mask.is_valid()) {
-                        explore_weights = explore_weights * active_mask;
-                    }
-                    if (trainable_mask.is_valid()) {
-                        explore_weights = explore_weights * trainable_mask;
-                    }
-                    explore_weights = apply_crop_damping_to_scores(*_optimizer, explore_weights);
-                    if (replace_mask.is_valid()) {
-                        explore_weights = explore_weights.masked_fill(replace_mask, 0.0f);
-                    }
-                    if (growth_inds.is_valid() && growth_inds.numel() > 0) {
-                        auto growth_mask = Tensor::zeros_bool({n}, Device::CUDA);
-                        auto true_vals = Tensor::ones_bool({growth_inds.numel()}, Device::CUDA);
-                        growth_mask.index_put_(growth_inds, true_vals);
-                        explore_weights = explore_weights.masked_fill(growth_mask, 0.0f);
-                    }
-
-                    kernels::launch_packed_refine_counts(
-                        nullptr, 0, nullptr, 0,
-                        explore_weights.ptr<float>(), n,
-                        nullptr, 0,
-                        _refine_counts_dev.ptr<int64_t>());
-                    LFS_CUDA_CHECK_MSG(
-                        cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                                   4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-                        "MRNF explore nnz D2H");
-                    const int selectable_explore = static_cast<int>(host_counts[2]);
-                    n_explore = std::min(n_explore, selectable_explore);
-                    if (n_explore > 0) {
-                        explore_inds = sample_gumbel_with_far_guard(
-                            explore_weights, n_explore, seed + 2,
-                            static_cast<size_t>(selectable_explore));
-                        n_explore = explore_inds.is_valid() ? static_cast<int>(explore_inds.numel()) : 0;
-                        LFS_COUNTER_ADD("strategy.mrnf.explore_split", n_explore);
+                    auto explore_weights = build_explore_split_weights(
+                        n, active_mask, trainable_mask, replace_mask, growth_inds);
+                    if (!explore_weights.is_valid() || explore_weights.numel() != n) {
+                        n_explore = 0;
+                    } else {
+                        kernels::launch_packed_refine_counts(
+                            nullptr, 0, nullptr, 0,
+                            explore_weights.ptr<float>(), n,
+                            nullptr, 0,
+                            _refine_counts_dev.ptr<int64_t>());
+                        LFS_CUDA_CHECK_MSG(
+                            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
+                                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
+                            "MRNF explore nnz D2H");
+                        const int selectable_explore = static_cast<int>(host_counts[2]);
+                        n_explore = std::min(n_explore, selectable_explore);
+                        if (n_explore > 0) {
+                            explore_inds = sample_gumbel_with_far_guard(
+                                explore_weights, n_explore, seed + 2,
+                                static_cast<size_t>(selectable_explore));
+                            n_explore = explore_inds.is_valid() ? static_cast<int>(explore_inds.numel()) : 0;
+                            LFS_COUNTER_ADD("strategy.mrnf.explore_split", n_explore);
+                        }
                     }
                 }
             }
@@ -3329,6 +3401,7 @@ namespace lfs::training {
         std::swap(_camera_hull_valid, source._camera_hull_valid);
         std::swap(_scene_has_far_field, source._scene_has_far_field);
         std::swap(_occlusion_class, source._occlusion_class);
+        std::swap(_occlusion_ramp, source._occlusion_ramp);
         std::swap(_track_visibility, source._track_visibility);
         std::swap(_logged_degenerate_hull, source._logged_degenerate_hull);
         std::swap(_initial_sfm_point_count, source._initial_sfm_point_count);

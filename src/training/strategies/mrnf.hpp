@@ -43,6 +43,8 @@ class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
+class MRNFStrategyTest_OcclusionVisibilityRamp_Test;
+class MRNFStrategyTest_ExploreStarvationWeights_Test;
 
 namespace lfs::training {
 
@@ -55,6 +57,7 @@ namespace lfs::training {
     inline constexpr float kSeedDepthOrbits = 32.0f;
     inline constexpr float kFarCapRatioFull = 2.0f;
     inline constexpr float kFarCapRatioRich = 3.5f;
+    inline constexpr float kStarvEps = 0.05f;
 
     class MRNF : public IStrategy, public ICheckpointStateAdopter {
     public:
@@ -127,6 +130,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
         friend class ::MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
         friend class ::MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
+        friend class ::MRNFStrategyTest_OcclusionVisibilityRamp_Test;
+        friend class ::MRNFStrategyTest_ExploreStarvationWeights_Test;
 
         struct FarGrowthState {
             bool active = false;
@@ -171,6 +176,16 @@ namespace lfs::training {
         [[nodiscard]] float effective_far_decay_scale() const;
         [[nodiscard]] float effective_mean_step_ratio_max() const;
         [[nodiscard]] static float far_starvation_factor(float ratio, float full, float rich);
+        [[nodiscard]] static float occlusion_visibility_ramp(float visibility, float vis_full, float vis_off);
+        [[nodiscard]] static float explore_starvation_multiplier(float vis_i, float median_vis);
+        [[nodiscard]] bool explore_starvation_weighting_enabled() const;
+        lfs::core::Tensor build_explore_split_weights(
+            size_t n,
+            const lfs::core::Tensor& active_mask,
+            const lfs::core::Tensor& trainable_mask,
+            const lfs::core::Tensor& replace_mask,
+            const lfs::core::Tensor& growth_inds);
+        void apply_explore_starvation_weights(lfs::core::Tensor& weights, size_t n);
         void update_far_starvation();
         void begin_far_growth_window(size_t n, int reserved_seeds);
         [[nodiscard]] size_t densification_row_count() const;
@@ -242,6 +257,7 @@ namespace lfs::training {
         bool _camera_hull_valid = false;
         bool _scene_has_far_field = true;
         bool _occlusion_class = false;
+        float _occlusion_ramp = 0.0f;
         std::optional<float> _track_visibility;
         bool _logged_degenerate_hull = false;
         size_t _initial_sfm_point_count = 0;

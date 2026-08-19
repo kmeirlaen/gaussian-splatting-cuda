@@ -231,10 +231,14 @@ namespace lfs::core {
                 opt_json["error_vis_norm"] = error_vis_norm;
             if (error_dog_weight != 0.0f)
                 opt_json["error_dog_weight"] = error_dog_weight;
-            if (occlusion_visibility_max != 0.025f)
-                opt_json["occlusion_visibility_max"] = occlusion_visibility_max;
+            if (occ_vis_full != 0.02f)
+                opt_json["occ_vis_full"] = occ_vis_full;
+            if (occ_vis_off != 0.03f)
+                opt_json["occ_vis_off"] = occ_vis_off;
             if (occlusion_dose_scale != 1.0f)
                 opt_json["occlusion_dose_scale"] = occlusion_dose_scale;
+            if (explore_starvation_weighting)
+                opt_json["explore_starvation_weighting"] = explore_starvation_weighting;
 
             return opt_json;
         }
@@ -334,7 +338,6 @@ namespace lfs::core {
                 std::pair{"bounds_percentile", bounds_percentile},
                 std::pair{"prune_ratio", prune_ratio},
                 std::pair{"far_scene_min_fraction", far_scene_min_fraction},
-                std::pair{"occlusion_visibility_max", occlusion_visibility_max},
             };
             for (const auto& [name, value] : probability_fields) {
                 if (auto error = invalid_probability(value, name); !error.empty())
@@ -368,6 +371,11 @@ namespace lfs::core {
                 occlusion_dose_scale > 4.0f)
                 return std::format("occlusion_dose_scale must be finite and within (0, 4] (got {})",
                                    occlusion_dose_scale);
+            if (!std::isfinite(occ_vis_full) || !std::isfinite(occ_vis_off) ||
+                !(occ_vis_full > 0.0f) || !(occ_vis_off > occ_vis_full))
+                return std::format(
+                    "occ_vis_full/occ_vis_off must be finite with 0 < full < off (got {}, {})",
+                    occ_vis_full, occ_vis_off);
             return {};
         }
 
@@ -616,10 +624,14 @@ namespace lfs::core {
                 params.error_vis_norm = json.at("error_vis_norm");
             if (json.contains("error_dog_weight"))
                 params.error_dog_weight = json.at("error_dog_weight");
-            if (json.contains("occlusion_visibility_max"))
-                params.occlusion_visibility_max = json.at("occlusion_visibility_max");
+            if (json.contains("occ_vis_full"))
+                params.occ_vis_full = json.at("occ_vis_full");
+            if (json.contains("occ_vis_off"))
+                params.occ_vis_off = json.at("occ_vis_off");
             if (json.contains("occlusion_dose_scale"))
                 params.occlusion_dose_scale = json.at("occlusion_dose_scale");
+            if (json.contains("explore_starvation_weighting"))
+                params.explore_starvation_weighting = json.at("explore_starvation_weighting");
 
             if (json.contains("depth_loss_mode") &&
                 (params.depth_loss_mode == "pearson" ||

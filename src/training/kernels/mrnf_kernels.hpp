@@ -9,7 +9,8 @@
 
 namespace lfs::training {
     struct GumbelTopKScratch;
-}
+    struct PositiveMedianScratch;
+} // namespace lfs::training
 
 namespace lfs::training::mrnf_strategy {
 
@@ -218,6 +219,24 @@ namespace lfs::training::mrnf_strategy {
         float* out_rgb,
         float* out_alpha,
         float* out_depth,
+        void* stream = nullptr);
+
+    // Median of `n` values via one CUB radix-sort (sorted[n/2], matching
+    // the existing positive-median convention). out_median is host-side.
+    void launch_sorted_median(
+        const float* values,
+        size_t n,
+        float* out_median,
+        lfs::training::PositiveMedianScratch* scratch,
+        void* stream = nullptr);
+
+    // weights[i] *= 0 if vis[i]==0, else (starv_eps + clamp(1 - vis[i]/max(median,eps), 0, 1)).
+    void launch_apply_explore_starvation_weights(
+        float* weights,
+        const float* vis_count,
+        size_t n,
+        float median_vis,
+        float starv_eps,
         void* stream = nullptr);
 
 } // namespace lfs::training::mrnf_strategy

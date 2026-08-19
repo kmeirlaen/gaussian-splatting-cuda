@@ -23,6 +23,8 @@ class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
+class MRNFStrategyTest_OcclusionVisibilityRamp_Test;
+class MRNFStrategyTest_ExploreStarvationWeights_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -41,6 +43,7 @@ class MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
@@ -1587,6 +1590,139 @@ TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
     }
 }
 
+TEST(MRNFStrategyTest, OcclusionVisibilityRamp) {
+    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.02f, 0.02f, 0.03f), 1.0f);
+    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.025f, 0.02f, 0.03f), 0.5f);
+    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.03f, 0.02f, 0.03f), 0.0f);
+    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.003f, 0.02f, 0.03f), 1.0f);
+    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.035f, 0.02f, 0.03f), 0.0f);
+
+    auto make_params = [](const int max_cap, const float min_frac) {
+        auto opt = vanilla_mrnf_params();
+        opt.use_far_field = true;
+        opt.iterations = 1'000;
+        opt.max_cap = max_cap;
+        opt.refine_every = 100;
+        opt.far_scene_min_fraction = min_frac;
+        return opt;
+    };
+
+    {
+        // v at full -> s_occ = 1, occlusion-class, capacity-annealed s
+        auto splat = create_mrnf_test_splat_data(10);
+        splat.set_track_visibility(0.02f);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(15, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_TRUE(strategy._occlusion_class);
+        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 1.0f);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
+        EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
+    }
+
+    {
+        // midpoint -> s_occ = 0.5
+        auto splat = create_mrnf_test_splat_data(10);
+        splat.set_track_visibility(0.025f);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(15, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_TRUE(strategy._occlusion_class);
+        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 0.5f);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
+        EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits / 2);
+    }
+
+    {
+        // v at off -> s_occ = 0, hull cleared
+        auto splat = create_mrnf_test_splat_data(10);
+        splat.set_track_visibility(0.03f);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(15, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_FALSE(strategy._occlusion_class);
+        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 0.0f);
+        EXPECT_FALSE(strategy._camera_hull_valid);
+    }
+
+    {
+        // census-active ignores ramp even at midpoint vis
+        auto splat = create_mrnf_test_splat_data(10);
+        splat.set_track_visibility(0.025f);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(15, 0.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_TRUE(strategy._scene_has_far_field);
+        EXPECT_FALSE(strategy._occlusion_class);
+        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 0.0f);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
+        EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
+    }
+}
+
+TEST(MRNFStrategyTest, ExploreStarvationWeights) {
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(0.0f, 4.0f), 0.0f);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(4.0f, 4.0f), kStarvEps);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f), 0.75f + kStarvEps);
+
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.use_far_field = true;
+    opt_params.iterations = 1'000;
+    opt_params.max_cap = 16;
+    opt_params.refine_every = 100;
+    opt_params.far_scene_min_fraction = 1.0f;
+
+    auto splat = create_mrnf_test_splat_data(5);
+    MRNF strategy(splat);
+    strategy.initialize(opt_params);
+    install_test_camera_hull(strategy);
+
+    const size_t n = splat.size();
+    strategy._vis_count = Tensor::from_vector(
+        std::vector<float>{0.0f, 4.0f, 1.0f, 4.0f, 4.0f}, TensorShape({n}), Device::CUDA);
+    strategy._explore_score_sum = Tensor::full({n}, 1.0f, Device::CUDA);
+    strategy._explore_sample_count = 1;
+    strategy._far_starvation = 1.0f;
+
+    Tensor empty;
+    auto weights_off = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
+    ASSERT_TRUE(weights_off.is_valid());
+    ASSERT_EQ(weights_off.numel(), n);
+
+    auto log_scales = splat.scaling_raw();
+    auto score_mean = strategy._explore_score_sum /
+                      static_cast<float>(std::max(strategy._explore_sample_count, 1));
+    auto logw = log_scales.sum(1) + (score_mean + 0.05f).log();
+    auto part_a = (logw - logw.max()).exp();
+    part_a = apply_crop_damping_to_scores(strategy.get_optimizer(), part_a);
+
+    const auto off_cpu = weights_off.cpu();
+    const auto part_a_cpu = part_a.cpu();
+    ASSERT_EQ(off_cpu.numel(), part_a_cpu.numel());
+    EXPECT_EQ(std::memcmp(off_cpu.ptr<float>(), part_a_cpu.ptr<float>(),
+                          off_cpu.numel() * sizeof(float)),
+              0);
+
+    opt_params.explore_starvation_weighting = true;
+    strategy.set_optimization_params(opt_params);
+    install_test_camera_hull(strategy);
+    auto weights_on = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
+    ASSERT_TRUE(weights_on.is_valid());
+    const auto on_cpu = weights_on.cpu();
+    const float* on = on_cpu.ptr<float>();
+    const float* base = part_a_cpu.ptr<float>();
+    EXPECT_FLOAT_EQ(on[0], 0.0f);
+    EXPECT_FLOAT_EQ(on[1], base[1] * kStarvEps);
+    EXPECT_FLOAT_EQ(on[2], base[2] * (0.75f + kStarvEps));
+
+    EXPECT_TRUE(strategy.far_operators_active());
+    EXPECT_TRUE(strategy._camera_hull_valid);
+    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
+}
+
 TEST(MRNFStrategyTest, OcclusionClassGateFromTrackVisibility) {
     auto make_params = [](const int max_cap, const float min_frac) {
         auto opt = vanilla_mrnf_params();
@@ -1656,8 +1792,10 @@ TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     const param::OptimizationParameters defaults{};
     EXPECT_TRUE(defaults.use_far_field);
     EXPECT_FLOAT_EQ(defaults.far_scene_min_fraction, 0.01f);
-    EXPECT_FLOAT_EQ(defaults.occlusion_visibility_max, 0.025f);
+    EXPECT_FLOAT_EQ(defaults.occ_vis_full, 0.02f);
+    EXPECT_FLOAT_EQ(defaults.occ_vis_off, 0.03f);
     EXPECT_FLOAT_EQ(defaults.occlusion_dose_scale, 1.0f);
+    EXPECT_FALSE(defaults.explore_starvation_weighting);
     EXPECT_EQ(kExploreSplits, 20);
     EXPECT_EQ(kExploreSeeds, 20);
     EXPECT_FLOAT_EQ(kSeedOpacity, 0.03f);
@@ -1668,4 +1806,5 @@ TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     EXPECT_FLOAT_EQ(kSeedDepthOrbits, 32.0f);
     EXPECT_FLOAT_EQ(kFarCapRatioFull, 2.0f);
     EXPECT_FLOAT_EQ(kFarCapRatioRich, 3.5f);
+    EXPECT_FLOAT_EQ(kStarvEps, 0.05f);
 }

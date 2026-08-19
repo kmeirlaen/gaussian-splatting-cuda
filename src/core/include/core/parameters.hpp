@@ -231,8 +231,10 @@ namespace lfs::core {
             float error_dog_weight = 0.0f;
             // Occlusion-class gate from SfM track visibility. Config-file / C++ only
             // (no registry, GUI, locale, or CLI).
-            float occlusion_visibility_max = 0.025f;
+            float occ_vis_full = 0.02f;
+            float occ_vis_off = 0.03f;
             float occlusion_dose_scale = 1.0f;
+            bool explore_starvation_weighting = false;
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM

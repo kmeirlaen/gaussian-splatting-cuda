@@ -952,4 +952,102 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gather_seed_payloads");
     }
 
+    void launch_sorted_median(
+        const float* values,
+        size_t n,
+        float* out_median,
+        lfs::training::PositiveMedianScratch* scratch,
+        void* stream) {
+
+        LFS_ASSERT(out_median != nullptr);
+        *out_median = 0.0f;
+        if (n == 0 || values == nullptr)
+            return;
+        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MRNF sorted-median input exceeds CUB's int item-count limit");
+        LFS_ASSERT_MSG(scratch != nullptr, "MRNF sorted-median requires PositiveMedianScratch");
+
+        cudaStream_t s = resolve_stream(stream);
+        const int n_int = static_cast<int>(n);
+        scratch->ensure_n(n, lfs::core::Device::CUDA);
+        LFS_ASSERT_MSG(scratch->n_capacity >= n &&
+                           scratch->selected.is_valid() &&
+                           scratch->sorted.is_valid(),
+                       "MRNF sorted-median scratch must cover n");
+
+        float* d_selected = scratch->selected.ptr<float>();
+        float* d_sorted = scratch->sorted.ptr<float>();
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_selected, values, n * sizeof(float), cudaMemcpyDeviceToDevice, s),
+            "MRNF sorted-median copy");
+
+        auto sort_op = [&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceRadixSort::SortKeys(
+                workspace, workspace_bytes, d_selected, d_sorted,
+                n_int, 0, static_cast<int>(sizeof(float) * 8), s);
+        };
+        size_t sort_bytes = 0;
+        LFS_CUDA_CHECK_MSG(sort_op(nullptr, sort_bytes), "MRNF sorted-median sort size");
+        scratch->ensure_temps(0, sort_bytes, lfs::core::Device::CUDA);
+        if (sort_bytes > 0) {
+            LFS_ASSERT_MSG(scratch->sort_temp.is_valid() &&
+                               scratch->sort_temp_bytes >= sort_bytes &&
+                               scratch->sort_temp.data_ptr() != nullptr,
+                           "MRNF sorted-median sort temp must cover queried bytes");
+            void* ws = scratch->sort_temp.data_ptr();
+            LFS_CUDA_CHECK_MSG(sort_op(ws, sort_bytes), "MRNF sorted-median sort");
+        } else {
+            LFS_CUDA_CHECK_MSG(sort_op(nullptr, sort_bytes), "MRNF sorted-median sort");
+        }
+
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(out_median, d_sorted + (n / 2), sizeof(float),
+                            cudaMemcpyDeviceToHost, s),
+            "MRNF sorted-median readback");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "MRNF sorted-median stream sync");
+        if (!std::isfinite(*out_median))
+            *out_median = 0.0f;
+    }
+
+    __global__ void apply_explore_starvation_weights_kernel(
+        float* __restrict__ weights,
+        const float* __restrict__ vis_count,
+        size_t n,
+        float median_vis,
+        float starv_eps) {
+
+        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+        if (idx >= n)
+            return;
+        const float vis_i = vis_count[idx];
+        if (vis_i == 0.0f) {
+            weights[idx] = 0.0f;
+            return;
+        }
+        const float denom = fmaxf(median_vis, 1.19209290e-07f);
+        const float starv_i = fminf(fmaxf(1.0f - vis_i / denom, 0.0f), 1.0f);
+        weights[idx] *= (starv_eps + starv_i);
+    }
+
+    void launch_apply_explore_starvation_weights(
+        float* weights,
+        const float* vis_count,
+        size_t n,
+        float median_vis,
+        float starv_eps,
+        void* stream) {
+
+        if (n == 0)
+            return;
+        LFS_ASSERT(weights != nullptr);
+        LFS_ASSERT(vis_count != nullptr);
+
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((n + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        apply_explore_starvation_weights_kernel<<<blocks, threads, 0, s>>>(
+            weights, vis_count, n, median_vis, starv_eps);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_starvation_weights");
+    }
+
 } // namespace lfs::training::mrnf_strategy
