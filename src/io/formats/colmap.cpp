@@ -1512,14 +1512,8 @@ namespace lfs::io {
 
     PointCloud point3D_records_to_point_cloud(const std::vector<Point3DData>& points) {
         const uint64_t N = points.size();
-        size_t total_track_elements = 0;
-        for (const auto& point : points) {
-            total_track_elements += point.track_count;
-        }
         if (N == 0) {
-            PointCloud empty;
-            empty.total_track_elements = total_track_elements;
-            return empty;
+            return {};
         }
 
         std::vector<float> positions(N * 3);
@@ -1540,7 +1534,6 @@ namespace lfs::io {
                                    .contiguous();
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));
-        cloud.total_track_elements = total_track_elements;
         return cloud;
     }
 
@@ -2249,9 +2242,7 @@ namespace lfs::io {
         auto data = parse_points3D_text_point_cloud_fast(file_path, options, tally);
 
         if (data.point_count == 0) {
-            PointCloud empty;
-            empty.total_track_elements = data.track_elements;
-            return empty;
+            return {};
         }
 
         Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::CUDA);
@@ -2260,7 +2251,6 @@ namespace lfs::io {
                                    .contiguous();
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));
-        cloud.total_track_elements = data.track_elements;
         return cloud;
     }
 

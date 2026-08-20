@@ -206,8 +206,7 @@ namespace lfs::training::mrnf_strategy {
         float* __restrict__ refine_weight_max,
         float* __restrict__ densification_info,
         size_t N,
-        size_t n_rows,
-        bool error_vis_norm) {
+        size_t n_rows) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -216,8 +215,7 @@ namespace lfs::training::mrnf_strategy {
         const float vis = densification_info[idx];
         const float err = densification_info[N + idx];
         vis_count[idx] += vis;
-        const float attributed = error_vis_norm ? (err / fmaxf(vis, kVisNormFloor)) : err;
-        refine_weight_max[idx] = fmaxf(refine_weight_max[idx], attributed);
+        refine_weight_max[idx] = fmaxf(refine_weight_max[idx], err);
         for (size_t row = 0; row < n_rows; ++row) {
             densification_info[row * N + idx] = 0.f;
         }
@@ -229,8 +227,7 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         void* stream,
-        size_t n_rows,
-        bool error_vis_norm) {
+        size_t n_rows) {
         if (N == 0)
             return;
         const size_t rows = n_rows >= 2 ? n_rows : 2;
@@ -238,7 +235,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         fold_densification_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            vis_count, refine_weight_max, densification_info, N, rows, error_vis_norm);
+            vis_count, refine_weight_max, densification_info, N, rows);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_and_zero");
     }
 
@@ -1013,9 +1010,7 @@ namespace lfs::training::mrnf_strategy {
         float* __restrict__ weights,
         const float* __restrict__ vis_count,
         size_t n,
-        float median_vis,
-        float starv_eps,
-        float starv_gamma) {
+        float median_vis) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= n)
@@ -1026,10 +1021,9 @@ namespace lfs::training::mrnf_strategy {
             return;
         }
         const float denom = fmaxf(median_vis, 1.19209290e-07f);
-        const float starv_i = fminf(fmaxf(1.0f - vis_i / denom, 0.0f), 1.0f);
-        // gamma == 1 must not call powf: powf(x, 1.0f) is not bit-identical to x.
-        const float starv_term = (starv_gamma == 1.0f) ? starv_i : powf(starv_i, starv_gamma);
-        weights[idx] *= (starv_eps + starv_term);
+        const float starved = fminf(fmaxf(1.0f - vis_i / denom, 0.0f), 1.0f);
+        const float term = (kStarvGamma == 1.0f) ? starved : powf(starved, kStarvGamma);
+        weights[idx] *= (kStarvEps + term);
     }
 
     void launch_apply_explore_starvation_weights(
@@ -1037,8 +1031,6 @@ namespace lfs::training::mrnf_strategy {
         const float* vis_count,
         size_t n,
         float median_vis,
-        float starv_eps,
-        float starv_gamma,
         void* stream) {
 
         if (n == 0)
@@ -1050,7 +1042,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((n + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         apply_explore_starvation_weights_kernel<<<blocks, threads, 0, s>>>(
-            weights, vis_count, n, median_vis, starv_eps, starv_gamma);
+            weights, vis_count, n, median_vis);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_starvation_weights");
     }
 

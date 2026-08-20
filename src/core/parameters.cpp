@@ -227,24 +227,8 @@ namespace lfs::core {
             opt_json["bg_color"] = {bg_color[0], bg_color[1], bg_color[2]};
             if (!bg_image_path.empty())
                 opt_json["bg_image_path"] = path_to_utf8(bg_image_path);
-            if (error_vis_norm)
-                opt_json["error_vis_norm"] = error_vis_norm;
-            if (error_dog_weight != 0.0f)
-                opt_json["error_dog_weight"] = error_dog_weight;
-            if (occ_vis_full != 0.02f)
-                opt_json["occ_vis_full"] = occ_vis_full;
-            if (occ_vis_off != 0.03f)
-                opt_json["occ_vis_off"] = occ_vis_off;
-            if (occlusion_dose_scale != 1.0f)
-                opt_json["occlusion_dose_scale"] = occlusion_dose_scale;
-            if (explore_starvation_weighting)
-                opt_json["explore_starvation_weighting"] = explore_starvation_weighting;
-            if (starv_eps != 0.05f)
-                opt_json["starv_eps"] = starv_eps;
-            if (starv_gamma != 1.0f)
-                opt_json["starv_gamma"] = starv_gamma;
-            if (persplat_dose_scale != 1.0f)
-                opt_json["persplat_dose_scale"] = persplat_dose_scale;
+            if (!explore_starvation_weighting)
+                opt_json["explore_starvation_weighting"] = false;
 
             return opt_json;
         }
@@ -324,7 +308,6 @@ namespace lfs::core {
                 std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
                 std::pair{"init_rho", init_rho},
-                std::pair{"error_dog_weight", error_dog_weight},
             };
             for (const auto& [name, value] : nonnegative_fields) {
                 if (auto error = invalid_nonnegative(value, name); !error.empty())
@@ -373,24 +356,6 @@ namespace lfs::core {
                 normal_loss_space != NormalLossSpace::CameraOpenGL &&
                 normal_loss_space != NormalLossSpace::World)
                 return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
-            if (!std::isfinite(occlusion_dose_scale) || occlusion_dose_scale <= 0.0f ||
-                occlusion_dose_scale > 4.0f)
-                return std::format("occlusion_dose_scale must be finite and within (0, 4] (got {})",
-                                   occlusion_dose_scale);
-            if (!std::isfinite(starv_eps) || starv_eps < 0.0f || starv_eps > 1.0f)
-                return std::format("starv_eps must be finite and within [0, 1] (got {})", starv_eps);
-            if (!std::isfinite(starv_gamma) || starv_gamma <= 0.0f || starv_gamma > 4.0f)
-                return std::format("starv_gamma must be finite and within (0, 4] (got {})",
-                                   starv_gamma);
-            if (!std::isfinite(persplat_dose_scale) || persplat_dose_scale <= 0.0f ||
-                persplat_dose_scale > 4.0f)
-                return std::format("persplat_dose_scale must be finite and within (0, 4] (got {})",
-                                   persplat_dose_scale);
-            if (!std::isfinite(occ_vis_full) || !std::isfinite(occ_vis_off) ||
-                !(occ_vis_full > 0.0f) || !(occ_vis_off > occ_vis_full))
-                return std::format(
-                    "occ_vis_full/occ_vis_off must be finite with 0 < full < off (got {}, {})",
-                    occ_vis_full, occ_vis_off);
             return {};
         }
 
@@ -635,24 +600,8 @@ namespace lfs::core {
                 params.bg_image_path =
                     utf8_to_path(json.at("bg_image_path").get<std::string>());
             }
-            if (json.contains("error_vis_norm"))
-                params.error_vis_norm = json.at("error_vis_norm");
-            if (json.contains("error_dog_weight"))
-                params.error_dog_weight = json.at("error_dog_weight");
-            if (json.contains("occ_vis_full"))
-                params.occ_vis_full = json.at("occ_vis_full");
-            if (json.contains("occ_vis_off"))
-                params.occ_vis_off = json.at("occ_vis_off");
-            if (json.contains("occlusion_dose_scale"))
-                params.occlusion_dose_scale = json.at("occlusion_dose_scale");
             if (json.contains("explore_starvation_weighting"))
                 params.explore_starvation_weighting = json.at("explore_starvation_weighting");
-            if (json.contains("starv_eps"))
-                params.starv_eps = json.at("starv_eps");
-            if (json.contains("starv_gamma"))
-                params.starv_gamma = json.at("starv_gamma");
-            if (json.contains("persplat_dose_scale"))
-                params.persplat_dose_scale = json.at("persplat_dose_scale");
 
             if (json.contains("depth_loss_mode") &&
                 (params.depth_loss_mode == "pearson" ||

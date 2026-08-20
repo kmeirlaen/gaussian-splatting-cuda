@@ -839,8 +839,6 @@ namespace lfs::training {
                             filtered_colors.size() * sizeof(uint8_t));
 
                 point_cloud_to_use = lfs::core::PointCloud(filtered_means_tensor, filtered_colors_tensor);
-                point_cloud_to_use.total_track_elements = point_cloud->total_track_elements;
-                point_cloud_to_use.track_visibility = point_cloud->track_visibility;
             } else {
                 point_cloud_to_use = *point_cloud;
                 if (max_cap > 0) {

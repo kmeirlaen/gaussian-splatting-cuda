@@ -32,25 +32,4 @@ namespace lfs::training::kernels {
         float skip_below = 0.0f,
         cudaStream_t stream = nullptr);
 
-    /**
-     * Add a Difference-of-Gaussians residual to a densification error map:
-     *   dog(x) = |G(x, sigma=1) - G(x, sigma=2)|  on luminance
-     *   error += weight * |dog(gt) - dog(render)|
-     *
-     * Images are contiguous RGB, CHW ([3,H,W] or [1,3,H,W]) or HWC ([H,W,3]).
-     * GT may be float32 or uint8; render is float32. scratch must hold 3*H*W floats.
-     */
-    void launch_add_dog_residual(
-        const float* gt_f32,
-        const std::uint8_t* gt_u8,
-        bool gt_chw,
-        const float* render_f32,
-        bool render_chw,
-        float* error_hw,
-        int height,
-        int width,
-        float weight,
-        float* scratch_3hw,
-        cudaStream_t stream = nullptr);
-
 } // namespace lfs::training::kernels

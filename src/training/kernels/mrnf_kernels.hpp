@@ -139,14 +139,14 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
-    // Floor for error_vis_norm: err / max(vis, floor). Prevents blow-up on
-    // barely-seen splats. Experimental; config-file / C++ only.
-    inline constexpr float kVisNormFloor = 0.05f;
+    // Baked per-splat exploration starvation weights (Round 23).
+    inline constexpr float kStarvEps = 0.0026f;
+    inline constexpr float kStarvGamma = 1.72f;
+    inline constexpr float kExploreStarvDose = 2.38f;
 
     /**
      * fold densification_info into vis_count (add row0) and refine_weight_max
      * (max of row1), then zero n_rows rows.
-     * When error_vis_norm is true, the folded score is err / max(vis, kVisNormFloor).
      */
     void launch_fold_densification_and_zero(
         float* vis_count,
@@ -154,8 +154,7 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         void* stream = nullptr,
-        size_t n_rows = 2,
-        bool error_vis_norm = false);
+        size_t n_rows = 2);
 
     void launch_project_visible_centers(
         const float* means,
@@ -230,16 +229,13 @@ namespace lfs::training::mrnf_strategy {
         lfs::training::PositiveMedianScratch* scratch,
         void* stream = nullptr);
 
-    // weights[i] *= 0 if vis[i]==0, else (starv_eps + starv_i^starv_gamma)
-    // where starv_i = clamp(1 - vis[i]/max(median,eps), 0, 1).
-    // starv_gamma == 1.0f skips pow (bit-identical to starv_eps + starv_i).
+    // weights[i] *= 0 if vis[i]==0, else (kStarvEps + starved^kStarvGamma)
+    // where starved = clamp(1 - vis[i]/max(median, tiny), 0, 1).
     void launch_apply_explore_starvation_weights(
         float* weights,
         const float* vis_count,
         size_t n,
         float median_vis,
-        float starv_eps,
-        float starv_gamma,
         void* stream = nullptr);
 
 } // namespace lfs::training::mrnf_strategy

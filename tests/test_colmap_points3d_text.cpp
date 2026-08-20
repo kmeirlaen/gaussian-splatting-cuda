@@ -21,13 +21,6 @@ namespace {
     }
 } // namespace
 
-TEST(ColmapTrackVisibility, ComputesMeanTrackLengthOverImageCount) {
-    EXPECT_FLOAT_EQ(lfs::io::compute_track_visibility(10, 5, 100), 0.02f);
-    EXPECT_FLOAT_EQ(lfs::io::compute_track_visibility(0, 0, 0), 0.0f);
-    EXPECT_FLOAT_EQ(lfs::io::compute_track_visibility(3, 1, 10), 0.3f);
-    EXPECT_FLOAT_EQ(lfs::io::compute_track_visibility(4, 3, 10), (4.0f / 3.0f) / 10.0f);
-}
-
 TEST(ColmapPoints3DText, LoadsTextPointCloudThroughPublicApi) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
@@ -36,13 +29,6 @@ TEST(ColmapPoints3DText, LoadsTextPointCloudThroughPublicApi) {
     const auto result = lfs::io::read_colmap_point_cloud_text(fixture_dir("basic"));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->value.size(), 3u);
-    ASSERT_TRUE(result->value.total_track_elements.has_value());
-    EXPECT_EQ(*result->value.total_track_elements, 4u);
-    EXPECT_FALSE(result->value.track_visibility.has_value());
-    EXPECT_FLOAT_EQ(lfs::io::compute_track_visibility(*result->value.total_track_elements,
-                                                      static_cast<std::size_t>(result->value.size()),
-                                                      100),
-                    (4.0f / 3.0f) / 100.0f);
 }
 
 TEST(ColmapPoints3DText, ReportsStatsAndFiltersByMinimumTrackLength) {

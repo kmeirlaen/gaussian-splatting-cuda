@@ -357,13 +357,6 @@ namespace lfs::io {
                 point_cloud = std::make_shared<PointCloud>();
             }
 
-            if (point_cloud && point_cloud->total_track_elements.has_value()) {
-                point_cloud->track_visibility = compute_track_visibility(
-                    *point_cloud->total_track_elements,
-                    static_cast<std::size_t>(std::max<int64_t>(point_cloud->size(), 0)),
-                    cameras.size());
-            }
-
             // Centralize scene
             std::optional<ImportGeoreference> import_georeference;
             {

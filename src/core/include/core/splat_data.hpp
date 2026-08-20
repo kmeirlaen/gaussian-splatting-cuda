@@ -18,7 +18,6 @@
 #include <functional>
 #include <glm/glm.hpp>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -242,8 +241,6 @@ namespace lfs::core {
         int get_max_sh_degree() const { return _max_sh_degree; }
         float get_scene_scale() const { return _scene_scale; }
         void set_scene_scale(float scene_scale) { _scene_scale = scene_scale; }
-        [[nodiscard]] std::optional<float> track_visibility() const { return _track_visibility; }
-        void set_track_visibility(std::optional<float> visibility) { _track_visibility = visibility; }
         unsigned long size() const { return static_cast<unsigned long>(_means.shape()[0]); }
 
         // ========== Raw tensor access (for optimization) ==========
@@ -484,7 +481,6 @@ namespace lfs::core {
         int _active_sh_degree = 0;
         int _max_sh_degree = 0;
         float _scene_scale = 0.f;
-        std::optional<float> _track_visibility;
 
         // Parameters — any new Tensor member must be added to detach_from_streams().
         Tensor _means;

@@ -694,7 +694,6 @@ namespace lfs::core {
         copy._max_sh_degree = _max_sh_degree;
         copy._active_sh_degree = _active_sh_degree;
         copy._scene_scale = _scene_scale;
-        copy._track_visibility = _track_visibility;
         copy._means = cloned(_means, "splat.positions");
         copy._sh0 = cloned(_sh0, "splat.sh0");
         copy._shN = cloned(_shN, "splat.shN");
@@ -720,7 +719,6 @@ namespace lfs::core {
         : _active_sh_degree(other._active_sh_degree),
           _max_sh_degree(other._max_sh_degree),
           _scene_scale(other._scene_scale),
-          _track_visibility(other._track_visibility),
           _means(std::move(other._means)),
           _sh0(std::move(other._sh0)),
           _shN(std::move(other._shN)),
@@ -741,7 +739,6 @@ namespace lfs::core {
         other._active_sh_degree = 0;
         other._max_sh_degree = 0;
         other._scene_scale = 0.0f;
-        other._track_visibility.reset();
         other._deleted_count.store(0, std::memory_order_relaxed);
         other._deleted_mask_version.store(0, std::memory_order_relaxed);
         other._param_layout_generation = 0;
@@ -754,8 +751,6 @@ namespace lfs::core {
             _active_sh_degree = other._active_sh_degree;
             _max_sh_degree = other._max_sh_degree;
             _scene_scale = other._scene_scale;
-            _track_visibility = other._track_visibility;
-            other._track_visibility.reset();
 
             // Move tensors
             _means = std::move(other._means);
@@ -2462,9 +2457,6 @@ namespace lfs::core {
                 capacity > 0 ? SplatData::ShNLayout::Swizzled
                              : SplatData::ShNLayout::Canonical);
             result.set_tensor_allocator(std::move(tensor_allocator));
-            if (!params.optimization.random) {
-                result.set_track_visibility(pcd.track_visibility);
-            }
 
             return result;
 

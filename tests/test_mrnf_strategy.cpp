@@ -22,8 +22,6 @@ class MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
 class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
-class MRNFStrategyTest_OcclusionClassGateFromTrackVisibility_Test;
-class MRNFStrategyTest_OcclusionVisibilityRamp_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
 
 #include "core/camera.hpp"
@@ -1068,6 +1066,7 @@ TEST(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     opt_params.grow_fraction = 0.0f;
     opt_params.grow_until_iter = 10'000;
     opt_params.refine_every = 100;
+    opt_params.explore_starvation_weighting = false;
     strategy.initialize(opt_params);
     strategy._far_starvation = 1.0f;
     strategy._scene_has_far_field = true;
@@ -1121,6 +1120,7 @@ TEST(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
     opt_params.grow_fraction = 0.0f;
     opt_params.grow_until_iter = 10'000;
     opt_params.refine_every = 100;
+    opt_params.explore_starvation_weighting = false;
     strategy.initialize(opt_params);
     install_test_camera_hull(strategy);
     ASSERT_TRUE(strategy._camera_hull_valid);
@@ -1168,6 +1168,7 @@ TEST(MRNFStrategyTest, SeedFromViewInsertsRequestedRows) {
     opt_params.max_cap = 32;
     opt_params.grow_until_iter = 10'000;
     opt_params.refine_every = 100;
+    opt_params.explore_starvation_weighting = false;
     strategy.initialize(opt_params);
     install_test_camera_hull(strategy);
     strategy._bounds.center[0] = 0.0f;
@@ -1548,10 +1549,12 @@ TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
 }
 
 TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
-    auto make_params = [](const bool use_far_field, const float min_frac) {
+    auto make_params = [](const bool use_far_field, const float min_frac,
+                          const bool starvation = true) {
         auto opt = vanilla_mrnf_params();
         opt.use_far_field = use_far_field;
         opt.far_scene_min_fraction = min_frac;
+        opt.explore_starvation_weighting = starvation;
         opt.iterations = 1'000;
         opt.max_cap = 32;
         opt.refine_every = 100;
@@ -1566,13 +1569,26 @@ TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
         install_test_camera_hull(strategy);
         EXPECT_TRUE(strategy._camera_hull_valid);
         EXPECT_TRUE(strategy._scene_has_far_field);
+        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
     }
 
     {
+        // census-inert + starvation ON keeps the hull for exploration
         auto splat = create_mrnf_test_splat_data();
         place_deep_far_probe_at(splat, 9);
         MRNF strategy(splat);
         strategy.initialize(make_params(true, 1.0f));
+        install_test_camera_hull(strategy);
+        EXPECT_TRUE(strategy._camera_hull_valid);
+        EXPECT_FALSE(strategy._scene_has_far_field);
+    }
+
+    {
+        // census-inert + starvation OFF clears the hull
+        auto splat = create_mrnf_test_splat_data();
+        place_deep_far_probe_at(splat, 9);
+        MRNF strategy(splat);
+        strategy.initialize(make_params(true, 1.0f, false));
         install_test_camera_hull(strategy);
         EXPECT_FALSE(strategy._camera_hull_valid);
         EXPECT_FALSE(strategy._scene_has_far_field);
@@ -1590,88 +1606,14 @@ TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
     }
 }
 
-TEST(MRNFStrategyTest, OcclusionVisibilityRamp) {
-    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.02f, 0.02f, 0.03f), 1.0f);
-    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.025f, 0.02f, 0.03f), 0.5f);
-    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.03f, 0.02f, 0.03f), 0.0f);
-    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.003f, 0.02f, 0.03f), 1.0f);
-    EXPECT_FLOAT_EQ(MRNF::occlusion_visibility_ramp(0.035f, 0.02f, 0.03f), 0.0f);
-
-    auto make_params = [](const int max_cap, const float min_frac) {
-        auto opt = vanilla_mrnf_params();
-        opt.use_far_field = true;
-        opt.iterations = 1'000;
-        opt.max_cap = max_cap;
-        opt.refine_every = 100;
-        opt.far_scene_min_fraction = min_frac;
-        return opt;
-    };
-
-    {
-        // v at full -> s_occ = 1, occlusion-class, capacity-annealed s
-        auto splat = create_mrnf_test_splat_data(10);
-        splat.set_track_visibility(0.02f);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(15, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_TRUE(strategy._occlusion_class);
-        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 1.0f);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-        EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
-    }
-
-    {
-        // midpoint -> s_occ = 0.5
-        auto splat = create_mrnf_test_splat_data(10);
-        splat.set_track_visibility(0.025f);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(15, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_TRUE(strategy._occlusion_class);
-        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 0.5f);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-        EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits / 2);
-    }
-
-    {
-        // v at off -> s_occ = 0, hull cleared
-        auto splat = create_mrnf_test_splat_data(10);
-        splat.set_track_visibility(0.03f);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(15, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FALSE(strategy._occlusion_class);
-        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 0.0f);
-        EXPECT_FALSE(strategy._camera_hull_valid);
-    }
-
-    {
-        // census-active ignores ramp even at midpoint vis
-        auto splat = create_mrnf_test_splat_data(10);
-        splat.set_track_visibility(0.025f);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(15, 0.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_TRUE(strategy._scene_has_far_field);
-        EXPECT_FALSE(strategy._occlusion_class);
-        EXPECT_FLOAT_EQ(strategy._occlusion_ramp, 0.0f);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
-        EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
-    }
-}
-
 TEST(MRNFStrategyTest, ExploreStarvationWeights) {
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(0.0f, 4.0f), 0.0f);
     EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(4.0f, 4.0f), kStarvEps);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f), 0.75f + kStarvEps);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.05f, 1.0f), 0.75f + 0.05f);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.05f, 2.0f), 0.5625f + 0.05f);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(4.0f, 4.0f, 0.0f, 1.0f), 0.0f);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.0f, 1.0f), 0.75f);
-    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f, 0.1f, 1.0f), 0.85f);
+    EXPECT_FLOAT_EQ(MRNF::explore_starvation_multiplier(1.0f, 4.0f),
+                    kStarvEps + std::pow(0.75f, kStarvGamma));
+
+    const int expected_dose = static_cast<int>(
+        std::lround(static_cast<double>(kExploreSplits) * static_cast<double>(kExploreStarvDose)));
 
     auto opt_params = vanilla_mrnf_params();
     opt_params.use_far_field = true;
@@ -1679,6 +1621,7 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
     opt_params.max_cap = 16;
     opt_params.refine_every = 100;
     opt_params.far_scene_min_fraction = 1.0f;
+    opt_params.explore_starvation_weighting = false;
 
     auto splat = create_mrnf_test_splat_data(5);
     MRNF strategy(splat);
@@ -1721,122 +1664,29 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
     const float* base = part_a_cpu.ptr<float>();
     EXPECT_FLOAT_EQ(on[0], 0.0f);
     EXPECT_FLOAT_EQ(on[1], base[1] * kStarvEps);
-    EXPECT_FLOAT_EQ(on[2], base[2] * (0.75f + kStarvEps));
+    EXPECT_NEAR(on[2], base[2] * MRNF::explore_starvation_multiplier(1.0f, 4.0f), 1.0e-5f);
 
     EXPECT_TRUE(strategy.far_operators_active());
     EXPECT_TRUE(strategy._camera_hull_valid);
-    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
-
-    // gamma != 1: starv_i^2. vis==median stays eps (0^gamma); vis=0.25*median
-    // is 0.75^2 + eps. vis==0 stays 0.
-    opt_params.starv_gamma = 2.0f;
-    strategy.set_optimization_params(opt_params);
-    auto weights_g2 = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
-    ASSERT_TRUE(weights_g2.is_valid());
-    const auto g2_cpu = weights_g2.cpu();
-    const float* g2 = g2_cpu.ptr<float>();
-    EXPECT_FLOAT_EQ(g2[0], 0.0f);
-    EXPECT_FLOAT_EQ(g2[1], base[1] * kStarvEps);
-    EXPECT_FLOAT_EQ(g2[2], base[2] * (0.5625f + kStarvEps));
-
-    // eps = 0, gamma = 1: vis==median contributes 0; starved row is 0.75.
-    opt_params.starv_gamma = 1.0f;
-    opt_params.starv_eps = 0.0f;
-    strategy.set_optimization_params(opt_params);
-    auto weights_e0 = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
-    ASSERT_TRUE(weights_e0.is_valid());
-    const auto e0_cpu = weights_e0.cpu();
-    const float* e0 = e0_cpu.ptr<float>();
-    EXPECT_FLOAT_EQ(e0[0], 0.0f);
-    EXPECT_FLOAT_EQ(e0[1], 0.0f);
-    EXPECT_FLOAT_EQ(e0[2], base[2] * 0.75f);
-
-    // eps = 0.1, gamma = 1.
-    opt_params.starv_eps = 0.1f;
-    strategy.set_optimization_params(opt_params);
-    auto weights_e1 = strategy.build_explore_split_weights(n, empty, empty, empty, empty);
-    ASSERT_TRUE(weights_e1.is_valid());
-    const auto e1_cpu = weights_e1.cpu();
-    const float* e1 = e1_cpu.ptr<float>();
-    EXPECT_FLOAT_EQ(e1[0], 0.0f);
-    EXPECT_FLOAT_EQ(e1[1], base[1] * 0.1f);
-    EXPECT_FLOAT_EQ(e1[2], base[2] * 0.85f);
-
-    // persplat_dose_scale multiplies explore counts only in this mode.
-    opt_params.starv_eps = kStarvEps;
-    opt_params.persplat_dose_scale = 0.5f;
-    strategy.set_optimization_params(opt_params);
-    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits / 2);
-
-    // occlusion_dose_scale must not stack with persplat_dose_scale.
-    opt_params.persplat_dose_scale = 1.0f;
-    opt_params.occlusion_dose_scale = 0.25f;
-    strategy.set_optimization_params(opt_params);
-    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), kExploreSplits);
-}
-
-TEST(MRNFStrategyTest, OcclusionClassGateFromTrackVisibility) {
-    auto make_params = [](const int max_cap, const float min_frac) {
-        auto opt = vanilla_mrnf_params();
-        opt.use_far_field = true;
-        opt.iterations = 1'000;
-        opt.max_cap = max_cap;
-        opt.refine_every = 100;
-        opt.far_scene_min_fraction = min_frac;
-        return opt;
-    };
+    EXPECT_FALSE(strategy._scene_has_far_field);
+    EXPECT_EQ(strategy.starved_cadence_count(kExploreSplits), expected_dose);
 
     {
-        // census-inert + visibility 0.003 -> occlusion-class, capacity-annealed s
-        auto splat = create_mrnf_test_splat_data(10);
-        splat.set_track_visibility(0.003f);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(60, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_TRUE(strategy._occlusion_class);
-        EXPECT_TRUE(strategy._camera_hull_valid);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
-        EXPECT_TRUE(strategy._track_visibility.has_value());
-        EXPECT_FLOAT_EQ(*strategy._track_visibility, 0.003f);
-    }
-
-    {
-        // census-inert + visibility 0.035 -> inactive
-        auto splat = create_mrnf_test_splat_data(10);
-        splat.set_track_visibility(0.035f);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(60, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FALSE(strategy._occlusion_class);
-        EXPECT_FALSE(strategy._camera_hull_valid);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 0.0f);
-    }
-
-    {
-        // census-inert + unset visibility -> inactive
-        auto splat = create_mrnf_test_splat_data(10);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(60, 1.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FALSE(strategy._occlusion_class);
-        EXPECT_FALSE(strategy._camera_hull_valid);
-        EXPECT_FALSE(strategy._track_visibility.has_value());
-    }
-
-    {
-        // census-active + low visibility: s = 1, not occlusion-class
-        auto splat = create_mrnf_test_splat_data(10);
-        splat.set_track_visibility(0.003f);
-        MRNF strategy(splat);
-        strategy.initialize(make_params(60, 0.0f));
-        install_test_camera_hull(strategy);
-        EXPECT_TRUE(strategy._scene_has_far_field);
-        EXPECT_FALSE(strategy._occlusion_class);
-        EXPECT_TRUE(strategy._camera_hull_valid);
-        EXPECT_FLOAT_EQ(strategy._far_starvation, 1.0f);
+        // census-active + starvation ON keeps s = 1; explore dose is still 2.38x
+        auto far_splat = create_mrnf_test_splat_data(10);
+        MRNF far_strategy(far_splat);
+        auto far_params = vanilla_mrnf_params();
+        far_params.use_far_field = true;
+        far_params.iterations = 1'000;
+        far_params.max_cap = 60;
+        far_params.refine_every = 100;
+        far_params.far_scene_min_fraction = 0.0f;
+        far_params.explore_starvation_weighting = true;
+        far_strategy.initialize(far_params);
+        install_test_camera_hull(far_strategy);
+        EXPECT_TRUE(far_strategy._scene_has_far_field);
+        EXPECT_FLOAT_EQ(far_strategy._far_starvation, 1.0f);
+        EXPECT_EQ(far_strategy.starved_cadence_count(kExploreSplits), expected_dose);
     }
 }
 
@@ -1844,13 +1694,7 @@ TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     const param::OptimizationParameters defaults{};
     EXPECT_TRUE(defaults.use_far_field);
     EXPECT_FLOAT_EQ(defaults.far_scene_min_fraction, 0.01f);
-    EXPECT_FLOAT_EQ(defaults.occ_vis_full, 0.02f);
-    EXPECT_FLOAT_EQ(defaults.occ_vis_off, 0.03f);
-    EXPECT_FLOAT_EQ(defaults.occlusion_dose_scale, 1.0f);
-    EXPECT_FALSE(defaults.explore_starvation_weighting);
-    EXPECT_FLOAT_EQ(defaults.starv_eps, 0.05f);
-    EXPECT_FLOAT_EQ(defaults.starv_gamma, 1.0f);
-    EXPECT_FLOAT_EQ(defaults.persplat_dose_scale, 1.0f);
+    EXPECT_TRUE(defaults.explore_starvation_weighting);
     EXPECT_EQ(kExploreSplits, 20);
     EXPECT_EQ(kExploreSeeds, 20);
     EXPECT_FLOAT_EQ(kSeedOpacity, 0.03f);
@@ -1861,5 +1705,7 @@ TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     EXPECT_FLOAT_EQ(kSeedDepthOrbits, 32.0f);
     EXPECT_FLOAT_EQ(kFarCapRatioFull, 2.0f);
     EXPECT_FLOAT_EQ(kFarCapRatioRich, 3.5f);
-    EXPECT_FLOAT_EQ(kStarvEps, 0.05f);
+    EXPECT_FLOAT_EQ(kStarvEps, 0.0026f);
+    EXPECT_FLOAT_EQ(kStarvGamma, 1.72f);
+    EXPECT_FLOAT_EQ(kExploreStarvDose, 2.38f);
 }
