@@ -22,6 +22,7 @@
 #include <string_view>
 #include <utility>
 
+using lfs::core::param::apply_explicit_training_overrides;
 using lfs::core::param::OptimizationParameters;
 using lfs::core::prop::PropertyMeta;
 using lfs::core::prop::PropertyObjectRef;
@@ -475,6 +476,70 @@ namespace {
                 expect_same_value(meta, meta.getter(actual_ref), meta.getter(expected_ref));
             }
         }
+    }
+
+    TEST(ExplicitTrainingOverridesTest, ResumeKeepsRestoredUnlessKeyPresent) {
+        lfs::core::param::TrainingParameters restored;
+        restored.optimization.iterations = 30'000;
+        restored.optimization.enable_eval = false;
+        restored.optimization.enable_save_eval_images = false;
+        restored.optimization.eval_steps = {7'000, 30'000};
+        restored.optimization.save_steps = {7'000, 30'000};
+        restored.optimization.max_cap = 1'234'567;
+        restored.dataset.test_every = 8;
+
+        lfs::core::param::ExplicitTrainingOverrides overrides;
+        apply_explicit_training_overrides(restored, overrides);
+        EXPECT_EQ(restored.optimization.iterations, 30'000u);
+        EXPECT_FALSE(restored.optimization.enable_eval);
+        EXPECT_EQ(restored.dataset.test_every, 8);
+        EXPECT_EQ(restored.optimization.max_cap, 1'234'567);
+
+        overrides.optimization_json = nlohmann::json{
+            {"iterations", 30100},
+            {"enable_eval", true},
+            {"enable_save_eval_images", true},
+            {"eval_steps", {30100}},
+            {"save_steps", {30100}},
+        }
+                                          .dump();
+        overrides.dataset_json = nlohmann::json{{"test_every", 64}}.dump();
+        apply_explicit_training_overrides(restored, overrides);
+
+        EXPECT_EQ(restored.optimization.iterations, 30100u);
+        EXPECT_TRUE(restored.optimization.enable_eval);
+        EXPECT_TRUE(restored.optimization.enable_save_eval_images);
+        EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+        EXPECT_EQ(restored.optimization.save_steps, std::vector<size_t>({30100}));
+        EXPECT_EQ(restored.dataset.test_every, 64);
+        EXPECT_EQ(restored.optimization.max_cap, 1'234'567);
+        EXPECT_TRUE(overrides.has_optimization_key("iterations"));
+        EXPECT_TRUE(overrides.has_optimization_key("eval_steps"));
+        EXPECT_TRUE(overrides.has_dataset_key("test_every"));
+        EXPECT_FALSE(overrides.has_optimization_key("max_cap"));
+    }
+
+    TEST(ExplicitTrainingOverridesTest, CliKeysWinOverConfigKeys) {
+        lfs::core::param::TrainingParameters restored;
+        restored.optimization.iterations = 30'000;
+        restored.optimization.eval_steps = {7'000, 30'000};
+        restored.dataset.test_every = 8;
+
+        lfs::core::param::ExplicitTrainingOverrides overrides;
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.optimization_json,
+            nlohmann::json{{"iterations", 30100}, {"eval_steps", {30100}}}.dump());
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.dataset_json, nlohmann::json{{"test_every", 32}}.dump());
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.optimization_json, nlohmann::json{{"iterations", 40000}}.dump());
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.dataset_json, nlohmann::json{{"test_every", 64}}.dump());
+
+        apply_explicit_training_overrides(restored, overrides);
+        EXPECT_EQ(restored.optimization.iterations, 40000u);
+        EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+        EXPECT_EQ(restored.dataset.test_every, 64);
     }
 
 } // namespace

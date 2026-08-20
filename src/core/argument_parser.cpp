@@ -22,11 +22,13 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <print>
 #include <set>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -987,7 +989,9 @@ namespace {
                                         // Capture values, not references
                                         iterations_val = cli_option_present({"-i", "--iter"}) ? std::optional<uint32_t>(::args::get(iterations)) : std::optional<uint32_t>(),
                                         resize_factor_val = resize_factor ? std::optional<int>(::args::get(resize_factor)) : std::optional<int>(1), // default 1
+                                        resize_factor_explicit = static_cast<bool>(resize_factor),
                                         max_width_val = max_width ? std::optional<int>(::args::get(max_width)) : std::optional<int>(3840),
+                                        max_width_explicit = static_cast<bool>(max_width),
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
@@ -1082,6 +1086,17 @@ namespace {
                 auto& svs = params.server;
                 auto& ds = params.dataset;
 
+                std::vector<const char*> opt_keys;
+                std::vector<const char*> ds_keys;
+                auto note_opt = [&](const char* key, const bool present) {
+                    if (present)
+                        opt_keys.push_back(key);
+                };
+                auto note_ds = [&](const char* key, const bool present) {
+                    if (present)
+                        ds_keys.push_back(key);
+                };
+
                 // Simple lambdas to apply if flag/value exists
                 auto setVal = [](const auto& flag, auto& target) {
                     if (flag)
@@ -1097,9 +1112,13 @@ namespace {
                 setVal(iterations_val, opt.iterations);
                 params.cli_iterations_set =
                     iterations_val.has_value();
+                note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
+                note_ds("resize_factor", resize_factor_explicit);
                 setVal(max_width_val, ds.max_width);
+                note_ds("max_width", max_width_explicit);
                 setVal(min_track_length_val, ds.min_track_length);
+                note_ds("min_track_length", min_track_length_val.has_value());
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
@@ -1233,6 +1252,104 @@ namespace {
                         params.python_scripts.emplace_back(script);
                     }
                 }
+
+                note_ds("images", images_folder_val.has_value());
+                note_ds("test_every", test_every_val.has_value());
+                note_ds("timelapse_images", timelapse_images_val.has_value());
+                note_ds("timelapse_every", timelapse_every_val.has_value());
+                note_ds("output_name", output_name_val.has_value());
+                note_ds("invert_masks", invert_masks_flag);
+                note_ds("centralize_dataset", centralize_val.has_value());
+                note_opt("max_cap", max_cap_val.has_value());
+                note_opt("steps_scaler", steps_scaler_val.has_value());
+                note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
+                note_opt("sh_degree", sh_degree_val.has_value());
+                note_opt("min_opacity", min_opacity_val.has_value());
+                note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
+                note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
+                note_opt("init_num_pts", init_num_pts_val.has_value());
+                note_opt("init_extent", init_extent_val.has_value());
+                note_opt("strategy", strategy_val.has_value());
+                note_opt("sparsify_steps", sparsify_steps_val.has_value());
+                note_opt("init_rho", init_rho_val.has_value());
+                note_opt("prune_ratio", prune_ratio_val.has_value());
+                note_opt("perf_bench", perf_bench_flag);
+                note_opt("perf_bench_warmup", perf_bench_warmup_val.has_value());
+                note_opt("profile_start_iter", profile_start_val.has_value());
+                note_opt("profile_stop_iter", profile_stop_val.has_value());
+                note_opt("mip_filter", enable_mip_flag);
+                note_opt("use_bilateral_grid", use_bilateral_grid_flag);
+                note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||
+                                          ppisp_freeze_from_sidecar_flag);
+                note_opt("ppisp_use_controller", ppisp_controller_flag);
+                note_opt("ppisp_freeze_from_sidecar", ppisp_freeze_from_sidecar_flag);
+                note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
+                note_opt("enable_eval", enable_eval_flag);
+                note_opt("headless", headless_flag);
+                note_opt("auto_train", auto_train_flag);
+                note_opt("no_splash", no_splash_flag);
+                note_opt("debug_python", debug_python_flag);
+                note_opt("debug_python_port", debug_python_port_val.has_value());
+                note_opt("enable_save_eval_images", no_save_eval_images_flag);
+                note_opt("bg_mode", bg_mode_val.has_value());
+                note_opt("bg_modulation", bg_mode_val.has_value());
+                note_opt("bg_color", bg_color_val.has_value());
+                note_opt("bg_image_path", bg_image_path_val.has_value());
+                note_opt("random", random_flag);
+                note_opt("gut", gut_flag);
+                note_opt("undistort", undistort_flag);
+                note_opt("enable_sparsity", enable_sparsity_flag);
+                note_opt("use_error_map", no_error_map_flag);
+                note_opt("use_edge_map", no_edge_map_flag);
+                note_opt("use_far_field", no_far_field_flag);
+                note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
+                note_opt("eval_steps", eval_steps_val && !eval_steps_val->empty());
+                note_opt("mask_mode", mask_mode_val.has_value());
+                note_opt("invert_masks", invert_masks_flag);
+                note_opt("use_alpha_as_mask", no_alpha_as_mask_flag);
+                note_opt("use_depth_loss", use_depth_loss_flag);
+                note_opt("depth_loss_weight", depth_loss_weight_val.has_value());
+                note_opt("depth_loss_mode", depth_loss_mode_val.has_value());
+                note_opt("use_normal_loss", use_normal_loss_flag);
+                note_opt("normal_loss_weight", normal_loss_weight_val.has_value());
+                note_opt("normal_consistency_weight", normal_consistency_weight_val.has_value());
+                note_opt("normal_flatten_weight", normal_flatten_weight_val.has_value());
+                note_opt("normal_loss_space", normal_loss_space_val.has_value());
+
+                if (!opt_keys.empty()) {
+                    const auto serialized = opt.to_json();
+                    nlohmann::json cli_opt;
+                    for (const char* key : opt_keys) {
+                        if (serialized.contains(key)) {
+                            cli_opt[key] = serialized[key];
+                            continue;
+                        }
+                        if (std::string_view(key) == "bg_image_path")
+                            cli_opt[key] = lfs::core::path_to_utf8(opt.bg_image_path);
+                    }
+                    if (!cli_opt.empty()) {
+                        lfs::core::param::merge_explicit_json_overlay(
+                            params.overrides.optimization_json, cli_opt.dump());
+                    }
+                }
+                if (!ds_keys.empty()) {
+                    const auto serialized = ds.to_json();
+                    nlohmann::json cli_ds;
+                    for (const char* key : ds_keys) {
+                        if (serialized.contains(key))
+                            cli_ds[key] = serialized[key];
+                        else if (std::string_view(key) == "centralize_dataset")
+                            cli_ds[key] = ds.centralize_dataset;
+                    }
+                    if (no_cpu_cache_flag)
+                        cli_ds["loading_params"]["use_cpu_memory"] = false;
+                    if (use_16bit_flag)
+                        cli_ds["loading_params"]["use_16bit_color"] = true;
+                    if (!cli_ds.empty()) {
+                        lfs::core::param::merge_explicit_json_overlay(
+                            params.overrides.dataset_json, cli_ds.dump());
+                    }
+                }
             };
 
             return std::make_tuple(ParseResult::Success, apply_cmd_overrides);
@@ -1295,7 +1412,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     // Load from --config or use hardcoded defaults
     if (!config_file.empty()) {
-        const auto opt_result = lfs::core::param::read_optim_params_from_json(lfs::core::utf8_to_path(config_file));
+        const auto opt_result = lfs::core::param::read_optim_params_from_json(
+            lfs::core::utf8_to_path(config_file), params->overrides);
         if (!opt_result) {
             return std::unexpected(std::format("Config load failed: {}", opt_result.error()));
         }

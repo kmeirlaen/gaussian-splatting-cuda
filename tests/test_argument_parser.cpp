@@ -9,6 +9,8 @@
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
 
+using lfs::core::param::apply_explicit_training_overrides;
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -1088,4 +1090,115 @@ TEST(ArgumentParserTest, TrainingRejectsImageBackgroundWithoutPath) {
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--bg-image-path is required"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, ResumeCliFlagsPopulateExplicitOverrides) {
+    const auto directory = make_test_path("lfs_arg_parser_resume_overrides");
+    const auto project = std::filesystem::path(directory) / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const auto output_path = make_test_path("lfs_arg_parser_resume_overrides_out");
+    const auto output_text = output_path;
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+        "--headless",
+        "--train",
+        "--eval",
+        "--eval-steps",
+        "30100",
+        "-i",
+        "30100",
+        "--test-every",
+        "64",
+        "-o",
+        output_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->cli_iterations_set);
+    EXPECT_EQ((*parsed)->optimization.iterations, 30100u);
+    EXPECT_TRUE((*parsed)->optimization.enable_eval);
+    EXPECT_EQ((*parsed)->optimization.eval_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ((*parsed)->dataset.test_every, 64);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("iterations"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("enable_eval"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_steps"));
+    EXPECT_TRUE((*parsed)->overrides.has_dataset_key("test_every"));
+    EXPECT_FALSE((*parsed)->overrides.has_optimization_key("max_cap"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.iterations = 30'000;
+    restored.optimization.enable_eval = false;
+    restored.optimization.eval_steps = {7'000, 30'000};
+    restored.optimization.save_steps = {7'000, 30'000};
+    restored.dataset.test_every = 8;
+    restored.optimization.max_cap = 42;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_EQ(restored.optimization.iterations, 30100u);
+    EXPECT_TRUE(restored.optimization.enable_eval);
+    EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ(restored.dataset.test_every, 64);
+    EXPECT_EQ(restored.optimization.max_cap, 42);
+}
+
+TEST(ArgumentParserTest, ResumeConfigKeysPopulateExplicitOverrides) {
+    const auto directory = make_test_path("lfs_arg_parser_resume_config_overrides");
+    const auto project = std::filesystem::path(directory) / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto config_path = std::filesystem::path(directory) / "resume.json";
+    auto config = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    config["iterations"] = 30100;
+    config["enable_eval"] = true;
+    config["enable_save_eval_images"] = true;
+    config["eval_steps"] = {30100};
+    config["save_steps"] = {30100};
+    std::ofstream(config_path) << config.dump(2);
+    const auto project_text = project.string();
+    const auto config_text = config_path.string();
+    const auto output_path = make_test_path("lfs_arg_parser_resume_config_overrides_out");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+        "--headless",
+        "--config",
+        config_text.c_str(),
+        "--test-every",
+        "64",
+        "-o",
+        output_path.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    std::error_code ec;
+    std::filesystem::remove(config_path, ec);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("iterations"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_steps"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("save_steps"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("enable_eval"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("enable_save_eval_images"));
+    EXPECT_TRUE((*parsed)->overrides.has_dataset_key("test_every"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.iterations = 30'000;
+    restored.optimization.enable_eval = false;
+    restored.optimization.enable_save_eval_images = false;
+    restored.optimization.eval_steps = {7'000, 30'000};
+    restored.optimization.save_steps = {7'000, 30'000};
+    restored.dataset.test_every = 8;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_EQ(restored.optimization.iterations, 30100u);
+    EXPECT_TRUE(restored.optimization.enable_eval);
+    EXPECT_TRUE(restored.optimization.enable_save_eval_images);
+    EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ(restored.optimization.save_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ(restored.dataset.test_every, 64);
 }

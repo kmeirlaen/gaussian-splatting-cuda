@@ -2760,6 +2760,25 @@ namespace lfs::training {
                     return std::unexpected("Scene has no active cameras enabled for training");
                 }
 
+                if (params.overrides.has_dataset_key("test_every") ||
+                    params.overrides.has_optimization_key("enable_eval")) {
+                    std::sort(
+                        source_cameras.begin(), source_cameras.end(),
+                        [](const auto& lhs, const auto& rhs) {
+                            return lhs->uid() < rhs->uid();
+                        });
+                    const bool enable_eval = params.optimization.enable_eval;
+                    const int test_every = std::max(1, params.dataset.test_every);
+                    for (size_t i = 0; i < source_cameras.size(); ++i) {
+                        const bool is_val =
+                            enable_eval &&
+                            (i % static_cast<size_t>(test_every)) == 0;
+                        source_cameras[i]->set_split(
+                            is_val ? lfs::core::CameraSplit::Eval
+                                   : lfs::core::CameraSplit::Train);
+                    }
+                }
+
                 if (params.optimization.enable_eval) {
                     for (const auto& camera : source_cameras) {
                         switch (camera->split()) {

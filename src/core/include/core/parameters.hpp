@@ -323,6 +323,27 @@ namespace lfs::core {
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
+        struct TrainingParameters;
+
+        // Process-local presence map for --resume. Keys dumped here are the
+        // only ones re-applied after a project/checkpoint restore; omitted
+        // keys leave the restored values untouched. Not serialized.
+        struct LFS_CORE_API ExplicitTrainingOverrides {
+            std::string optimization_json;
+            std::string dataset_json;
+
+            [[nodiscard]] bool empty() const noexcept {
+                return optimization_json.empty() && dataset_json.empty();
+            }
+            [[nodiscard]] bool has_optimization_key(std::string_view key) const;
+            [[nodiscard]] bool has_dataset_key(std::string_view key) const;
+        };
+
+        LFS_CORE_API void merge_explicit_json_overlay(std::string& dst_json, std::string_view src_json);
+        LFS_CORE_API void apply_explicit_training_overrides(
+            TrainingParameters& target,
+            const ExplicitTrainingOverrides& overrides);
+
         struct LFS_CORE_API TrainingParameters {
             DatasetConfig dataset;
             OptimizationParameters optimization;
@@ -381,6 +402,8 @@ namespace lfs::core {
             // True when -i/--iter was provided. Resume adapters use this to
             // distinguish an explicit continuation target from the default.
             bool cli_iterations_set = false;
+
+            ExplicitTrainingOverrides overrides;
 
             std::vector<int> disabled_camera_uids;
 
@@ -459,6 +482,9 @@ namespace lfs::core {
 
         // Modern C++23 functions returning expected values
         LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path);
+        LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(
+            const std::filesystem::path& path,
+            ExplicitTrainingOverrides& captured_overrides);
 
         // Save training parameters to JSON
         LFS_CORE_API std::expected<void, std::string> save_training_parameters_to_json(
