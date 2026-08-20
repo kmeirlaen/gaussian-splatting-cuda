@@ -471,6 +471,9 @@ class TrainingPanel(Panel):
         def _iteration():
             return RuntimeState.iteration.value
 
+        def _save_steps_editable():
+            return _state() in ("ready", "running", "paused")
+
         model.bind_func("show_no_trainer", lambda: not RuntimeState.has_trainer.value)
         model.bind_func(
             "show_no_params",
@@ -595,17 +598,12 @@ class TrainingPanel(Panel):
             "show_dataset_no_data", lambda: d() is None or not d().has_params()
         )
 
-        model.bind_func(
-            "save_edit_mode", lambda: _state() == "ready" and _iteration() == 0
-        )
-        model.bind_func(
-            "save_readonly_mode", lambda: _state() != "ready" or _iteration() != 0
-        )
+        model.bind_func("save_edit_mode", lambda: _save_steps_editable())
+        model.bind_func("save_readonly_mode", lambda: not _save_steps_editable())
         model.bind_func(
             "no_save_steps",
             lambda: (
-                _state() == "ready"
-                and _iteration() == 0
+                _save_steps_editable()
                 and p() is not None
                 and p().has_params()
                 and not list(p().save_steps)
@@ -614,7 +612,7 @@ class TrainingPanel(Panel):
         model.bind_func(
             "no_save_steps_ro",
             lambda: (
-                (_state() != "ready" or _iteration() != 0)
+                not _save_steps_editable()
                 and p() is not None
                 and p().has_params()
                 and not list(p().save_steps)
@@ -1344,11 +1342,6 @@ class TrainingPanel(Panel):
     def _update_save_steps(self, doc):
         params = lf.optimization_params()
         if not params or not params.has_params():
-            return False
-
-        state = RuntimeState.trainer_state.value
-        can_edit = state == "ready" and RuntimeState.iteration.value == 0
-        if not can_edit:
             return False
 
         return self._refresh_save_steps_model(params)
@@ -2207,6 +2200,15 @@ class TrainingPanel(Panel):
         if params and params.has_params() and params.enable_eval:
             self._sync_eval_steps_with_save_steps(params)
 
+        conflict = lf.training_start_overwrite_conflict()
+        if conflict is not None:
+            self._show_overwrite_dialog(int(conflict))
+            return
+
+        self._start_after_consent()
+
+    def _start_after_consent(self):
+        params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
             btn_mcmc = tr("training.conflict.btn_use_mcmc")
@@ -2232,6 +2234,28 @@ class TrainingPanel(Panel):
             self._show_save_pc_dialog()
         else:
             lf.start_training()
+
+    def _show_overwrite_dialog(self, conflict):
+        btn_overwrite = tr("training.overwrite.btn_overwrite_start")
+        btn_cancel = tr("training.conflict.btn_cancel")
+
+        def _on_result(button, _o=btn_overwrite):
+            if button == _o:
+                self._start_after_consent()
+
+        if conflict >= 0:
+            title = tr("training.overwrite.title")
+            message = tr("training.overwrite.message").format(iteration=conflict)
+        else:
+            title = tr("training.overwrite.existing_title")
+            message = tr("training.overwrite.existing_message")
+
+        lf.ui.confirm_dialog(
+            title,
+            message,
+            [btn_overwrite, btn_cancel],
+            _on_result,
+        )
 
     def _should_offer_pc_save(self):
         scene = lf.get_scene()

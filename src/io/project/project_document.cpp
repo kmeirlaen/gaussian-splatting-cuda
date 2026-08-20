@@ -9,6 +9,7 @@
 #include "io/loader.hpp"
 #include "project_container_internal.hpp"
 #include "project_framing.hpp"
+#include "span_streambuf.hpp"
 
 #include <zstd.h>
 
@@ -23,7 +24,6 @@
 #include <ostream>
 #include <ranges>
 #include <set>
-#include <streambuf>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -464,50 +464,6 @@ namespace lfs::io::project {
 
     } // namespace
 
-    namespace {
-
-        class ReadOnlyMemoryBuffer final : public std::streambuf {
-        public:
-            explicit ReadOnlyMemoryBuffer(
-                const std::span<const std::byte> bytes) {
-                auto* begin = const_cast<char*>(
-                    reinterpret_cast<const char*>(bytes.data()));
-                setg(begin, begin, begin + bytes.size());
-            }
-
-        protected:
-            pos_type seekoff(const off_type offset,
-                             const std::ios_base::seekdir direction,
-                             const std::ios_base::openmode mode) override {
-                if ((mode & std::ios_base::in) == 0) {
-                    return pos_type(off_type(-1));
-                }
-                char* base = eback();
-                char* target = nullptr;
-                if (direction == std::ios_base::beg) {
-                    target = base + offset;
-                } else if (direction == std::ios_base::cur) {
-                    target = gptr() + offset;
-                } else if (direction == std::ios_base::end) {
-                    target = egptr() + offset;
-                }
-                if (!target || target < base || target > egptr()) {
-                    return pos_type(off_type(-1));
-                }
-                setg(base, target, egptr());
-                return pos_type(target - base);
-            }
-
-            pos_type seekpos(const pos_type position,
-                             const std::ios_base::openmode mode) override {
-                return seekoff(
-                    static_cast<off_type>(position),
-                    std::ios_base::beg, mode);
-            }
-        };
-
-    } // namespace
-
     struct LazyChunkValue::Impl {
         std::shared_ptr<ProjectReader> reader;
         std::optional<ChunkInfo> source;
@@ -682,7 +638,7 @@ namespace lfs::io::project {
                 "lazy_chunk.visitor");
         }
         if (impl_->owned) {
-            ReadOnlyMemoryBuffer buffer(std::span<const std::byte>(
+            SpanStreambuf buffer(std::span<const std::byte>(
                 impl_->owned->data(), impl_->owned->size()));
             std::istream stream(&buffer);
             return visitor(stream, impl_->owned->size());
@@ -695,7 +651,7 @@ namespace lfs::io::project {
                 "lazy_chunk.source");
         }
         if (impl_->inflated) {
-            ReadOnlyMemoryBuffer buffer(std::span<const std::byte>(
+            SpanStreambuf buffer(std::span<const std::byte>(
                 impl_->inflated->data(), impl_->inflated->size()));
             std::istream stream(&buffer);
             return visitor(stream, impl_->inflated->size());
@@ -715,7 +671,7 @@ namespace lfs::io::project {
         if (!logical) {
             return lfs::Result<void>::failure(std::move(logical).error());
         }
-        ReadOnlyMemoryBuffer buffer(*logical);
+        SpanStreambuf buffer(*logical);
         std::istream stream(&buffer);
         return visitor(stream, logical->size());
     }
@@ -3648,40 +3604,52 @@ namespace lfs::io::project {
             return save_error;
         }
 
-        auto staged_reader =
-            ProjectReader::open(temporary);
-        if (!staged_reader) {
-            auto cause =
-                std::move(staged_reader).error();
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
-            remove_temporary();
-            if (!restored) {
-                return std::move(cause)
-                    .with_suppressed(
-                        std::move(restored).error());
+        lfs::core::Uuid expected_commit_uuid;
+        {
+            auto staged_reader =
+                ProjectReader::open(temporary);
+            if (!staged_reader) {
+                auto cause =
+                    std::move(staged_reader).error();
+                auto restored =
+                    rebind_preserving_dirty_lazy(
+                        original_path);
+                remove_temporary();
+                if (!restored) {
+                    return std::move(cause)
+                        .with_suppressed(
+                            std::move(restored).error());
+                }
+                return cause;
             }
-            return cause;
-        }
-        if (auto verified =
-                staged_reader->verify_all();
-            !verified) {
-            auto cause =
-                std::move(verified).error();
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
-            remove_temporary();
-            if (!restored) {
-                return std::move(cause)
-                    .with_suppressed(
-                        std::move(restored).error());
+            if (auto verified =
+                    staged_reader->verify_all();
+                !verified) {
+                auto cause =
+                    std::move(verified).error();
+                auto restored =
+                    rebind_preserving_dirty_lazy(
+                        original_path);
+                remove_temporary();
+                if (!restored) {
+                    return std::move(cause)
+                        .with_suppressed(
+                            std::move(restored).error());
+                }
+                return cause;
             }
-            return cause;
+            expected_commit_uuid =
+                staged_reader->commit().commit_uuid;
         }
-        const auto expected_commit_uuid =
-            staged_reader->commit().commit_uuid;
+
+        auto post_save_dirty = impl_->dirty;
+        auto post_save_keys = impl_->normalized_source_keys;
+        if (auto rebound =
+                rebind_preserving_dirty_lazy(original_path);
+            !rebound) {
+            remove_temporary();
+            return std::move(rebound).error();
+        }
 
         auto replacement =
             detail::atomic_replace(
@@ -3689,14 +3657,6 @@ namespace lfs::io::project {
         if (!replacement) {
             auto cause =
                 std::move(replacement).error();
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
-            if (!restored) {
-                return std::move(cause)
-                    .with_suppressed(
-                        std::move(restored).error());
-            }
             return cause;
         }
         auto published =
@@ -3715,19 +3675,10 @@ namespace lfs::io::project {
             auto rollback =
                 detail::rollback_atomic_replace(
                     *replacement, *normalized);
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
             if (!rollback) {
                 cause = std::move(cause)
                             .with_suppressed(
                                 std::move(rollback)
-                                    .error());
-            }
-            if (!restored) {
-                cause = std::move(cause)
-                            .with_suppressed(
-                                std::move(restored)
                                     .error());
             }
             return cause;
@@ -3739,19 +3690,10 @@ namespace lfs::io::project {
             auto rollback =
                 detail::rollback_atomic_replace(
                     *replacement, *normalized);
-            auto restored =
-                rebind_preserving_dirty_lazy(
-                    original_path);
             if (!rollback) {
                 cause = std::move(cause)
                             .with_suppressed(
                                 std::move(rollback)
-                                    .error());
-            }
-            if (!restored) {
-                cause = std::move(cause)
-                            .with_suppressed(
-                                std::move(restored)
                                     .error());
             }
             return cause;
@@ -3761,6 +3703,8 @@ namespace lfs::io::project {
             !refreshed) {
             return std::move(refreshed).error();
         }
+        impl_->dirty = std::move(post_save_dirty);
+        impl_->normalized_source_keys = std::move(post_save_keys);
         if (auto finished =
                 detail::finish_atomic_replace(
                     *replacement, *normalized);

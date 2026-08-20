@@ -875,9 +875,23 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::StartTraining{}.emit();
+            emit_project_cmd_marshaled(
+                "python.start_training", [] {
+                    lfs::core::events::cmd::StartTraining{}
+                        .emit();
+                });
         },
         "Start training with current parameters");
+    m.def(
+        "training_start_overwrite_conflict",
+        []() -> std::optional<int> {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer)
+                return std::nullopt;
+            return viewer->trainingStartOverwriteConflict();
+        },
+        "Return the blocking training-start overwrite conflict, if any");
     m.def(
         "pause_training", []() {
             nb::gil_scoped_release release;

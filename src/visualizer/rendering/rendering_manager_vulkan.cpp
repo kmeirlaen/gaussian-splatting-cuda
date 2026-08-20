@@ -9,12 +9,14 @@
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_upscaler_registry.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
@@ -681,6 +683,23 @@ namespace lfs::vis {
                 return {};
             }
 
+            // CPU readback tensors are tight (exactly valid-size). Panel
+            // uv_scale/uv_clamp_max were authored for padded GPU pool textures
+            // and would crop/zoom any panel whose size is not a 64-px bucket.
+            VulkanSplitViewPanel left_panel = params.left;
+            VulkanSplitViewPanel right_panel = params.right;
+            const auto apply_tight_cpu_uv = [](VulkanSplitViewPanel& panel, const int w, const int h) {
+                const int tex_w = std::max(w, 1);
+                const int tex_h = std::max(h, 1);
+                panel.uv_scale = {1.0f, 1.0f};
+                panel.uv_clamp_max = {
+                    (static_cast<float>(tex_w) - 0.5f) / static_cast<float>(tex_w),
+                    (static_cast<float>(tex_h) - 0.5f) / static_cast<float>(tex_h),
+                };
+            };
+            apply_tight_cpu_uv(left_panel, std::get<1>(*left_data), std::get<2>(*left_data));
+            apply_tight_cpu_uv(right_panel, std::get<1>(*right_data), std::get<2>(*right_data));
+
             const int width = output_size.x;
             const int height = output_size.y;
             if (width <= 0 || height <= 0) {
@@ -694,16 +713,26 @@ namespace lfs::vis {
                 output[2 * pixel_count + i] = params.background.b;
             }
 
-            const auto sample = [](const lfs::core::Tensor& tensor, int w, int h,
-                                   float u, float v, int channel) {
-                const int x = std::clamp(static_cast<int>(std::lround(std::clamp(u, 0.0f, 1.0f) *
-                                                                      static_cast<float>(w - 1))),
-                                         0, w - 1);
-                const int y = std::clamp(static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) *
-                                                                      static_cast<float>(h - 1))),
-                                         0, h - 1);
+            const auto sample = [](const lfs::core::Tensor& tensor, const int w, const int h,
+                                   const float u, const float v, const int channel) {
+                // Match texture(...): normalized coordinates address texel centers and use the
+                // Vulkan sampler's linear filtering, with edge samples clamped to the texture.
+                const float sample_x = std::clamp(u, 0.0f, 1.0f) * static_cast<float>(w) - 0.5f;
+                const float sample_y = std::clamp(v, 0.0f, 1.0f) * static_cast<float>(h) - 0.5f;
+                const int x0_unclamped = static_cast<int>(std::floor(sample_x));
+                const int y0_unclamped = static_cast<int>(std::floor(sample_y));
+                const int x0 = std::clamp(x0_unclamped, 0, w - 1);
+                const int y0 = std::clamp(y0_unclamped, 0, h - 1);
+                const int x1 = std::clamp(x0_unclamped + 1, 0, w - 1);
+                const int y1 = std::clamp(y0_unclamped + 1, 0, h - 1);
+                const float tx = sample_x - static_cast<float>(x0_unclamped);
+                const float ty = sample_y - static_cast<float>(y0_unclamped);
                 const float* data = tensor.ptr<float>();
-                return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                const auto at = [data, w, h, channel](const int x, const int y) {
+                    return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                };
+                return std::lerp(std::lerp(at(x0, y0), at(x1, y0), tx),
+                                 std::lerp(at(x0, y1), at(x1, y1), tx), ty);
             };
 
             const int rect_x = params.content_rect.x;
@@ -734,14 +763,16 @@ namespace lfs::vis {
 
             for (int y = rect_y; y < rect_y + rect_h; ++y) {
                 const float v = rect_h > 1
-                                    ? static_cast<float>(y - rect_y) / static_cast<float>(rect_h - 1)
+                                    ? (static_cast<float>(y) + 0.5f - static_cast<float>(rect_y)) /
+                                          static_cast<float>(rect_h - 1)
                                     : 0.0f;
                 for (int x = rect_x; x < rect_x + rect_w; ++x) {
                     const float u = rect_w > 1
-                                        ? static_cast<float>(x - rect_x) / static_cast<float>(rect_w - 1)
+                                        ? (static_cast<float>(x) + 0.5f - static_cast<float>(rect_x)) /
+                                              static_cast<float>(rect_w - 1)
                                         : 0.0f;
                     const bool use_left = x < divider;
-                    const auto& panel = use_left ? params.left : params.right;
+                    const auto& panel = use_left ? left_panel : right_panel;
                     const auto& data = use_left ? *left_data : *right_data;
                     float panel_u = u;
                     if (panel.normalize_x_to_panel) {
@@ -749,14 +780,39 @@ namespace lfs::vis {
                         panel_u = (u - panel.start_position) / span;
                     }
                     const float panel_v = panel.flip_y ? 1.0f - v : v;
+                    const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
+                                                           glm::vec2(0.0f), glm::vec2(1.0f));
+                    const glm::vec2 texture_uv = glm::min(glm::vec2(panel_u, panel_v) * panel.uv_scale,
+                                                          clamp_max);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
-                    write(idx,
-                          {sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 0),
-                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 1),
-                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 2)});
+                    const auto sample_color = [&](const glm::vec2 sample_uv) {
+                        return glm::vec3{
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_uv.x, sample_uv.y, 0),
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_uv.x, sample_uv.y, 1),
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_uv.x, sample_uv.y, 2)};
+                    };
+                    glm::vec3 color = sample_color(texture_uv);
+                    if (panel.spatial_filter) {
+                        constexpr float kSpatialSharpenStrength = 0.18f;
+                        const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
+                        const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
+                        const auto clamp_uv = [&clamp_max](const glm::vec2 uv) {
+                            return glm::clamp(uv, glm::vec2(0.0f), clamp_max);
+                        };
+                        const glm::vec3 left = sample_color(clamp_uv(texture_uv - glm::vec2(texel_x, 0.0f)));
+                        const glm::vec3 right = sample_color(clamp_uv(texture_uv + glm::vec2(texel_x, 0.0f)));
+                        const glm::vec3 up = sample_color(clamp_uv(texture_uv - glm::vec2(0.0f, texel_y)));
+                        const glm::vec3 down = sample_color(clamp_uv(texture_uv + glm::vec2(0.0f, texel_y)));
+                        const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
+                                                    (left + right + up + down) * kSpatialSharpenStrength;
+                        color = glm::clamp(sharpened,
+                                           glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
+                                           glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
+                    }
+                    write(idx, color);
 
                     const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
                     if (dist_from_split < kMinBarWidthPx * 0.5f) {
@@ -1038,6 +1094,11 @@ namespace lfs::vis {
         bool queued = false;
         GTComparisonImageLookup result;
         const auto now = std::chrono::steady_clock::now();
+        // Capture the camera identity before `request` can be moved into the
+        // pending/active slots; the stale-image fallback below needs it to
+        // avoid showing a different camera's reference while reloading.
+        const int request_camera_uid = request.camera_uid;
+        const std::filesystem::path request_image_path = request.image_path;
         {
             std::lock_guard lock(gt_comparison_image_mutex_);
             auto cache_entry = std::find_if(gt_comparison_image_cache_.begin(),
@@ -1132,14 +1193,33 @@ namespace lfs::vis {
                         : nullptr;
                 result.status = GTComparisonImageStatus::Loading;
                 if (!cache_hit) {
+                    // Prefer the previous image of the SAME camera at any
+                    // resolution so a transient re-decode never flashes a
+                    // different camera's ground truth while the request is in
+                    // flight; otherwise fall back to the most recently used
+                    // valid image across the cache.
+                    const auto is_same_camera = [request_camera_uid, request_image_path](
+                                                    const GTComparisonImageCacheEntry& entry) {
+                        return entry.camera_uid == request_camera_uid &&
+                               entry.image_path == request_image_path;
+                    };
                     const auto stale = std::max_element(
                         gt_comparison_image_cache_.begin(),
                         gt_comparison_image_cache_.end(),
-                        [](const auto& lhs, const auto& rhs) {
-                            const bool lhs_valid = lhs.image && lhs.image->is_valid();
-                            const bool rhs_valid = rhs.image && rhs.image->is_valid();
-                            return (!lhs_valid && rhs_valid) ||
-                                   (lhs_valid && rhs_valid && lhs.last_used < rhs.last_used);
+                        [&](const GTComparisonImageCacheEntry& lhs,
+                            const GTComparisonImageCacheEntry& rhs) {
+                            const auto rank = [&](const GTComparisonImageCacheEntry& entry) {
+                                if (!entry.image || !entry.image->is_valid()) {
+                                    return 0;
+                                }
+                                return is_same_camera(entry) ? 2 : 1;
+                            };
+                            const int lhs_rank = rank(lhs);
+                            const int rhs_rank = rank(rhs);
+                            if (lhs_rank != rhs_rank) {
+                                return lhs_rank < rhs_rank;
+                            }
+                            return lhs.last_used < rhs.last_used;
                         });
                     if (stale != gt_comparison_image_cache_.end() && stale->image &&
                         stale->image->is_valid()) {
@@ -1588,7 +1668,17 @@ namespace lfs::vis {
             markDirty(resize_result.dirty);
         }
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
-        float scale = std::clamp(frame_settings.render_scale, 0.25f, 1.0f);
+        const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
+                                            .value_or(SceneUpscalerBackend::Native);
+        const auto reported_upscaler = sceneUpscalerRuntimeSelection();
+        const bool spatial_runtime_ready =
+            reported_upscaler.requested == requested_upscaler &&
+            reported_upscaler.effective == SceneUpscalerBackend::Spatial &&
+            !reported_upscaler.fellBack();
+        float scale = effectiveSceneRenderScale(
+            frame_settings.render_scale,
+            frame_settings.scene_upscaler_scale,
+            spatial_runtime_ready);
         if (resize_result.render_interactive_frame) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
@@ -1601,10 +1691,33 @@ namespace lfs::vis {
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
+        // Ground-truth comparison is a stable reference readout. Its preview
+        // resolution follows only the viewport size and the base render scale;
+        // scene reconstruction, interactive-resize, and memory-pressure
+        // reductions must not re-size it, otherwise toggling the reconstruction
+        // setting re-decodes the reference image and briefly flashes a stale
+        // cache entry (possibly from a different camera).
+        const float gt_comparison_scale =
+            effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false);
+        const glm::ivec2 gt_comparison_size(
+            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * gt_comparison_scale)), 1),
+            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * gt_comparison_scale)), 1));
+        auto& resolution_profiler = lfs::diagnostics::VramProfiler::instance();
+        resolution_profiler.setGauge("viewer.resolution.scene.base_scale",
+                                     effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false));
+        resolution_profiler.setGauge(
+            "viewer.resolution.scene.reconstruction_scale",
+            !spatial_runtime_ready
+                ? 1.0
+                : frame_settings.scene_upscaler_scale);
+        resolution_profiler.setGauge("viewer.resolution.scene.effective_scale", scale);
         const DirtyMask pending_dirty = dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;
+        const bool split_position_requires_panel_rerender =
+            split_view_service_.isIndependentDualActive(frame_settings);
         if ((pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+            !split_position_requires_panel_rerender &&
             vulkan_viewport_image_size_ == render_size &&
             has_cached_split_view_output() &&
             update_cached_split_position(!only_split_position_pending)) {
@@ -1804,6 +1917,7 @@ namespace lfs::vis {
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
         if ((frame_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+            !split_position_requires_panel_rerender &&
             has_cached_viewport_output &&
             update_cached_split_position(split_deferred_dirty != 0)) {
             const DirtyMask deferred_dirty = split_deferred_dirty;
@@ -1819,7 +1933,9 @@ namespace lfs::vis {
         if (resize_deferring &&
             has_cached_viewport_output &&
             !resize_result.render_interactive_frame) {
-            update_cached_split_position(false);
+            if (!splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
+                update_cached_split_position(false);
+            }
             constexpr DirtyMask resize_defer_consumed_dirty =
                 DirtyFlag::CAMERA | DirtyFlag::VIEWPORT | DirtyFlag::OVERLAY;
             const DirtyMask deferred_dirty = frame_dirty & ~resize_defer_consumed_dirty;
@@ -2356,7 +2472,7 @@ namespace lfs::vis {
             if (camera) {
                 try {
                     const GTComparisonMode gt_mode = frame_settings.gt_comparison_mode;
-                    const glm::ivec2 preview_gt_size = gtComparisonPreviewSize(*camera, render_size);
+                    const glm::ivec2 preview_gt_size = gtComparisonPreviewSize(*camera, gt_comparison_size);
                     const int preview_max_dimension = std::max(preview_gt_size.x, preview_gt_size.y);
                     std::shared_ptr<lfs::core::Tensor> gt_image;
                     std::string gt_error;
@@ -2421,7 +2537,7 @@ namespace lfs::vis {
                                             continue;
                                         }
                                         const glm::ivec2 neighbor_size =
-                                            gtComparisonPreviewSize(*neighbor, render_size);
+                                            gtComparisonPreviewSize(*neighbor, gt_comparison_size);
                                         const bool neighbor_undistort =
                                             neighbor->camera_model_type() !=
                                                 lfs::core::CameraModelType::EQUIRECTANGULAR &&
@@ -3032,6 +3148,17 @@ namespace lfs::vis {
             LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
                       render_error);
             return cached_frame_result();
+        }
+
+        if (pending_split_view.enabled) {
+            // Ground-truth comparisons deliberately preserve the reference image.
+            // Other split panels use the reconstruction filter only after the
+            // presentation pass confirmed that spatial reconstruction is active.
+            const bool filter_reconstructed_panels =
+                spatial_runtime_ready && !rendered_image_contains_ground_truth;
+            pending_split_view.left.spatial_filter = filter_reconstructed_panels;
+            pending_split_view.right.spatial_filter = filter_reconstructed_panels;
+            pending_split_view.coordinate_extent = render_size;
         }
 
         const bool render_point_cloud = frame_settings.point_cloud_mode || !has_visible_gaussian_model;
@@ -3865,7 +3992,7 @@ namespace lfs::vis {
 
             if (pending_split_view.enabled) {
                 viewport_artifact_service_.setLazyCapture(
-                    [this, params = pending_split_view, render_size]()
+                    [this, params = pending_split_view, current_size]()
                         -> std::shared_ptr<lfs::core::Tensor> {
                         VulkanSplitViewParams capture_params = params;
                         {
@@ -3901,10 +4028,37 @@ namespace lfs::vis {
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
                         }
-                        return composeSplitViewCpu(capture_params, render_size);
+                        // content_rect is authored in coordinate_extent (render_size)
+                        // space; the capture tensor is current_size. Match
+                        // recordScenePass: per-edge rounding into output pixels.
+                        // Capture has no on-screen viewport offset.
+                        if (capture_params.coordinate_extent.x > 0 &&
+                            capture_params.coordinate_extent.y > 0 &&
+                            capture_params.coordinate_extent != current_size) {
+                            const float scale_x =
+                                static_cast<float>(current_size.x) /
+                                static_cast<float>(capture_params.coordinate_extent.x);
+                            const float scale_y =
+                                static_cast<float>(current_size.y) /
+                                static_cast<float>(capture_params.coordinate_extent.y);
+                            const int left = static_cast<int>(
+                                std::lround(capture_params.content_rect.x * scale_x));
+                            const int top = static_cast<int>(
+                                std::lround(capture_params.content_rect.y * scale_y));
+                            const int right = static_cast<int>(std::lround(
+                                (capture_params.content_rect.x + capture_params.content_rect.z) *
+                                scale_x));
+                            const int bottom = static_cast<int>(std::lround(
+                                (capture_params.content_rect.y + capture_params.content_rect.w) *
+                                scale_y));
+                            capture_params.content_rect = {
+                                left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
+                            capture_params.coordinate_extent = current_size;
+                        }
+                        return composeSplitViewCpu(capture_params, current_size);
                     },
                     rendered_metadata,
-                    render_size);
+                    current_size);
             } else {
                 viewport_artifact_service_.clearViewportOutput();
             }

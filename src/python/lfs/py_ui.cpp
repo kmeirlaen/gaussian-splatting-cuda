@@ -41,11 +41,13 @@
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/render_constants.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
@@ -4811,6 +4813,64 @@ namespace lfs::python {
             "Get saved UI scale preference (0.0 = auto)");
 
         m.def(
+            "get_scene_reconstruction_options",
+            [] {
+                nb::list backends;
+                for (const auto& descriptor : vis::sceneUpscalerDescriptors()) {
+                    nb::dict backend;
+                    backend["id"] = std::string(descriptor.id);
+                    backend["label_key"] = std::string(descriptor.label_key);
+                    nb::list presets;
+                    for (const auto& preset : descriptor.presets) {
+                        nb::dict item;
+                        item["id"] = std::string(preset.id);
+                        item["label_key"] = std::string(preset.label_key);
+                        item["input_scale"] = preset.input_scale;
+                        presets.append(item);
+                    }
+                    backend["presets"] = presets;
+                    backends.append(backend);
+                }
+                return backends;
+            },
+            "Get registered scene reconstruction backends and their presets");
+
+        m.def(
+            "get_scene_reconstruction_preset_preference",
+            [](const std::string& backend_id) {
+                nb::gil_scoped_release release;
+                return vis::loadSceneUpscalerPresetPreference(backend_id);
+            },
+            nb::arg("backend_id"),
+            "Get the saved preset for a scene reconstruction backend");
+
+        m.def(
+            "set_scene_reconstruction",
+            [](const std::string& backend_id, const std::string& preset_id) {
+                const auto backend = vis::sceneUpscalerBackendFromId(backend_id);
+                if (!backend || !vis::sceneUpscalerPreset(*backend, preset_id))
+                    return false;
+                nb::gil_scoped_release release;
+                auto settings = vis::get_render_settings();
+                if (!settings)
+                    return false;
+                settings->scene_upscaler = backend_id;
+                settings->scene_upscaler_preset = preset_id;
+                vis::update_render_settings(*settings);
+                return true;
+            },
+            nb::arg("backend_id"), nb::arg("preset_id"),
+            "Atomically select a scene reconstruction backend and preset");
+
+        m.def(
+            "reset_scene_reconstruction_preferences",
+            [] {
+                nb::gil_scoped_release release;
+                vis::clearSceneUpscalerPreference();
+            },
+            "Clear all saved scene reconstruction backend and preset preferences");
+
+        m.def(
             "get_mcp_preferences",
             [] {
                 vis::McpPreferenceState state;
@@ -5020,7 +5080,6 @@ namespace lfs::python {
             nb::arg("key"), "Translate a string key");
 
         // Menu bar UI functions (for Python-driven menus)
-        m.def("show_input_settings", &show_input_settings, "No-op stub; open input settings via lfs.input_settings panel");
         m.def("show_python_console", &show_python_console, "Show Python console");
         m.def(
             "get_time",
