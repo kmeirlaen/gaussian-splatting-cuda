@@ -279,6 +279,7 @@ namespace lfs::core {
             iterations = apply(iterations);
             start_refine = apply(start_refine);
             stop_refine = apply(stop_refine);
+            fill_pacing_iter = apply(fill_pacing_iter);
             reset_every = apply(reset_every);
             refine_every = apply(refine_every);
             sh_degree_interval = apply(sh_degree_interval);
