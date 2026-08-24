@@ -2055,6 +2055,24 @@ class OptimizationParams:
     def enable_eval(self, arg: bool, /) -> None: ...
 
     @property
+    def use_far_field(self) -> bool:
+        """
+        Enable MRNF far-field splits, seeds, decay relief, growth cap, and per-splat steps
+        """
+
+    @use_far_field.setter
+    def use_far_field(self, arg: bool, /) -> None: ...
+
+    @property
+    def far_scene_min_fraction(self) -> float:
+        """
+        Minimum deep-far splat fraction that activates far-field features (0 = always on)
+        """
+
+    @far_scene_min_fraction.setter
+    def far_scene_min_fraction(self, arg: float, /) -> None: ...
+
+    @property
     def steps_scaler(self) -> float:
         """Scale factor for training step counts"""
 

@@ -94,6 +94,14 @@ namespace lfs::training {
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
+        // Round 20 (R2): per-row birth iteration for the young-LR experiment.
+        // Only the means param carries a non-null pointer; null => disabled.
+        const std::int32_t* young_birth = nullptr;
+        int young_birth_n = 0;
+        int young_fill_iter = 0;
+        int young_min_birth = 0;
+        float young_gamma = 1.0f;
+        float young_cap = 8.0f;
         bool enabled = false;
     };
 
@@ -110,12 +118,18 @@ namespace lfs::training {
         int sparsity_n = 0;
         float sparsity_rho = 0.0f;
         float sparsity_grad_loss = 0.0f;
+        bool per_splat_mean_step = false;
+        float mean_step_median_extent = 0.0f;
+        float mean_step_r_min = 1.0f;
+        float mean_step_r_max = 300.0f;
         FastGSFusedAdamParam means;
         FastGSFusedAdamParam sh0;
         FastGSFusedAdamParam shN;
         FastGSFusedAdamParam scaling;
         FastGSFusedAdamParam rotation;
         FastGSFusedAdamParam opacity;
+        const bool* mean_step_far_mask = nullptr;
+        int mean_step_far_mask_n = 0;
     };
 
     class AdamOptimizer {
@@ -130,6 +144,29 @@ namespace lfs::training {
         void set_frozen_lr_scale(float scale);
         void set_crop_damping_mask(lfs::core::Tensor mask);
         void set_cropbox_lr_scale(float scale);
+        void set_per_splat_mean_step(bool enabled,
+                                     float median_extent,
+                                     float r_min,
+                                     float r_max);
+        void set_mean_step_far_mask(const bool* mask, int n);
+        // Round 20 (R2): young-LR state for the means Adam step (raw device
+        // pointer borrowed from the strategy; null disables).
+        void set_young_lr_means(const std::int32_t* birth,
+                                int n,
+                                int fill_iter,
+                                int min_birth,
+                                float gamma,
+                                float cap);
+        [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
+        [[nodiscard]] float mean_step_median_extent() const noexcept {
+            return mean_step_median_extent_;
+        }
+        [[nodiscard]] float mean_step_r_min() const noexcept { return mean_step_r_min_; }
+        [[nodiscard]] float mean_step_r_max() const noexcept { return mean_step_r_max_; }
+        [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
+            return mean_step_far_mask_;
+        }
+        [[nodiscard]] int mean_step_far_mask_n() const noexcept { return mean_step_far_mask_n_; }
         [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
             return crop_damping_mask_;
         }
@@ -202,6 +239,19 @@ namespace lfs::training {
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;
         float cropbox_lr_scale_ = 1.0f;
+        bool per_splat_mean_step_ = false;
+        float mean_step_median_extent_ = 0.0f;
+        float mean_step_r_min_ = 1.0f;
+        float mean_step_r_max_ = 300.0f;
+        const bool* mean_step_far_mask_ = nullptr;
+        int mean_step_far_mask_n_ = 0;
+        // Round 20 (R2) young-LR state.
+        const std::int32_t* young_birth_ = nullptr;
+        int young_birth_n_ = 0;
+        int young_fill_iter_ = 0;
+        int young_min_birth_ = 0;
+        float young_gamma_ = 1.0f;
+        float young_cap_ = 8.0f;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 

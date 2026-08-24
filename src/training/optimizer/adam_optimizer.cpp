@@ -178,6 +178,39 @@ namespace lfs::training {
         cropbox_lr_scale_ = scale;
     }
 
+    void AdamOptimizer::set_per_splat_mean_step(const bool enabled,
+                                                const float median_extent,
+                                                const float r_min,
+                                                const float r_max) {
+        per_splat_mean_step_ = enabled;
+        mean_step_median_extent_ = median_extent;
+        mean_step_r_min_ = r_min;
+        mean_step_r_max_ = r_max;
+        if (!enabled) {
+            mean_step_far_mask_ = nullptr;
+            mean_step_far_mask_n_ = 0;
+        }
+    }
+
+    void AdamOptimizer::set_mean_step_far_mask(const bool* mask, const int n) {
+        mean_step_far_mask_ = mask;
+        mean_step_far_mask_n_ = mask != nullptr ? n : 0;
+    }
+
+    void AdamOptimizer::set_young_lr_means(const std::int32_t* birth,
+                                           const int n,
+                                           const int fill_iter,
+                                           const int min_birth,
+                                           const float gamma,
+                                           const float cap) {
+        young_birth_ = birth;
+        young_birth_n_ = birth != nullptr ? n : 0;
+        young_fill_iter_ = fill_iter;
+        young_min_birth_ = min_birth;
+        young_gamma_ = gamma;
+        young_cap_ = cap;
+    }
+
     void AdamOptimizer::step(const int iteration) {
         LFS_TRACE("kernel.adam.step");
         if (fused_step_iteration_ == iteration) {
@@ -189,6 +222,8 @@ namespace lfs::training {
         fast_lfs::optimizer::JointContiguousBatchEntry entries[5];
         int n_entries = 0;
         cudaStream_t batch_stream = nullptr;
+        const float* batch_mean_step_scale_raw = nullptr;
+        int batch_mean_step_scale_n = 0;
         const ParamType contiguous[] = {
             ParamType::Means, ParamType::Sh0, ParamType::Scaling,
             ParamType::Rotation, ParamType::Opacity};
@@ -244,6 +279,15 @@ namespace lfs::training {
             e.lr = param_lr;
             e.bias_correction1_rcp = static_cast<float>(bias_correction1_rcp);
             e.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            if (type == ParamType::Means && per_splat_mean_step_) {
+                auto& scaling = splat_data_.scaling_raw();
+                if (scaling.is_valid() && scaling.numel() > 0) {
+                    lfs::core::waitForCUDAStream(batch_stream, scaling.stream());
+                    batch_mean_step_scale_raw = scaling.ptr<float>();
+                    batch_mean_step_scale_n = static_cast<int>(scaling.numel());
+                    e.apply_mean_step = 1;
+                }
+            }
             param_live.set_stream(batch_stream);
             state.exp_avg.set_stream(batch_stream);
             state.joint_bounds.set_stream(batch_stream);
@@ -267,7 +311,10 @@ namespace lfs::training {
                 static_cast<float>(config_.beta1),
                 static_cast<float>(config_.beta2),
                 static_cast<float>(config_.eps),
-                batch_stream);
+                batch_stream,
+                batch_mean_step_scale_raw, batch_mean_step_scale_n,
+                mean_step_median_extent_, mean_step_r_min_, mean_step_r_max_,
+                mean_step_far_mask_, mean_step_far_mask_n_);
         }
         step_param(ParamType::ShN, iteration);
     }
@@ -707,6 +754,16 @@ namespace lfs::training {
                 throw std::runtime_error("Optimizer state desync: " + name);
             }
             const size_t feature_dim = param_live.numel() / param_size;
+            const float* mean_step_scale_raw = nullptr;
+            int mean_step_scale_n = 0;
+            if (type == ParamType::Means && per_splat_mean_step_) {
+                auto& scaling = splat_data_.scaling_raw();
+                if (scaling.is_valid() && scaling.numel() > 0) {
+                    lfs::core::waitForCUDAStream(execution_stream, scaling.stream());
+                    mean_step_scale_raw = scaling.ptr<float>();
+                    mean_step_scale_n = static_cast<int>(scaling.numel());
+                }
+            }
             fast_lfs::optimizer::adam_step_joint_contiguous_raw(
                 param_live.ptr<float>(),
                 state.exp_avg.ptr<uint8_t>(),
@@ -727,7 +784,21 @@ namespace lfs::training {
                 static_cast<float>(config_.eps),
                 static_cast<float>(bias_correction1_rcp),
                 static_cast<float>(bias_correction2_sqrt_rcp),
-                execution_stream);
+                execution_stream,
+                mean_step_scale_raw,
+                mean_step_scale_n,
+                mean_step_median_extent_,
+                mean_step_r_min_,
+                mean_step_r_max_,
+                mean_step_far_mask_,
+                mean_step_far_mask_n_,
+                // Round 20 (R2): young-LR applies to means rows only.
+                type == ParamType::Means ? young_birth_ : nullptr,
+                type == ParamType::Means ? young_birth_n_ : 0,
+                young_fill_iter_,
+                young_min_birth_,
+                young_gamma_,
+                young_cap_);
             param_live.set_stream(execution_stream);
             state.exp_avg.set_stream(execution_stream);
             state.joint_bounds.set_stream(execution_stream);
@@ -917,6 +988,15 @@ namespace lfs::training {
             out.n_attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
             out.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            // Round 20 (R2): young-LR applies to means rows only.
+            if (type == ParamType::Means) {
+                out.young_birth = young_birth_;
+                out.young_birth_n = young_birth_n_;
+                out.young_fill_iter = young_fill_iter_;
+                out.young_min_birth = young_min_birth_;
+                out.young_gamma = young_gamma_;
+                out.young_cap = young_cap_;
+            }
             out.enabled = true;
             return out;
         };
@@ -950,6 +1030,12 @@ namespace lfs::training {
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
+        fused.per_splat_mean_step = per_splat_mean_step_;
+        fused.mean_step_median_extent = mean_step_median_extent_;
+        fused.mean_step_r_min = mean_step_r_min_;
+        fused.mean_step_r_max = mean_step_r_max_;
+        fused.mean_step_far_mask = mean_step_far_mask_;
+        fused.mean_step_far_mask_n = mean_step_far_mask_n_;
 
         fused.enabled = fused.means.enabled || fused.sh0.enabled || fused.shN.enabled ||
                         fused.scaling.enabled || fused.rotation.enabled || fused.opacity.enabled;

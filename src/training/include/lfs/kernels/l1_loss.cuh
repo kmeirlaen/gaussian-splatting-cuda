@@ -23,6 +23,12 @@ namespace lfs::training::kernels {
      * @param temp_buffer Temporary buffer for partial sums (min(1024, (N+255)/256) elements)
      * @param N Number of elements
      * @param stream CUDA stream
+     *
+     * Round 23 diagnostic D1 (LFS_EXP_BAND_WEIGHT): when band_top_rows > 0,
+     * both the per-pixel |diff| contribution and the gradient are scaled by
+     * band_w_top for rows [0, band_top_rows) and band_w_rest elsewhere
+     * (weights pre-normalized so the mean over the frame is 1). Default
+     * arguments keep the gate off and the arithmetic unchanged.
      */
     void launch_fused_l1_loss(
         const float* img1,
@@ -31,7 +37,12 @@ namespace lfs::training::kernels {
         float* loss_out,
         float* temp_buffer,
         size_t N,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        int band_image_h = 0,
+        int band_image_w = 0,
+        int band_top_rows = 0,
+        float band_w_top = 1.0f,
+        float band_w_rest = 1.0f);
 
     void launch_fused_l1_loss(
         const float* img1,
@@ -40,6 +51,11 @@ namespace lfs::training::kernels {
         float* loss_out,
         float* temp_buffer,
         size_t N,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        int band_image_h = 0,
+        int band_image_w = 0,
+        int band_top_rows = 0,
+        float band_w_top = 1.0f,
+        float band_w_rest = 1.0f);
 
 } // namespace lfs::training::kernels

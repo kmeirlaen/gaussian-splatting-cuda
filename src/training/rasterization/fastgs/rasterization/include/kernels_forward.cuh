@@ -91,7 +91,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float near_, // near and far are macros in windowns
         const float far_,
         const uint depth_bits,
-        const bool mip_filter) {
+        const bool mip_filter,
+        const float dilation) { // Round 23 D2: runtime override of config::dilation
         (void)w;
         (void)h;
         auto primitive_idx = cg::this_grid().thread_rank();
@@ -197,7 +198,9 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         // Mip filter: use smaller dilation and compensate opacity
         const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
-        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        // Round 23 D2: the non-mip-filter branch uses the runtime dilation
+        // parameter (defaults to config::dilation when LFS_EXP_DILATION is unset).
+        const float kernel_size = mip_filter ? config::dilation_mip_filter : dilation;
         cov2d.x += kernel_size;
         cov2d.z += kernel_size;
         const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;

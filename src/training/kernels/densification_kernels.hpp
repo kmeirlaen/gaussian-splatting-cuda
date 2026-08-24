@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
+namespace lfs::training {
+    struct PositiveMedianScratch;
+}
+
 namespace lfs::training::kernels {
 
     /**
@@ -43,6 +47,9 @@ namespace lfs::training::kernels {
      * @param split_indices Indices of Gaussians to split [num_split]
      * @param num_split Number of Gaussians to split
      * @param shN_dim SH higher degree dimension
+     * @param iso_shrink When true, near-isotropic Gaussians (longest minus
+     *                   middle log-scale < log(1.5)) shrink all three axes by
+     *                   0.5 instead of the 0.5/0.85/0.85 rule
      * @param stream CUDA stream
      */
     void launch_long_axis_split_gaussians_inplace(
@@ -61,7 +68,8 @@ namespace lfs::training::kernels {
         const int64_t* split_indices,
         int num_split,
         int shN_dim,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        bool iso_shrink = false);
 
     /**
      * fused free-slot write.
@@ -135,6 +143,7 @@ namespace lfs::training::kernels {
     void launch_normalize_by_positive_median(
         float* data,
         size_t n,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        lfs::training::PositiveMedianScratch* scratch = nullptr);
 
 } // namespace lfs::training::kernels

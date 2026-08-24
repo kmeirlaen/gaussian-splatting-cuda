@@ -39,6 +39,7 @@
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
+#include "kernels/errmap_kernels.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
@@ -56,6 +57,7 @@
 #include "rasterization/gsplat/Ops.h"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
+#include "strategies/mrnf.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "training/kernels/camera_loss_heatmap.cuh"
@@ -111,6 +113,22 @@ namespace lfs::training {
     namespace {
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
+
+        // Round 22 experiment (Rule O): effective opacity_reg weight = configured
+        // value x MRNF churn factor s_t (LFS_EXP_OREG_AUTO). Returns the
+        // configured value bit-unchanged when the gate is off, the strategy is
+        // not MRNF, or the configured weight is non-positive.
+        [[nodiscard]] float effective_opacity_reg_weight(
+            lfs::training::IStrategy& strategy, const float base_weight) {
+            if (!(base_weight > 0.0f)) {
+                return base_weight;
+            }
+            auto* mrnf = dynamic_cast<lfs::training::MRNF*>(&strategy);
+            if (mrnf == nullptr || !mrnf->opacity_reg_auto_enabled()) {
+                return base_weight;
+            }
+            return base_weight * mrnf->opacity_reg_auto_factor();
+        }
 
         [[nodiscard]] lfs::Error project_snapshot_error(
             const lfs::ErrorCode code,
@@ -537,6 +555,154 @@ namespace lfs::training {
                 params.undistort = &camera.undistort_params();
             }
             return params;
+        }
+
+        // Round 7 experiment (LFS_EXP_ERRMAP): alternative densification error
+        // signals. Parsed once per process; anything outside 1..3 means "today".
+        [[nodiscard]] int errmap_experiment_mode() {
+            static const int mode = [] {
+                const char* v = std::getenv("LFS_EXP_ERRMAP");
+                if (!v || *v == '\0') {
+                    return 0;
+                }
+                const long parsed = std::strtol(v, nullptr, 10);
+                return (parsed >= 1 && parsed <= 3) ? static_cast<int>(parsed) : 0;
+            }();
+            return mode;
+        }
+
+        // CHW float32 [3,H,W] view of a loss input tensor (uint8 is scaled by 1/255),
+        // or nullopt when the tensor is not a 3-channel HWC/CHW image.
+        [[nodiscard]] std::optional<lfs::core::Tensor> errmap_input_chw_float(
+            const lfs::core::Tensor& t) {
+            if (t.ndim() != 3) {
+                return std::nullopt;
+            }
+            lfs::core::Tensor x = t.dtype() == lfs::core::DataType::UInt8
+                                      ? t.to(lfs::core::DataType::Float32) / 255.0f
+                                      : t;
+            if (x.dtype() != lfs::core::DataType::Float32) {
+                x = x.to(lfs::core::DataType::Float32);
+            }
+            if (x.shape()[0] == 3) {
+                return x.is_contiguous() ? x : x.contiguous();
+            }
+            if (x.shape()[2] == 3) {
+                return x.permute({2, 0, 1}).contiguous();
+            }
+            return std::nullopt;
+        }
+
+        void launch_errmap_gauss7_blur(
+            const float* d_in_hw,
+            const int height,
+            const int width,
+            float* d_scratch_hw,
+            float* d_out_hw) {
+            lfs::training::kernels::launch_errmap_gauss7_pass(
+                d_in_hw, height, width, true, d_scratch_hw);
+            lfs::training::kernels::launch_errmap_gauss7_pass(
+                d_scratch_hw, height, width, false, d_out_hw);
+        }
+
+        // Builds an alternative per-pixel densification error map [H,W] float32 CUDA
+        // from the same render/GT tensors the photometric loss consumes:
+        // mode 1 = L1 residual, mode 2 = one-sided DoG detail deficit on rec601 luma,
+        // mode 3 = mean-normalized 0.5/0.5 blend of modes 1 and 2.
+        [[nodiscard]] lfs::core::Tensor compute_experimental_error_map(
+            const int mode,
+            const lfs::core::Tensor& corrected_image,
+            const lfs::core::Tensor& gt_tile,
+            lfs::core::Tensor& buffer) {
+            auto render_chw = errmap_input_chw_float(corrected_image);
+            auto gt_chw = errmap_input_chw_float(gt_tile);
+            const bool shapes_ok = render_chw && gt_chw &&
+                                   render_chw->shape()[1] == gt_chw->shape()[1] &&
+                                   render_chw->shape()[2] == gt_chw->shape()[2];
+            if (!shapes_ok) {
+                // Degenerate layout: mirror the non-SSIM L1 fallback branch below so the
+                // experimental arm still hands a valid [H,W] map downstream.
+                const auto gt_for_error = gt_tile.dtype() == lfs::core::DataType::UInt8
+                                              ? gt_tile.to(lfs::core::DataType::Float32) / 255.0f
+                                              : gt_tile;
+                const lfs::core::Tensor abs_diff = (corrected_image - gt_for_error).abs();
+                if (abs_diff.ndim() == 3 && abs_diff.shape()[0] == 3) {
+                    return abs_diff.mean({0}, false).contiguous();
+                }
+                if (abs_diff.ndim() == 3 && abs_diff.shape()[2] == 3) {
+                    return abs_diff.mean({2}, false).contiguous();
+                }
+                return abs_diff.contiguous();
+            }
+
+            const size_t H = render_chw->shape()[1];
+            const size_t W = render_chw->shape()[2];
+            const size_t n = H * W;
+            if (!buffer.is_valid() ||
+                buffer.shape()[0] != H || buffer.shape()[1] != W) {
+                buffer = core::Tensor::empty({H, W}, core::Device::CUDA);
+            }
+            buffer.set_stream(lfs::core::getCurrentCUDAStream());
+
+            if (mode == 1) {
+                lfs::training::kernels::launch_errmap_l1_residual(
+                    render_chw->ptr<float>(), gt_chw->ptr<float>(), 3,
+                    static_cast<int>(H), static_cast<int>(W), buffer.ptr<float>());
+                return buffer;
+            }
+
+            lfs::core::Tensor luma_render = core::Tensor::empty({H, W}, core::Device::CUDA);
+            lfs::core::Tensor luma_gt = core::Tensor::empty({H, W}, core::Device::CUDA);
+            lfs::core::Tensor blur_scratch = core::Tensor::empty({H, W}, core::Device::CUDA);
+            lfs::core::Tensor blurred_render = core::Tensor::empty({H, W}, core::Device::CUDA);
+            lfs::core::Tensor blurred_gt = core::Tensor::empty({H, W}, core::Device::CUDA);
+            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+            luma_render.set_stream(stream);
+            luma_gt.set_stream(stream);
+            blur_scratch.set_stream(stream);
+            blurred_render.set_stream(stream);
+            blurred_gt.set_stream(stream);
+
+            lfs::training::kernels::launch_errmap_luma_rec601(
+                render_chw->ptr<float>(), 3, static_cast<int>(H), static_cast<int>(W),
+                luma_render.ptr<float>());
+            lfs::training::kernels::launch_errmap_luma_rec601(
+                gt_chw->ptr<float>(), 3, static_cast<int>(H), static_cast<int>(W),
+                luma_gt.ptr<float>());
+            launch_errmap_gauss7_blur(luma_render.ptr<float>(), static_cast<int>(H),
+                                      static_cast<int>(W), blur_scratch.ptr<float>(),
+                                      blurred_render.ptr<float>());
+            launch_errmap_gauss7_blur(luma_gt.ptr<float>(), static_cast<int>(H),
+                                      static_cast<int>(W), blur_scratch.ptr<float>(),
+                                      blurred_gt.ptr<float>());
+
+            lfs::core::Tensor& detail_map = mode == 2 ? buffer : blur_scratch;
+            lfs::training::kernels::launch_errmap_detail_deficit(
+                luma_gt.ptr<float>(), blurred_gt.ptr<float>(),
+                luma_render.ptr<float>(), blurred_render.ptr<float>(),
+                n, detail_map.ptr<float>());
+            if (mode == 2) {
+                return buffer;
+            }
+
+            auto render_mean = detail_map.mean();
+            lfs::core::pin_operands({&detail_map, &render_mean});
+            lfs::training::kernels::launch_normalize_by_device_scalar(
+                detail_map.ptr<float>(), n, render_mean.ptr<float>(), 1e-6f);
+
+            lfs::core::Tensor l1_map = core::Tensor::empty({H, W}, core::Device::CUDA);
+            l1_map.set_stream(stream);
+            lfs::training::kernels::launch_errmap_l1_residual(
+                render_chw->ptr<float>(), gt_chw->ptr<float>(), 3,
+                static_cast<int>(H), static_cast<int>(W), l1_map.ptr<float>());
+            auto l1_mean = l1_map.mean();
+            lfs::core::pin_operands({&l1_map, &l1_mean});
+            lfs::training::kernels::launch_normalize_by_device_scalar(
+                l1_map.ptr<float>(), n, l1_mean.ptr<float>(), 1e-6f);
+
+            lfs::training::kernels::launch_errmap_mix(
+                l1_map.ptr<float>(), detail_map.ptr<float>(), n, buffer.ptr<float>());
+            return buffer;
         }
 
         [[nodiscard]] lfs::core::Tensor normalize_mask_tensor(lfs::core::Tensor mask) {
@@ -1909,8 +2075,12 @@ namespace lfs::training {
     std::expected<lfs::core::Tensor, std::string> Trainer::compute_opacity_reg_loss(
         lfs::core::SplatData& splatData,
         AdamOptimizer& optimizer,
-        const lfs::core::param::OptimizationParameters& opt_params) {
-        lfs::training::losses::OpacityRegularization::Params params{.weight = opt_params.opacity_reg};
+        const lfs::core::param::OptimizationParameters& opt_params,
+        const float weight_override) {
+        // Round 22 experiment (Rule O): weight_override >= 0 carries the effective
+        // (churn-coupled) weight; the default keeps today's behavior exactly.
+        const float weight = weight_override >= 0.0f ? weight_override : opt_params.opacity_reg;
+        lfs::training::losses::OpacityRegularization::Params params{.weight = weight};
         return lfs::training::losses::OpacityRegularization::forward(splatData.opacity_raw(), optimizer.get_grad(ParamType::Opacity), params);
     }
 
@@ -2813,6 +2983,25 @@ namespace lfs::training {
                 if (source_cameras.empty()) {
                     return std::unexpected(
                         "Scene has no cameras with image files available for training");
+                }
+
+                if (params.overrides.has_dataset_key("test_every") ||
+                    params.overrides.has_optimization_key("enable_eval")) {
+                    std::sort(
+                        source_cameras.begin(), source_cameras.end(),
+                        [](const auto& lhs, const auto& rhs) {
+                            return lhs->uid() < rhs->uid();
+                        });
+                    const bool enable_eval = params.optimization.enable_eval;
+                    const int test_every = std::max(1, params.dataset.test_every);
+                    for (size_t i = 0; i < source_cameras.size(); ++i) {
+                        const bool is_val =
+                            enable_eval &&
+                            (i % static_cast<size_t>(test_every)) == 0;
+                        source_cameras[i]->set_split(
+                            is_val ? lfs::core::CameraSplit::Eval
+                                   : lfs::core::CameraSplit::Train);
+                    }
                 }
 
                 if (params.optimization.enable_eval) {
@@ -5958,7 +6147,11 @@ namespace lfs::training {
                     auto& model = strategy_->get_model();
                     if (run_fastgs_gaussian_backward) {
                         fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
-                        fused_extra_gradients.opacity_reg_weight = params_.optimization.opacity_reg;
+                        // Round 22 experiment (Rule O): churn-coupled dose factor
+                        // multiplies the configured opacity_reg here (gradient AND
+                        // fused loss accumulation share this weight).
+                        fused_extra_gradients.opacity_reg_weight =
+                            effective_opacity_reg_weight(*strategy_, params_.optimization.opacity_reg);
                         if (normal_supervision_started) {
                             fused_extra_gradients.flatten_reg_weight = params_.optimization.normal_flatten_weight;
                         }
@@ -6009,7 +6202,8 @@ namespace lfs::training {
                             auto opacity_loss_result =
                                 lfs::training::losses::OpacityRegularization::forward_loss_only(
                                     model.opacity_raw(),
-                                    {.weight = params_.optimization.opacity_reg});
+                                    {.weight = effective_opacity_reg_weight(
+                                         *strategy_, params_.optimization.opacity_reg)});
                             if (!opacity_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(opacity_loss_result.error()),
@@ -6962,7 +7156,27 @@ namespace lfs::training {
                         if (use_pixel_error_densification) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map");
-                            if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
+                            const int errmap_mode = errmap_experiment_mode();
+                            static std::once_flag errmap_first_use_log;
+                            if (errmap_mode > 0) {
+                                // Round 7 experiment (LFS_EXP_ERRMAP): alternative growth
+                                // signal feeding the exact SSIM downstream path.
+                                tile_error_map = compute_experimental_error_map(
+                                    errmap_mode, corrected_image, gt_tile,
+                                    densification_error_map_);
+                                std::call_once(errmap_first_use_log, [&] {
+                                    auto errmap_mean = tile_error_map.mean();
+                                    float errmap_mean_host = 0.0f;
+                                    lfs::core::pin_operands({&tile_error_map, &errmap_mean});
+                                    cudaMemcpyAsync(
+                                        &errmap_mean_host, errmap_mean.ptr<float>(),
+                                        sizeof(float), cudaMemcpyDeviceToHost,
+                                        lfs::core::getCurrentCUDAStream());
+                                    cudaStreamSynchronize(lfs::core::getCurrentCUDAStream());
+                                    LOG_INFO("MRNF errmap mode={} mean={}",
+                                             errmap_mode, errmap_mean_host);
+                                });
+                            } else if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
                                 lfs::core::Tensor ssim_map;
                                 if (used_masked_fused && raw_loss_input.is_valid()) {
                                     ssim_map = photometric_loss_.arena().masked_decoupled().ssim_map;
@@ -7159,6 +7373,9 @@ namespace lfs::training {
                     }
 
                     nvtxRangePop(); // End rasterize
+                    if (strategy_ && !in_sparsification) {
+                        strategy_->post_render(iter, r_output);
+                    }
                 }
 
                 if (tiles_processed == 0) {
@@ -7221,7 +7438,9 @@ namespace lfs::training {
                         if (fastgs_path) {
                             loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                         } else {
-                            auto opacity_loss_result = compute_opacity_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
+                            auto opacity_loss_result = compute_opacity_reg_loss(
+                                strategy_->get_model(), strategy_->get_optimizer(), params_.optimization,
+                                effective_opacity_reg_weight(*strategy_, params_.optimization.opacity_reg));
                             if (!opacity_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(opacity_loss_result.error()),

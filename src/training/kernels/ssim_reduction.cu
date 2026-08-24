@@ -45,7 +45,10 @@ namespace lfs::training::kernels {
             const float* __restrict__ ssim_map,
             float* __restrict__ partial_sums,
             int N, int C, int H, int W,
-            bool apply_valid_padding) {
+            bool apply_valid_padding,
+            int band_top_rows = 0,
+            float band_w_top = 1.0f,
+            float band_w_rest = 1.0f) {
 
             float local_sum = 0.0f;
 
@@ -62,7 +65,12 @@ namespace lfs::training::kernels {
                 const int w = static_cast<int>(rem % W);
 
                 if (h >= h_start && h < h_end && w >= w_start && w < w_end) {
-                    local_sum += ssim_map[idx];
+                    // Round 23 D1: row-band weight; inert when band_top_rows == 0.
+                    if (band_top_rows > 0)
+                        local_sum += ssim_map[idx] *
+                                     ((h < band_top_rows) ? band_w_top : band_w_rest);
+                    else
+                        local_sum += ssim_map[idx];
                 }
             }
 
@@ -80,7 +88,10 @@ namespace lfs::training::kernels {
             float* __restrict__ partial_sums,
             float ssim_weight,
             int N, int C, int H, int W,
-            bool apply_valid_padding) {
+            bool apply_valid_padding,
+            int band_top_rows = 0,
+            float band_w_top = 1.0f,
+            float band_w_rest = 1.0f) {
 
             float local_sum = 0.0f;
             const float l1_weight = 1.0f - ssim_weight;
@@ -101,7 +112,12 @@ namespace lfs::training::kernels {
                     const float l1 = fabsf(img1[idx] - target_value(img2, idx));
                     const size_t batch_idx = idx / (static_cast<size_t>(C) * H * W);
                     const float ssim = ssim_map[batch_idx * H * W + rem];
-                    local_sum += l1_weight * l1 + ssim_weight * (1.0f - ssim);
+                    // Round 23 D1: row-band weight; inert when band_top_rows == 0.
+                    if (band_top_rows > 0)
+                        local_sum += (l1_weight * l1 + ssim_weight * (1.0f - ssim)) *
+                                     ((h < band_top_rows) ? band_w_top : band_w_rest);
+                    else
+                        local_sum += l1_weight * l1 + ssim_weight * (1.0f - ssim);
                 }
             }
 
@@ -218,7 +234,10 @@ namespace lfs::training::kernels {
         float* result_buffer,
         int N, int C, int H, int W,
         bool apply_valid_padding,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
         stream = resolve_stream(stream);
 
         const size_t total_pixels = static_cast<size_t>(N) * C * H * W;
@@ -230,7 +249,8 @@ namespace lfs::training::kernels {
         const size_t total_valid_pixels = static_cast<size_t>(N) * C * h_valid * w_valid;
 
         fused_ssim_mean_kernel<<<num_blocks, REDUCTION_BLOCK_SIZE, 0, stream>>>(
-            ssim_map, temp_buffer, N, C, H, W, apply_valid_padding);
+            ssim_map, temp_buffer, N, C, H, W, apply_valid_padding,
+            band_top_rows, band_w_top, band_w_rest);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.fused_mean");
 
         final_mean_reduce_kernel<<<1, REDUCTION_BLOCK_SIZE, 0, stream>>>(
@@ -248,7 +268,10 @@ namespace lfs::training::kernels {
         float* result_buffer,
         int N, int C, int H, int W,
         bool apply_valid_padding,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
         stream = resolve_stream(stream);
 
         const size_t total_pixels = static_cast<size_t>(N) * C * H * W;
@@ -259,7 +282,8 @@ namespace lfs::training::kernels {
         const size_t total_valid_pixels = static_cast<size_t>(N) * C * h_valid * w_valid;
 
         fused_l1_ssim_sum_kernel<TargetT><<<num_blocks, REDUCTION_BLOCK_SIZE, 0, stream>>>(
-            img1, img2, ssim_map, temp_buffer, ssim_weight, N, C, H, W, apply_valid_padding);
+            img1, img2, ssim_map, temp_buffer, ssim_weight, N, C, H, W, apply_valid_padding,
+            band_top_rows, band_w_top, band_w_rest);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.fused_l1_sum");
 
         final_mean_reduce_kernel<<<1, REDUCTION_BLOCK_SIZE, 0, stream>>>(
@@ -276,11 +300,15 @@ namespace lfs::training::kernels {
         float* result_buffer,
         int N, int C, int H, int W,
         bool apply_valid_padding,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
         stream = resolve_stream(stream);
         launch_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, ssim_weight, temp_buffer, result_buffer,
-            N, C, H, W, apply_valid_padding, stream);
+            N, C, H, W, apply_valid_padding, stream,
+            band_top_rows, band_w_top, band_w_rest);
     }
 
     void launch_fused_l1_ssim_mean_device(
@@ -292,11 +320,15 @@ namespace lfs::training::kernels {
         float* result_buffer,
         int N, int C, int H, int W,
         bool apply_valid_padding,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
         stream = resolve_stream(stream);
         launch_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, ssim_weight, temp_buffer, result_buffer,
-            N, C, H, W, apply_valid_padding, stream);
+            N, C, H, W, apply_valid_padding, stream,
+            band_top_rows, band_w_top, band_w_rest);
     }
 
     template <typename TargetT, typename MaskT>

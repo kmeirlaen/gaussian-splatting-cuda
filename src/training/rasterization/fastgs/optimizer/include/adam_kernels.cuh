@@ -7,6 +7,7 @@
 #include "adam_api.h"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
+#include "lfs/training/mean_step_scale.cuh"
 
 #include <cstdint>
 
@@ -36,7 +37,21 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float beta2,
         const float eps,
         const float bias_correction1_rcp,
-        const float bias_correction2_sqrt_rcp) {
+        const float bias_correction2_sqrt_rcp,
+        const float* mean_step_scale_raw,
+        const int mean_step_scale_n,
+        const float mean_step_median_extent,
+        const float mean_step_r_min,
+        const float mean_step_r_max,
+        const bool* mean_step_far_mask,
+        const int mean_step_far_mask_n,
+        // Round 20 (R2): young-LR birth stamps (means rows only; null disables).
+        const std::int32_t* young_birth,
+        const int young_birth_n,
+        const int young_fill_iter,
+        const int young_min_birth,
+        const float young_gamma,
+        const float young_cap) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         constexpr float kInf = 1e30f;
         constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
@@ -58,6 +73,33 @@ namespace fast_lfs::optimizer::kernels::adam {
                 apply_step = false;
             else
                 row_lr *= cropbox_lr_scale;
+        }
+        if (in_range && mean_step_scale_raw != nullptr &&
+            mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
+            mean_step_far_mask[prim]) {
+            const int sb = prim * 3;
+            if (sb + 2 < mean_step_scale_n) {
+                row_lr *= lfs::training::per_splat_mean_step_ratio(
+                    mean_step_scale_raw[sb],
+                    mean_step_scale_raw[sb + 1],
+                    mean_step_scale_raw[sb + 2],
+                    mean_step_median_extent,
+                    mean_step_r_min,
+                    mean_step_r_max);
+            }
+        }
+        // Round 20 (R2): post-fill-born rows keep their birth learning rate for
+        // a bounded age window. Multiplies the applied STEP (not the gradient);
+        // pointer is null unless LFS_EXP_YOUNG_LR armed after fill.
+        if (in_range && young_birth != nullptr && prim < young_birth_n) {
+            const int birth = young_birth[prim];
+            if (birth > young_fill_iter && birth >= young_min_birth) {
+                row_lr *= fminf(
+                    fmaxf(powf(young_gamma,
+                               static_cast<float>(young_fill_iter - birth)),
+                          1.0f),
+                    young_cap);
+            }
         }
 
         const int bidx = static_cast<int>(blockIdx.x);
@@ -144,7 +186,14 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float cropbox_lr_scale,
         const float beta1,
         const float beta2,
-        const float eps) {
+        const float eps,
+        const float* mean_step_scale_raw,
+        const int mean_step_scale_n,
+        const float mean_step_median_extent,
+        const float mean_step_r_min,
+        const float mean_step_r_max,
+        const bool* mean_step_far_mask,
+        const int mean_step_far_mask_n) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         constexpr float kInf = 1e30f;
         constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
@@ -182,6 +231,20 @@ namespace fast_lfs::optimizer::kernels::adam {
                 apply_step = false;
             else
                 row_lr *= cropbox_lr_scale;
+        }
+        if (ent.apply_mean_step && mean_step_scale_raw != nullptr &&
+            mean_step_far_mask != nullptr && prim < mean_step_far_mask_n &&
+            mean_step_far_mask[prim]) {
+            const int sb = prim * 3;
+            if (sb + 2 < mean_step_scale_n) {
+                row_lr *= lfs::training::per_splat_mean_step_ratio(
+                    mean_step_scale_raw[sb],
+                    mean_step_scale_raw[sb + 1],
+                    mean_step_scale_raw[sb + 2],
+                    mean_step_median_extent,
+                    mean_step_r_min,
+                    mean_step_r_max);
+            }
         }
 
         const int bidx = static_cast<int>(blockIdx.x);

@@ -33,6 +33,14 @@ namespace fast_lfs::rasterization {
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
+        // Round 20 (R2): per-row birth iteration for the young-LR experiment.
+        // Only the means param carries a non-null pointer; null => disabled.
+        const std::int32_t* young_birth = nullptr;
+        int young_birth_n = 0;
+        int young_fill_iter = 0;
+        int young_min_birth = 0;
+        float young_gamma = 1.0f;
+        float young_cap = 8.0f;
         bool enabled = false;
     };
 
@@ -54,6 +62,10 @@ namespace fast_lfs::rasterization {
         int sparsity_n = 0;
         float sparsity_rho = 0.0f;
         float sparsity_grad_loss = 0.0f;
+        bool per_splat_mean_step = false;
+        float mean_step_median_extent = 0.0f;
+        float mean_step_r_min = 1.0f;
+        float mean_step_r_max = 300.0f;
 
         FusedAdamParam means;
         FusedAdamParam scaling;
