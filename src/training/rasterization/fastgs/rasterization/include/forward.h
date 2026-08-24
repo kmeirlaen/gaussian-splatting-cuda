@@ -84,6 +84,10 @@ namespace fast_lfs::rasterization {
         const float near,
         const float far,
         bool mip_filter,
+        // Round 23 diagnostic D2 (LFS_EXP_DILATION): runtime dilation for the
+        // forward preprocess kernel (mip_filter OFF branch). Callers pass
+        // config::dilation when the gate is unset.
+        float dilation,
         cudaStream_t stream);
 
 } // namespace fast_lfs::rasterization

@@ -448,6 +448,21 @@ namespace fast_lfs::rasterization::kernels::backward {
                     fused_adam.mean_step_r_max);
             }
         }
+        // Round 20 (R2): post-fill-born rows keep their birth learning rate for
+        // a bounded age window. Multiplies the applied STEP (not the gradient);
+        // pointer is null unless LFS_EXP_YOUNG_LR armed after fill.
+        if (means_p.young_birth != nullptr &&
+            primitive_idx < static_cast<uint>(means_p.young_birth_n)) {
+            const int birth = means_p.young_birth[primitive_idx];
+            if (birth > means_p.young_fill_iter && birth >= means_p.young_min_birth) {
+                const float gain = fminf(
+                    fmaxf(powf(means_p.young_gamma,
+                               static_cast<float>(means_p.young_fill_iter - birth)),
+                          1.0f),
+                    means_p.young_cap);
+                means_p.step_size *= gain;
+            }
+        }
         adam_step_row(mean_grads, means_p, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);

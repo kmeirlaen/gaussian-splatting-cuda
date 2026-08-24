@@ -42,7 +42,14 @@ namespace fast_lfs::optimizer {
         float mean_step_r_min = 1.0f,
         float mean_step_r_max = 300.0f,
         const bool* mean_step_far_mask = nullptr,
-        int mean_step_far_mask_n = 0);
+        int mean_step_far_mask_n = 0,
+        // Round 20 (R2): young-LR birth stamps (means rows only; null disables).
+        const std::int32_t* young_birth = nullptr,
+        int young_birth_n = 0,
+        int young_fill_iter = 0,
+        int young_min_birth = 0,
+        float young_gamma = 1.0f,
+        float young_cap = 8.0f);
 
     // Joint (u,log_s) densify reset: encode true (m,v)=(0,0). Widens block
     // bounds to include 0 when needed and re-encodes the block.

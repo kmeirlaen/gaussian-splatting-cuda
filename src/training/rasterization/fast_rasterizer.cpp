@@ -14,6 +14,8 @@
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <cassert>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -37,6 +39,30 @@ namespace lfs::training {
         };
 
         thread_local FastRasterizerThreadLocalCaches fast_rasterizer_thread_caches;
+
+        // Round 23 diagnostic D2 (LFS_EXP_DILATION): runtime override of the
+        // 2D-covariance dilation used by the forward preprocess kernel
+        // (config::dilation, +px^2 added to cov2d.x/.z). Parsed once per
+        // process; unset or invalid means the compile-time default, which
+        // makes every render bit-identical to the unpatched binary. The
+        // backward kernel keeps its compile-time dilation by design — this
+        // gate is intended for eval-only re-renders.
+        float experiment_dilation_override() {
+            static const float value = [] {
+                const char* s = std::getenv("LFS_EXP_DILATION");
+                if (!s || !*s)
+                    return fast_lfs::rasterization::config::dilation;
+                char* end = nullptr;
+                const float v = std::strtof(s, &end);
+                if (end == s || !std::isfinite(v) || v < 0.0f) {
+                    LOG_WARN("MRNF dilation override ignored (invalid LFS_EXP_DILATION='{}')", s);
+                    return fast_lfs::rasterization::config::dilation;
+                }
+                LOG_INFO("MRNF dilation override={}", v);
+                return v;
+            }();
+            return value;
+        }
 
         [[nodiscard]] int checked_dim_to_int(size_t value, const char* name) {
             if (value > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -440,6 +466,7 @@ namespace lfs::training {
                 far_plane,
                 mip_filter,
                 raster_stream,
+                experiment_dilation_override(),
                 shN_bounds_ptr,
                 shN_n_cells,
                 shN_bits);
@@ -745,6 +772,12 @@ namespace lfs::training {
             dst.n_attributes = src.n_attributes;
             dst.step_size = src.step_size;
             dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
+            dst.young_birth = src.young_birth;
+            dst.young_birth_n = src.young_birth_n;
+            dst.young_fill_iter = src.young_fill_iter;
+            dst.young_min_birth = src.young_min_birth;
+            dst.young_gamma = src.young_gamma;
+            dst.young_cap = src.young_cap;
             dst.enabled = src.enabled;
             return dst;
         };

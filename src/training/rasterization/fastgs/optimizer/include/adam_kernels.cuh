@@ -43,7 +43,14 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float mean_step_r_min,
         const float mean_step_r_max,
         const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n) {
+        const int mean_step_far_mask_n,
+        // Round 20 (R2): young-LR birth stamps (means rows only; null disables).
+        const std::int32_t* young_birth,
+        const int young_birth_n,
+        const int young_fill_iter,
+        const int young_min_birth,
+        const float young_gamma,
+        const float young_cap) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         constexpr float kInf = 1e30f;
         constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
@@ -78,6 +85,19 @@ namespace fast_lfs::optimizer::kernels::adam {
                     mean_step_median_extent,
                     mean_step_r_min,
                     mean_step_r_max);
+            }
+        }
+        // Round 20 (R2): post-fill-born rows keep their birth learning rate for
+        // a bounded age window. Multiplies the applied STEP (not the gradient);
+        // pointer is null unless LFS_EXP_YOUNG_LR armed after fill.
+        if (in_range && young_birth != nullptr && prim < young_birth_n) {
+            const int birth = young_birth[prim];
+            if (birth > young_fill_iter && birth >= young_min_birth) {
+                row_lr *= fminf(
+                    fmaxf(powf(young_gamma,
+                               static_cast<float>(young_fill_iter - birth)),
+                          1.0f),
+                    young_cap);
             }
         }
 

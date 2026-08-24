@@ -105,7 +105,8 @@ namespace lfs::training::kernels {
         float* __restrict__ second_opacities, // [num_split, 1]
         const int64_t* __restrict__ split_indices,
         int num_split,
-        int shN_dim) {
+        int shN_dim,
+        bool iso_shrink) {
         int split_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (split_idx >= num_split)
             return;
@@ -140,9 +141,18 @@ namespace lfs::training::kernels {
 
         // New scale,
         float new_scale[3];
-        new_scale[longest_idx] = scale[longest_idx] + logf(0.5f);
-        new_scale[scale_idxs.y] = scale[scale_idxs.y] + logf(0.85);
-        new_scale[scale_idxs.z] = scale[scale_idxs.z] + logf(0.85);
+        const float middle_log_scale = fmaxf(scale[scale_idxs.y], scale[scale_idxs.z]);
+        if (iso_shrink && (scale[longest_idx] - middle_log_scale) < logf(1.5f)) {
+            // Near-isotropic blob: shrink all three axes by 0.5 so minor axes
+            // halve every generation instead of needing ~4.3 generations.
+            new_scale[longest_idx] = scale[longest_idx] + logf(0.5f);
+            new_scale[scale_idxs.y] = scale[scale_idxs.y] + logf(0.5f);
+            new_scale[scale_idxs.z] = scale[scale_idxs.z] + logf(0.5f);
+        } else {
+            new_scale[longest_idx] = scale[longest_idx] + logf(0.5f);
+            new_scale[scale_idxs.y] = scale[scale_idxs.y] + logf(0.85);
+            new_scale[scale_idxs.z] = scale[scale_idxs.z] + logf(0.85);
+        }
 
         // Adjust opacity according to LAS algorithm
         float sig = sigmoid(opacity);
@@ -209,7 +219,8 @@ namespace lfs::training::kernels {
         const int64_t* split_indices,
         int num_split,
         int shN_dim,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        bool iso_shrink) {
         stream = resolve_stream(stream);
         if (num_split == 0)
             return;
@@ -221,7 +232,7 @@ namespace lfs::training::kernels {
             positions, rotations, scales, sh0, shN, opacities,
             second_positions, second_rotations, second_scales,
             second_sh0, second_shN, second_opacities,
-            split_indices, num_split, shN_dim);
+            split_indices, num_split, shN_dim, iso_shrink);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
     }
 

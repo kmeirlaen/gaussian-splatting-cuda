@@ -395,6 +395,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float near_, // near and far are macros in windows
     const float far_,
     bool mip_filter,
+    float dilation, // Round 23 D2: runtime override of config::dilation
     cudaStream_t stream) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
@@ -459,7 +460,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         near_,
         far_,
         depth_bits,
-        mip_filter);
+        mip_filter,
+        dilation);
     LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
     check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);

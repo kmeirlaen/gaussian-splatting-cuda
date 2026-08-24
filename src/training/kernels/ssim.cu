@@ -324,7 +324,10 @@ namespace {
         float* __restrict__ dL_dimg1,
         const __half* __restrict__ dm_dmu1,
         const __half* __restrict__ dm_dsigma1_sq,
-        const __half* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dsigma12,
+        int band_top_rows = 0,
+        float band_w_top = 1.0f,
+        float band_w_rest = 1.0f) {
         auto block = cg::this_thread_block();
 
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -362,6 +365,11 @@ namespace {
                         int gx = start_x + col - HALO;
 
                         float chain = get_pix_value(dL_dmap, bIdx, c, gy, gx, CH, H, W);
+                        // Round 23 D1: weight the upstream gradient by the band
+                        // weight of the neighbour pixel it originates from; inert
+                        // when band_top_rows == 0.
+                        if (band_top_rows > 0 && gy >= 0 && gy < H)
+                            chain *= (gy < band_top_rows) ? band_w_top : band_w_rest;
                         float vmu = get_pix_value(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
                         float vs1 = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
                         float vs12 = get_pix_value(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
@@ -674,7 +682,10 @@ namespace {
         float* __restrict__ dL_dimg1,
         const __half* __restrict__ dm_dmu1,
         const __half* __restrict__ dm_dsigma1_sq,
-        const __half* __restrict__ dm_dsigma12) {
+        const __half* __restrict__ dm_dsigma12,
+        int band_top_rows = 0,
+        float band_w_top = 1.0f,
+        float band_w_rest = 1.0f) {
 
         auto block = cg::this_thread_block();
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -719,6 +730,11 @@ namespace {
                                 (gx >= 5 && gx < W - 5 && gy >= 5 && gy < H - 5);
                             if (inside_valid_region) {
                                 chain = grad_per_pixel;
+                                // Round 23 D1: band weight of the neighbour pixel
+                                // this upstream term originates from; inert when
+                                // band_top_rows == 0.
+                                if (band_top_rows > 0)
+                                    chain *= (gy < band_top_rows) ? band_w_top : band_w_rest;
                             }
                         }
                         float vmu = get_pix_value(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
@@ -817,6 +833,10 @@ namespace {
                     (pix_x >= 5 && pix_x < W - 5 && pix_y >= 5 && pix_y < H - 5);
                 if (inside_valid_region) {
                     chain_local = grad_per_pixel;
+                    // Round 23 D1: band weight of this pixel's own row; inert
+                    // when band_top_rows == 0.
+                    if (band_top_rows > 0)
+                        chain_local *= (pix_y < band_top_rows) ? band_w_top : band_w_rest;
                 }
                 float sign_grad = (p1 == p2) ? 0.0f : copysignf(1.0f, p1 - p2);
                 float grad_l1 = l1_weight * sign_grad * chain_local;
@@ -1746,7 +1766,10 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& img1_input,
         const lfs::core::Tensor& img2_input,
         SSIMWorkspace& workspace,
-        bool apply_valid_padding) {
+        bool apply_valid_padding,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
 
         const float C1 = 0.01f * 0.01f;
         const float C2 = 0.03f * 0.03f;
@@ -1798,7 +1821,8 @@ namespace lfs::training::kernels {
             workspace.reduction_result.ptr<float>(),
             N, C, H, W,
             apply_valid_padding,
-            workspace.ssim_map.stream());
+            workspace.ssim_map.stream(),
+            band_top_rows, band_w_top, band_w_rest);
         // The returned scalar aliases the workspace and must be consumed before
         // the next forward using this workspace.
         lfs::core::Tensor ssim_value_tensor = workspace.reduction_result;
@@ -1821,7 +1845,10 @@ namespace lfs::training::kernels {
     lfs::core::Tensor ssim_backward(
         const SSIMContext& ctx,
         SSIMWorkspace& workspace,
-        float grad_loss) {
+        float grad_loss,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
 
         validate_ssim_context(ctx);
         LFS_ASSERT_MSG(std::isfinite(grad_loss), "SSIM loss gradient must be finite");
@@ -1874,7 +1901,8 @@ namespace lfs::training::kernels {
                 workspace.dL_dimg1.ptr<float>(),
                 ctx.dm_dmu1.ptr<__half>(),
                 ctx.dm_dsigma1_sq.ptr<__half>(),
-                ctx.dm_dsigma12.ptr<__half>());
+                ctx.dm_dsigma12.ptr<__half>(),
+                band_top_rows, band_w_top, band_w_rest);
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward");
         });
 
@@ -1890,7 +1918,10 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& img2_input,
         float ssim_weight,
         FusedL1SSIMWorkspace& workspace,
-        bool apply_valid_padding) {
+        bool apply_valid_padding,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
@@ -1930,7 +1961,8 @@ namespace lfs::training::kernels {
                 workspace.reduction_result.ptr<float>(),
                 N, C, H, W,
                 apply_valid_padding,
-                workspace.ssim_map.stream());
+                workspace.ssim_map.stream(),
+                band_top_rows, band_w_top, band_w_rest);
         });
         lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
@@ -1950,7 +1982,10 @@ namespace lfs::training::kernels {
 
     lfs::core::Tensor fused_l1_ssim_backward(
         const FusedL1SSIMContext& ctx,
-        FusedL1SSIMWorkspace& workspace) {
+        FusedL1SSIMWorkspace& workspace,
+        int band_top_rows,
+        float band_w_top,
+        float band_w_rest) {
 
         validate_loss_context_images(ctx.img1, ctx.img2, ctx.H, ctx.W);
         validate_loss_weight(ctx.ssim_weight);
@@ -1983,7 +2018,8 @@ namespace lfs::training::kernels {
                 ctx.img1.ptr<float>(), img2_ptr,
                 workspace.grad_img.ptr<float>(),
                 ctx.dm_dmu1.ptr<__half>(), ctx.dm_dsigma1_sq.ptr<__half>(),
-                ctx.dm_dsigma12.ptr<__half>());
+                ctx.dm_dsigma12.ptr<__half>(),
+                band_top_rows, band_w_top, band_w_rest);
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.fused_l1_backward");
         });
 

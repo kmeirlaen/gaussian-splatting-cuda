@@ -146,7 +146,8 @@ namespace lfs::training::mrnf_strategy {
 
     /**
      * fold densification_info into vis_count (add row0) and refine_weight_max
-     * (max of row1), then zero n_rows rows.
+     * (max of row1), then zero n_rows rows. When ratio_max is non-null, also
+     * keep the per-window max of err/max(vis, tiny) per element.
      */
     void launch_fold_densification_and_zero(
         float* vis_count,
@@ -154,7 +155,10 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         void* stream = nullptr,
-        size_t n_rows = 2);
+        size_t n_rows = 2,
+        float* ratio_max = nullptr,
+        bool ratio_sqrt = false,
+        float ratio_pow = 0.0f);
 
     void launch_project_visible_centers(
         const float* means,
@@ -220,6 +224,16 @@ namespace lfs::training::mrnf_strategy {
         float* out_depth,
         void* stream = nullptr);
 
+    // k-th largest value of `n` floats via one CUB radix sort with host
+    // readback. Deterministic; k is a 1-based descending rank and is clamped
+    // to [1, n]. Round 17 C1 device quantile.
+    void launch_kth_largest_value(
+        const float* values,
+        size_t n,
+        size_t k,
+        float* out_value,
+        void* stream = nullptr);
+
     // Median of `n` values via one CUB radix-sort (sorted[n/2], matching
     // the existing positive-median convention). out_median is host-side.
     void launch_sorted_median(
@@ -236,6 +250,22 @@ namespace lfs::training::mrnf_strategy {
         const float* vis_count,
         size_t n,
         float median_vis,
+        void* stream = nullptr);
+
+    // Round 20 (R2) birth stamps: birth[indices[i]] = iter, and the contiguous
+    // range variant birth[start..start+count) = iter.
+    void launch_stamp_birth_iterations(
+        std::int32_t* birth,
+        const std::int64_t* indices,
+        size_t count,
+        std::int32_t iter,
+        void* stream = nullptr);
+
+    void launch_stamp_birth_iterations_range(
+        std::int32_t* birth,
+        std::int64_t start,
+        size_t count,
+        std::int32_t iter,
         void* stream = nullptr);
 
 } // namespace lfs::training::mrnf_strategy
