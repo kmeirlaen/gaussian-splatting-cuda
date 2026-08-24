@@ -89,6 +89,9 @@ namespace {
     param::OptimizationParameters vanilla_mrnf_params() {
         auto p = param::OptimizationParameters::mrnf_defaults();
         disable_default_far_field(p);
+        p.fill_pacing_iter = 0;
+        p.far_seed_dose = 0;
+        p.growth_ratio_rank = false;
         return p;
     }
 

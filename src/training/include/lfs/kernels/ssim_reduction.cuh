@@ -23,11 +23,6 @@ namespace lfs::training::kernels {
      * @param W Width
      * @param apply_valid_padding If true, crop 5 pixels from each side
      * @param stream CUDA stream
-     *
-     * Round 23 diagnostic D1 (LFS_EXP_BAND_WEIGHT): when band_top_rows > 0 the
-     * per-pixel SSIM contribution is scaled by band_w_top for rows
-     * [0, band_top_rows) and band_w_rest elsewhere (mean weight over the frame
-     * is 1); the divisor stays total_valid_pixels. Defaults keep it inert.
      */
     void launch_fused_ssim_mean_device(
         const float* ssim_map,
@@ -35,10 +30,7 @@ namespace lfs::training::kernels {
         float* result_buffer,
         int N, int C, int H, int W,
         bool apply_valid_padding,
-        cudaStream_t stream = nullptr,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f);
+        cudaStream_t stream = nullptr);
 
     /**
      * @brief Reduce fused L1+SSIM loss directly to a scalar mean
@@ -46,9 +38,6 @@ namespace lfs::training::kernels {
      * Computes mean((1-w)*abs(img1-img2) + w*(1-ssim_map)) with optional valid padding
      * without materializing an intermediate full-resolution loss map. `ssim_map`
      * is a channel-mean map with shape [N, 1, H, W].
-     *
-     * Round 23 diagnostic D1: trailing band_* arguments are inert unless
-     * band_top_rows > 0 (see launch_fused_ssim_mean_device).
      */
     void launch_fused_l1_ssim_mean_device(
         const float* img1,
@@ -59,10 +48,7 @@ namespace lfs::training::kernels {
         float* result_buffer,
         int N, int C, int H, int W,
         bool apply_valid_padding,
-        cudaStream_t stream = nullptr,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f);
+        cudaStream_t stream = nullptr);
 
     void launch_fused_l1_ssim_mean_device(
         const float* img1,
@@ -73,10 +59,7 @@ namespace lfs::training::kernels {
         float* result_buffer,
         int N, int C, int H, int W,
         bool apply_valid_padding,
-        cudaStream_t stream = nullptr,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f);
+        cudaStream_t stream = nullptr);
 
     /**
      * @brief Reduce masked fused L1+SSIM directly to a normalized scalar loss

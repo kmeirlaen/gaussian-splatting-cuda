@@ -76,13 +76,7 @@ namespace fast_lfs::optimizer {
         const float mean_step_r_min,
         const float mean_step_r_max,
         const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n,
-        const std::int32_t* young_birth,
-        const int young_birth_n,
-        const int young_fill_iter,
-        const int young_min_birth,
-        const float young_gamma,
-        const float young_cap) {
+        const int mean_step_far_mask_n) {
         LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "joint_packed");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "joint_bounds");
@@ -92,9 +86,6 @@ namespace fast_lfs::optimizer {
         }
         if (mean_step_far_mask != nullptr) {
             LFS_VALIDATE_CUDA_DEVICE_POINTER(mean_step_far_mask, "mean_step_far_mask");
-        }
-        if (young_birth != nullptr) {
-            LFS_VALIDATE_CUDA_DEVICE_POINTER(young_birth, "young_birth");
         }
         if (n_prims <= 0 || n_attr <= 0) {
             throw std::runtime_error("adam_step_joint_contiguous: n_prims and n_attr must be positive");
@@ -109,9 +100,7 @@ namespace fast_lfs::optimizer {
                 n_prims, n_attr, lr, beta1, beta2, eps,
                 bias_correction1_rcp, bias_correction2_sqrt_rcp,
                 mean_step_scale_raw, mean_step_scale_n, mean_step_median_extent,
-                mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n,
-                young_birth, young_birth_n, young_fill_iter, young_min_birth,
-                young_gamma, young_cap);
+                mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n);
         } else if (bits == 8) {
             kernels::adam::adam_step_joint_contiguous_cu<8><<<n_blocks, kBS, 0, stream>>>(
                 param, packed, bounds, param_grad,
@@ -120,9 +109,7 @@ namespace fast_lfs::optimizer {
                 n_prims, n_attr, lr, beta1, beta2, eps,
                 bias_correction1_rcp, bias_correction2_sqrt_rcp,
                 mean_step_scale_raw, mean_step_scale_n, mean_step_median_extent,
-                mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n,
-                young_birth, young_birth_n, young_fill_iter, young_min_birth,
-                young_gamma, young_cap);
+                mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n);
         } else {
             throw std::runtime_error("adam_step_joint_contiguous: bits must be 8 or 16");
         }

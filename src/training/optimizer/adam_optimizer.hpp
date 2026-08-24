@@ -94,14 +94,6 @@ namespace lfs::training {
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
-        // Round 20 (R2): per-row birth iteration for the young-LR experiment.
-        // Only the means param carries a non-null pointer; null => disabled.
-        const std::int32_t* young_birth = nullptr;
-        int young_birth_n = 0;
-        int young_fill_iter = 0;
-        int young_min_birth = 0;
-        float young_gamma = 1.0f;
-        float young_cap = 8.0f;
         bool enabled = false;
     };
 
@@ -149,14 +141,6 @@ namespace lfs::training {
                                      float r_min,
                                      float r_max);
         void set_mean_step_far_mask(const bool* mask, int n);
-        // Round 20 (R2): young-LR state for the means Adam step (raw device
-        // pointer borrowed from the strategy; null disables).
-        void set_young_lr_means(const std::int32_t* birth,
-                                int n,
-                                int fill_iter,
-                                int min_birth,
-                                float gamma,
-                                float cap);
         [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
         [[nodiscard]] float mean_step_median_extent() const noexcept {
             return mean_step_median_extent_;
@@ -245,13 +229,6 @@ namespace lfs::training {
         float mean_step_r_max_ = 300.0f;
         const bool* mean_step_far_mask_ = nullptr;
         int mean_step_far_mask_n_ = 0;
-        // Round 20 (R2) young-LR state.
-        const std::int32_t* young_birth_ = nullptr;
-        int young_birth_n_ = 0;
-        int young_fill_iter_ = 0;
-        int young_min_birth_ = 0;
-        float young_gamma_ = 1.0f;
-        float young_cap_ = 8.0f;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 

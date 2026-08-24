@@ -208,7 +208,6 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         size_t n_rows,
         float* __restrict__ ratio_max,
-        bool ratio_sqrt,
         float ratio_pow) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
@@ -220,7 +219,7 @@ namespace lfs::training::mrnf_strategy {
         vis_count[idx] += vis;
         refine_weight_max[idx] = fmaxf(refine_weight_max[idx], err);
         if (ratio_max != nullptr) {
-            const float ratio = (vis >= 0.05f) ? (ratio_pow > 0.0f ? (err / powf(vis, ratio_pow)) : (ratio_sqrt ? (err / sqrtf(vis)) : (err / vis))) : 0.0f;
+            const float ratio = (vis >= 0.05f) ? (ratio_pow > 0.0f ? (err / powf(vis, ratio_pow)) : (err / vis)) : 0.0f;
             ratio_max[idx] = fmaxf(ratio_max[idx], ratio);
         }
         for (size_t row = 0; row < n_rows; ++row) {
@@ -236,7 +235,6 @@ namespace lfs::training::mrnf_strategy {
         void* stream,
         size_t n_rows,
         float* ratio_max,
-        bool ratio_sqrt,
         float ratio_pow) {
         if (N == 0)
             return;
@@ -245,7 +243,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         fold_densification_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            vis_count, refine_weight_max, densification_info, N, rows, ratio_max, ratio_sqrt, ratio_pow);
+            vis_count, refine_weight_max, densification_info, N, rows, ratio_max, ratio_pow);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_and_zero");
     }
 
@@ -445,59 +443,6 @@ namespace lfs::training::mrnf_strategy {
             "MRNF median-extent readback");
         LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "MRNF median-extent stream sync");
         *out_valid = std::isfinite(*out_median) && *out_median > 0.0f;
-    }
-
-    __global__ void copy_floats_kernel(
-        const float* __restrict__ src,
-        float* __restrict__ dst,
-        size_t n) {
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx < n)
-            dst[idx] = src[idx];
-    }
-
-    void launch_kth_largest_value(
-        const float* values,
-        size_t n,
-        size_t k,
-        float* out_value,
-        void* stream) {
-
-        LFS_ASSERT(out_value != nullptr);
-        *out_value = 0.0f;
-        if (n == 0 || values == nullptr)
-            return;
-        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
-                       "MRNF kth-largest input exceeds CUB's int item-count limit");
-
-        const size_t kk = std::clamp<size_t>(k, 1, n);
-        cudaStream_t s = resolve_stream(stream);
-        const int n_int = static_cast<int>(n);
-
-        const size_t values_bytes = cuda_scratch::checked_bytes(
-            n, sizeof(float), "MRNF kth-largest values");
-        cuda_scratch::DeviceBuffer input_buffer(values_bytes, s, "mrnf.kth.input");
-        cuda_scratch::DeviceBuffer sorted_buffer(values_bytes, s, "mrnf.kth.sorted");
-        auto* d_input = input_buffer.as<float>();
-        auto* d_sorted = sorted_buffer.as<float>();
-
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((n + threads - 1) / threads);
-        copy_floats_kernel<<<blocks, threads, 0, s>>>(values, d_input, n);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.kth_largest_copy");
-
-        auto sort_op = [&](void* workspace, size_t& workspace_bytes) {
-            return cub::DeviceRadixSort::SortKeys(
-                workspace, workspace_bytes, d_input, d_sorted, n_int, 0, 32, s);
-        };
-        cuda_scratch::CubWorkspace sort_ws("cub::DeviceRadixSort::SortKeys", s, sort_op);
-        sort_ws.run(sort_op);
-
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(out_value, d_sorted + (n - kk), sizeof(float),
-                            cudaMemcpyDeviceToHost, s),
-            "MRNF kth-largest readback");
-        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "MRNF kth-largest stream sync");
     }
 
     __global__ void gumbel_key_kernel(
@@ -1107,68 +1052,6 @@ namespace lfs::training::mrnf_strategy {
         apply_explore_starvation_weights_kernel<<<blocks, threads, 0, s>>>(
             weights, vis_count, n, median_vis);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_starvation_weights");
-    }
-
-    // Round 20 (R2): birth stamps for the young-LR experiment.
-    __global__ void stamp_birth_iterations_kernel(
-        std::int32_t* __restrict__ birth,
-        const std::int64_t* __restrict__ indices,
-        size_t count,
-        std::int32_t iter) {
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= count)
-            return;
-        const int64_t row = indices[idx];
-        if (row < 0)
-            return;
-        birth[row] = iter;
-    }
-
-    void launch_stamp_birth_iterations(
-        std::int32_t* birth,
-        const std::int64_t* indices,
-        size_t count,
-        std::int32_t iter,
-        void* stream) {
-        if (count == 0)
-            return;
-        LFS_ASSERT(birth != nullptr);
-        LFS_ASSERT(indices != nullptr);
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((count + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        stamp_birth_iterations_kernel<<<blocks, threads, 0, s>>>(
-            birth, indices, count, iter);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.stamp_births");
-    }
-
-    __global__ void stamp_birth_iterations_range_kernel(
-        std::int32_t* __restrict__ birth,
-        std::int64_t start,
-        size_t count,
-        std::int32_t iter) {
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx >= count)
-            return;
-        birth[start + static_cast<int64_t>(idx)] = iter;
-    }
-
-    void launch_stamp_birth_iterations_range(
-        std::int32_t* birth,
-        std::int64_t start,
-        size_t count,
-        std::int32_t iter,
-        void* stream) {
-        if (count == 0)
-            return;
-        LFS_ASSERT(birth != nullptr);
-        LFS_ASSERT(start >= 0);
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((count + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        stamp_birth_iterations_range_kernel<<<blocks, threads, 0, s>>>(
-            birth, start, count, iter);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.stamp_births_range");
     }
 
 } // namespace lfs::training::mrnf_strategy

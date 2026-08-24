@@ -64,18 +64,11 @@ namespace lfs::training::kernels {
         bool apply_valid_padding = true);
 
     // Version with pre-allocated workspace
-    //
-    // Round 23 diagnostic D1 (LFS_EXP_BAND_WEIGHT): trailing band_* arguments
-    // weight the mean-reduction by pixel row when band_top_rows > 0; defaults
-    // keep the gate off bit-for-bit.
     std::pair<lfs::core::Tensor, SSIMContext> ssim_forward(
         const lfs::core::Tensor& img1,
         const lfs::core::Tensor& img2,
         SSIMWorkspace& workspace,
-        bool apply_valid_padding = true,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f);
+        bool apply_valid_padding = true);
 
     // Per-pixel SSIM map result for masked loss computation
     struct SSIMMapResult {
@@ -116,15 +109,10 @@ namespace lfs::training::kernels {
         float grad_loss); // Gradient of loss w.r.t. SSIM value (scalar)
 
     // Optimized version with pre-allocated workspace
-    // Round 23 diagnostic D1: band_* arguments weight the upstream gradient
-    // map per neighbour row when band_top_rows > 0; inert by default.
     lfs::core::Tensor ssim_backward(
         const SSIMContext& ctx,
         SSIMWorkspace& workspace,
-        float grad_loss,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f);
+        float grad_loss);
 
     // Per-pixel gradient version for masked SSIM (d(loss)/d(ssim_map) per pixel)
     lfs::core::Tensor ssim_backward_with_grad_map(
@@ -173,27 +161,17 @@ namespace lfs::training::kernels {
     };
 
     // Fused L1+SSIM forward: loss = (1-w)*L1 + w*(1-SSIM)
-    // Round 23 diagnostic D1: band_* arguments weight the loss reduction by
-    // pixel row when band_top_rows > 0; inert by default.
     std::pair<lfs::core::Tensor, FusedL1SSIMContext> fused_l1_ssim_forward(
         const lfs::core::Tensor& img1,
         const lfs::core::Tensor& img2,
         float ssim_weight,
         FusedL1SSIMWorkspace& workspace,
-        bool apply_valid_padding = true,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f);
+        bool apply_valid_padding = true);
 
     // Fused L1+SSIM backward
-    // Round 23 diagnostic D1: band_* arguments weight the L1 and DSSIM
-    // gradient parts by pixel row when band_top_rows > 0; inert by default.
     lfs::core::Tensor fused_l1_ssim_backward(
         const FusedL1SSIMContext& ctx,
-        FusedL1SSIMWorkspace& workspace,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f);
+        FusedL1SSIMWorkspace& workspace);
 
     // ============================================================================
     // Decoupled L1+SSIM Loss for appearance modeling

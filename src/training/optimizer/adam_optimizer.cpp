@@ -197,20 +197,6 @@ namespace lfs::training {
         mean_step_far_mask_n_ = mask != nullptr ? n : 0;
     }
 
-    void AdamOptimizer::set_young_lr_means(const std::int32_t* birth,
-                                           const int n,
-                                           const int fill_iter,
-                                           const int min_birth,
-                                           const float gamma,
-                                           const float cap) {
-        young_birth_ = birth;
-        young_birth_n_ = birth != nullptr ? n : 0;
-        young_fill_iter_ = fill_iter;
-        young_min_birth_ = min_birth;
-        young_gamma_ = gamma;
-        young_cap_ = cap;
-    }
-
     void AdamOptimizer::step(const int iteration) {
         LFS_TRACE("kernel.adam.step");
         if (fused_step_iteration_ == iteration) {
@@ -791,14 +777,7 @@ namespace lfs::training {
                 mean_step_r_min_,
                 mean_step_r_max_,
                 mean_step_far_mask_,
-                mean_step_far_mask_n_,
-                // Round 20 (R2): young-LR applies to means rows only.
-                type == ParamType::Means ? young_birth_ : nullptr,
-                type == ParamType::Means ? young_birth_n_ : 0,
-                young_fill_iter_,
-                young_min_birth_,
-                young_gamma_,
-                young_cap_);
+                mean_step_far_mask_n_);
             param_live.set_stream(execution_stream);
             state.exp_avg.set_stream(execution_stream);
             state.joint_bounds.set_stream(execution_stream);
@@ -988,15 +967,6 @@ namespace lfs::training {
             out.n_attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
             out.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
-            // Round 20 (R2): young-LR applies to means rows only.
-            if (type == ParamType::Means) {
-                out.young_birth = young_birth_;
-                out.young_birth_n = young_birth_n_;
-                out.young_fill_iter = young_fill_iter_;
-                out.young_min_birth = young_min_birth_;
-                out.young_gamma = young_gamma_;
-                out.young_cap = young_cap_;
-            }
             out.enabled = true;
             return out;
         };

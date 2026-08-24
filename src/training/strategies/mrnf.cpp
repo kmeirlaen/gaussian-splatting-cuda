@@ -14,12 +14,11 @@
 #include "edge_rasterizer.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
-#include "kernels/errmap_kernels.hpp"
 #include "kernels/image_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
-#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/mean_step_scale.cuh"
+#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
@@ -27,11 +26,8 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
-#include <climits>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 #include <cuda_runtime.h>
 #include <limits>
 #include <numeric>
@@ -42,355 +38,11 @@
 #include <utility>
 #include <vector>
 
-#include "nanoflann.hpp"
-
 namespace lfs::training {
 
     namespace {
 
-        // Round 5 experiment gates. Read once per process; unset (or "0") keeps
-        // bit-identical legacy behavior.
-        [[nodiscard]] bool env_gate_enabled(const char* name) {
-            const char* value = std::getenv(name);
-            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-        }
-
-        [[nodiscard]] bool growth_ratio_rank_enabled() {
-            static const bool enabled = env_gate_enabled("LFS_EXP_GROWTH_RATIO");
-            return enabled;
-        }
-
-        [[nodiscard]] bool las_iso_shrink_enabled() {
-            static const bool enabled = env_gate_enabled("LFS_EXP_LAS_ISO");
-            return enabled;
-        }
-
-        [[nodiscard]] float growth_ratio_pow() {
-            static const float p = [] {
-                const char* v = std::getenv("LFS_EXP_RATIO_POW");
-                return (v != nullptr && *v != '\0') ? static_cast<float>(std::atof(v)) : 0.0f;
-            }();
-            return p;
-        }
-
-        [[nodiscard]] bool growth_ratio_sqrt_enabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_GROWTH_RATIO_SQRT");
-            return on;
-        }
-
-        [[nodiscard]] float exp_edge_weight() {
-            static const float w = [] {
-                const char* v = std::getenv("LFS_EXP_EDGE_WEIGHT");
-                return (v != nullptr && *v != '\0') ? static_cast<float>(std::atof(v)) : 0.25f;
-            }();
-            return w;
-        }
-
-        [[nodiscard]] float seed_local_factor() {
-            static const float f = [] {
-                const char* v = std::getenv("LFS_EXP_SEED_LOCAL_K");
-                return (v != nullptr && *v != '\0') ? static_cast<float>(std::atof(v)) : 0.0f;
-            }();
-            return f;
-        }
-
-        [[nodiscard]] bool seed_far_enabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_SEED_FAR");
-            return on;
-        }
-
-        [[nodiscard]] bool far_step_disabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_FAR_NO_STEP");
-            return on;
-        }
-
-        [[nodiscard]] bool far_decay_disabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_FAR_NO_DECAY");
-            return on;
-        }
-
-        [[nodiscard]] bool far_growth_cap_disabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_FAR_NO_CAP");
-            return on;
-        }
-
-        [[nodiscard]] bool far_seeds_disabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_FAR_NO_SEEDS");
-            return on;
-        }
-
-        [[nodiscard]] bool far_explore_splits_disabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_FAR_NO_SPLITS");
-            return on;
-        }
-
-        [[nodiscard]] bool turnover_log_enabled() {
-            static const bool enabled = env_gate_enabled("LFS_EXP_LOG_TURNOVER");
-            return enabled;
-        }
-
-        // Round 10 experiment gates. Same convention as above: unset, empty, or "0"
-        // keeps bit-identical legacy behavior. Numeric gates must parse to a positive
-        // value to arm; anything else reads as off.
-        [[nodiscard]] int env_gate_positive_int(const char* name) {
-            const char* value = std::getenv(name);
-            if (!value || *value == '\0') {
-                return 0;
-            }
-            const long parsed = std::strtol(value, nullptr, 10);
-            return parsed > 0 ? static_cast<int>(std::min<long>(parsed, LONG_MAX)) : 0;
-        }
-
-        [[nodiscard]] double env_gate_positive_double(const char* name) {
-            const char* value = std::getenv(name);
-            if (!value || *value == '\0') {
-                return 0.0;
-            }
-            const double parsed = std::strtod(value, nullptr);
-            return (parsed > 0.0 && std::isfinite(parsed)) ? parsed : 0.0;
-        }
-
-        // P1: fill pacing — target iteration by which max_cap should be reached.
-        [[nodiscard]] int fill_pacing_target_iter() {
-            static const int iter = env_gate_positive_int("LFS_EXP_FILL_ITER");
-            return iter; // 0 = gate off
-        }
-
-        // P2: post-fill means-LR floor as a fraction of the initial means LR.
-        [[nodiscard]] double means_lr_floor_fraction() {
-            static const double fraction = env_gate_positive_double("LFS_EXP_MEANS_LR_FLOOR");
-            return fraction; // 0 = gate off
-        }
-
-        // P3: deterministic merge-based reorganization, permille of max_cap per window.
-        [[nodiscard]] int merge_permille_per_window() {
-            static const int permille = env_gate_positive_int("LFS_EXP_MERGE");
-            return permille; // 0 = gate off
-        }
-
-        // P4: error-anchored placement. Same parsing as Trainer's
-        // errmap_experiment_mode(): anything outside 1..3 means off; placement also
-        // hard-requires mode 2 or 3 (DoG missing-detail signals).
-        [[nodiscard]] int place_errmap_mode() {
-            static const int mode = [] {
-                const char* value = std::getenv("LFS_EXP_ERRMAP");
-                if (!value || *value == '\0') {
-                    return 0;
-                }
-                const long parsed = std::strtol(value, nullptr, 10);
-                return (parsed >= 1 && parsed <= 3) ? static_cast<int>(parsed) : 0;
-            }();
-            return mode;
-        }
-
-        [[nodiscard]] bool place_enabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_PLACE");
-            return on;
-        }
-
-        // Round 17 experiment gates. Same convention as above: unset, empty, or "0"
-        // keeps bit-identical legacy behavior.
-
-        // C1: error-density candidacy. Value = top fraction of rows by error
-        // density that become refine candidates (e.g. 0.3).
-        [[nodiscard]] float cand_density_fraction() {
-            static const float fraction = [] {
-                const double v = env_gate_positive_double("LFS_EXP_CAND_DENSITY");
-                return v > 0.0 ? static_cast<float>(std::min(v, 1.0)) : 0.0f;
-            }();
-            return fraction; // 0 = gate off
-        }
-
-        // C2: bounded exploration seeds. SEED_BOUNDED clamps each seed ray's far
-        // depth to the exit point from the population-bounds sphere and rejects
-        // lonely placements; SEED_DOSE overrides the per-window seed count.
-        [[nodiscard]] bool seed_bounded_enabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_SEED_BOUNDED");
-            return on;
-        }
-
-        [[nodiscard]] int seed_dose_per_window() {
-            static const int dose = env_gate_positive_int("LFS_EXP_SEED_DOSE");
-            return dose; // 0 => today's kExploreSeeds path
-        }
-
-        // Round 35 experiment gates. Same convention as above: unset, empty, or "0"
-        // keeps bit-identical legacy behavior.
-
-        // S1: ExploreGS-faithful split selection. MODE=topk replaces the Gumbel-
-        // over-logw explore sampler with the largest-scale cohort + uniform picks.
-        [[nodiscard]] bool split_mode_topk() {
-            static const bool topk = [] {
-                const char* value = std::getenv("LFS_EXP_SPLIT_MODE");
-                return value != nullptr && std::strcmp(value, "topk") == 0;
-            }();
-            return topk;
-        }
-
-        // Cohort tail fraction: rows above the (1-PCT) quantile of scale_sum.
-        [[nodiscard]] float split_top_pct() {
-            static const float pct = [] {
-                const char* v = std::getenv("LFS_EXP_SPLIT_TOP_PCT");
-                const float parsed = (v != nullptr && *v != '\0') ? std::strtof(v, nullptr) : 0.05f;
-                return (parsed > 0.0f && parsed < 1.0f) ? parsed : 0.05f;
-            }();
-            return pct;
-        }
-
-        // Explore share of the total refine budget, claimed before growth samples.
-        [[nodiscard]] float split_budget_share() {
-            static const float share = [] {
-                const char* v = std::getenv("LFS_EXP_SPLIT_BUDGET_SHARE");
-                const float parsed = (v != nullptr && *v != '\0') ? std::strtof(v, nullptr) : 0.25f;
-                return (parsed > 0.0f && parsed <= 1.0f) ? parsed : 0.25f;
-            }();
-            return share;
-        }
-
-        // S2: seed ladder — a SHARE fraction of each window's seeds draws depth
-        // log-uniformly in [2R, bbox-sphere exit] instead of the inverse-uniform
-        // legacy draw.
-        [[nodiscard]] bool seed_ladder_enabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_SEED_LADDER");
-            return on;
-        }
-
-        [[nodiscard]] float seed_ladder_share() {
-            static const float share = [] {
-                const char* v = std::getenv("LFS_EXP_SEED_LADDER_SHARE");
-                const float parsed = (v != nullptr && *v != '\0') ? std::strtof(v, nullptr) : 0.25f;
-                return (parsed > 0.0f && parsed <= 1.0f) ? parsed : 0.25f;
-            }();
-            return share;
-        }
-
-        // S3: rows born within this many iterations are immune to replacement
-        // eviction (no effect on the prune-by-min-opacity path).
-        [[nodiscard]] int seed_grace_iters() {
-            static const int iters = env_gate_positive_int("LFS_EXP_SEED_GRACE_ITERS");
-            return iters;
-        }
-
-        // Round 20 experiment (R1): error-aware replacement parent weights.
-        // 1 = multiply by _refine_weight_max, 2 = multiply by _refine_ratio_max,
-        // 3 = clamp(opacity/0.2,0,1) replaces the opacity factor AND multiplies
-        // by _refine_ratio_max. Unset/garbage keeps today's weights.
-        [[nodiscard]] int replace_err_mode() {
-            static const int mode = [] {
-                const char* value = std::getenv("LFS_EXP_REPLACE_ERR");
-                if (!value || *value == '\0') {
-                    return 0;
-                }
-                const long parsed = std::strtol(value, nullptr, 10);
-                return (parsed >= 1 && parsed <= 3) ? static_cast<int>(parsed) : 0;
-            }();
-            return mode;
-        }
-
-        [[nodiscard]] bool replace_err_needs_ratio() {
-            static const bool needs = replace_err_mode() >= 2;
-            return needs;
-        }
-
-        // Round 20 experiment (R2): post-fill-born young rows keep their birth
-        // learning rate for <windows> refine windows. YOUNG_CAP bounds the boost.
-        [[nodiscard]] int young_lr_windows() {
-            static const int windows = env_gate_positive_int("LFS_EXP_YOUNG_LR");
-            return windows; // 0 = gate off
-        }
-
-        [[nodiscard]] float young_lr_cap() {
-            static const float cap = [] {
-                const double v = env_gate_positive_double("LFS_EXP_YOUNG_CAP");
-                return v > 0.0 ? static_cast<float>(v) : 8.0f;
-            }();
-            return cap;
-        }
-
-        // Round 22 experiment gates. Same convention as above: unset, empty, or "0"
-        // keeps bit-identical legacy behavior.
-
-        // Rule P: threshold-free pacing self-adjustment. Requires the round-10
-        // pacer LFS_EXP_FILL_ITER to be armed — without a paced quota there is
-        // nothing to gate.
-        [[nodiscard]] bool pace_auto_enabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_PACE_AUTO");
-            return on;
-        }
-
-        // Rule O: churn-coupled opacity regularization dose. w_max is the
-        // configured opacity_reg; this gate only modulates it.
-        [[nodiscard]] bool oreg_auto_enabled() {
-            static const bool on = env_gate_enabled("LFS_EXP_OREG_AUTO");
-            return on;
-        }
-
-        // Round 10 experiment (P3/P4) constants.
         constexpr int MRNF_RATIO_RANK_LOG_INTERVAL = 25;
-        constexpr float MRNF_PLACE_MIN_PIXEL_SPACING = 8.0f; // px, Euclidean
-        constexpr int32_t MRNF_PLACE_COOLDOWN_WINDOWS = 5;
-        constexpr float MRNF_MERGE_SH0_MAX_DIST = 0.05f; // L2 over SH0 DCs
-        constexpr float MRNF_MERGE_SCALE_RATIO_MAX = 2.0f;
-
-        // Round 17 experiment (C2) constants: bounded-seed subsample cap for the
-        // loneliness kNN and the loneliness distance factor (x median extent).
-        constexpr size_t MRNF_SEED_KNN_SUBSAMPLE_MAX = 200000;
-        constexpr float MRNF_SEED_LONELY_MEDIAN_FACTOR = 3.0f;
-
-        // Round 22 experiment (Rules P/O) constants. All dimensionless and
-        // population-/LR-relative; no depth, orbit, or absolute scene-scale
-        // quantity enters the new logic.
-        constexpr float MRNF_PACE_AUTO_PRESSURE_FLOOR = 0.5f;
-        constexpr float MRNF_PACE_AUTO_DISP_CAP = 50.0f;
-        constexpr int MRNF_PACE_AUTO_YOUNG_WINDOWS = 10;
-        constexpr double MRNF_OREG_AUTO_RHO = 5e-4;
-        constexpr double MRNF_OREG_AUTO_CAP_MARGIN = 0.05;
-
-        // P3 helper: row-major [K, 3] point cloud adaptor for nanoflann.
-        struct MergePointCloudAdaptor {
-            const float* data = nullptr;
-            size_t count = 0;
-
-            inline size_t kdtree_get_point_count() const { return count; }
-            inline float kdtree_get_pt(const size_t idx, const size_t dim) const {
-                return data[idx * 3 + dim];
-            }
-            template <class BBOX>
-            bool kdtree_get_bbox(BBOX&) const { return false; }
-        };
-
-        using MergeKDTree = nanoflann::KDTreeSingleIndexAdaptor<
-            nanoflann::L2_Simple_Adaptor<float, MergePointCloudAdaptor>,
-            MergePointCloudAdaptor, 3>;
-
-        // Geomean of exp(log_scales): the isotropic extent of a row.
-        [[nodiscard]] float geomean_extent(const float* log_scales_row) {
-            const float sum = log_scales_row[0] + log_scales_row[1] + log_scales_row[2];
-            return std::exp(sum / 3.0f);
-        }
-
-        // CHW float32 [3,H,W] view of an image tensor (uint8 scaled by 1/255), or an
-        // empty tensor when the layout is not a 3-channel HWC/CHW image. Mirrors
-        // Trainer's errmap_input_chw_float for the P4 error-map path.
-        [[nodiscard]] lfs::core::Tensor place_errmap_input_chw_float(
-            const lfs::core::Tensor& t) {
-            if (t.ndim() != 3) {
-                return {};
-            }
-            lfs::core::Tensor x = t.dtype() == lfs::core::DataType::UInt8
-                                      ? t.to(lfs::core::DataType::Float32) / 255.0f
-                                      : t;
-            if (x.dtype() != lfs::core::DataType::Float32) {
-                x = x.to(lfs::core::DataType::Float32);
-            }
-            if (x.shape()[0] == 3) {
-                return x.is_contiguous() ? x : x.contiguous();
-            }
-            if (x.shape()[2] == 3) {
-                return x.permute({2, 0, 1}).contiguous();
-            }
-            return {};
-        }
 
         constexpr float MRNF_EDGE_SCORE_WEIGHT = 0.25f;
         constexpr int MRNF_EDGE_MIN_VIEW_SAMPLES = 10;
@@ -1086,23 +738,9 @@ namespace lfs::training {
         const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
-        if (cfg_ratio_rank_on() || replace_err_needs_ratio()) {
+        if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
-        // Round 20 experiment (R2): birth iterations for young-row LR. Rows that
-        // exist at initialize() stamp 0; fill_iter >= 1 always exceeds them.
-        // Round 22 (Rule P): also maintained for young_dispersion row age.
-        if (young_lr_windows() > 0) {
-            ensure_young_birth_buffer(n);
-            publish_young_lr_state(0);
-        } else if (pace_auto_enabled()) {
-            ensure_young_birth_buffer(n);
-        }
-        // Round 22 experiment (Rule P): prev-window means snapshot starts as the
-        // initial positions; rows that exist at initialize() are never "young"
-        // (birth stamps 0 < min_birth >= 1), so the baseline content is unused
-        // until the first post-refine refresh.
-        ensure_pace_prev_means(n);
 
         publish_vram_attribution();
         compute_bounds();
@@ -1346,7 +984,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_cache_seed_view(int iter) const {
-        if (!far_field_requested() || far_seeds_disabled() || kExploreSeeds <= 0) {
+        if (!far_field_requested() || kExploreSeeds <= 0) {
             return false;
         }
         const int next_iter = iter + 1;
@@ -1560,14 +1198,7 @@ namespace lfs::training {
 
         if (_refine_weight_max.numel() == n) {
             float* ratio_max_ptr = nullptr;
-            // Round 17 experiment (LFS_EXP_CAND_DENSITY): when GROWTH_RATIO is off
-            // but CAND_DENSITY is on, fold the plain err/vis density into the same
-            // buffer so C1 works alone (ratio_sqrt=false, ratio_pow=0 below).
-            // Round 20 experiment (R1): modes 2/3 read _refine_ratio_max too, so
-            // REPLACE_ERR arms the same fold (plain err/vis when GROWTH_RATIO off).
-            if ((cfg_ratio_rank_on() || cand_density_fraction() > 0.0f ||
-                 replace_err_needs_ratio()) &&
-                _refine_ratio_max.numel() == n) {
+            if (cfg_ratio_rank_on() && _refine_ratio_max.numel() == n) {
                 ratio_max_ptr = _refine_ratio_max.ptr<float>();
             }
             mrnf_strategy::launch_fold_densification_and_zero(
@@ -1578,7 +1209,6 @@ namespace lfs::training {
                 nullptr,
                 densification_row_count(),
                 ratio_max_ptr,
-                growth_ratio_sqrt_enabled(),
                 cfg_ratio_pow());
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             if (ratio_max_ptr != nullptr) {
@@ -1627,8 +1257,6 @@ namespace lfs::training {
 
     int MRNF::effective_grow_until_iter() const {
         int value = static_cast<int>(_params->grow_until_iter);
-        // Round 10 experiment (LFS_EXP_FILL_ITER): growth windows must stay available
-        // until the pacing target so the schedule can actually reach max_cap.
         const int fill_iter = cfg_fill_target_iter();
         if (fill_iter > 0) {
             value = std::max(value, fill_iter);
@@ -1636,49 +1264,16 @@ namespace lfs::training {
         return value;
     }
 
-    // Round 22 experiment (Rule O): public gate probe for the trainer.
-    bool MRNF::opacity_reg_auto_enabled() const {
-        return oreg_auto_enabled();
-    }
-
     void MRNF::refine(int iter, RenderOutput& render_output) {
         lfs::core::alloc_counter::ScopedSite densify_site("densify");
         LOG_TIMER("MRNF::refine");
         LFS_VRAM_SCOPE("MRNF::refine");
         using namespace lfs::core;
-        // Round 20 experiment (R2): every row created inside this refine window
-        // (children fills, appends, seeds, P4 placements) stamps this iteration.
-        _young_now_stamp_iter = iter;
-        // densify ops are float-native. Expand q16 → float for this step only;
-        // commit restores q16 before refine() returns (single buffer residency).
         (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
         ++_refine_windows_since_bounds;
         if (!_bounds_valid || _refine_windows_since_bounds >= MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES) {
             compute_bounds();
-        }
-
-        // Round 10 experiment (LFS_EXP_MERGE / LFS_EXP_PLACE): per-window setup runs
-        // before any mutation. Merges free slots BEFORE the prune count is taken so
-        // the freed capacity joins this window's replacement/growth budget; P4 then
-        // claims those slots inside grow_and_split ahead of regular replacement.
-        _merge_freed_slots = 0;
-        if (placement_active()) {
-            ensure_place_cooldown(_params->max_cap > 0
-                                      ? static_cast<size_t>(_params->max_cap)
-                                      : static_cast<size_t>(_splat_data->size()));
-            tick_place_cooldown();
-        } else if (place_enabled() && !_place_gate_warned) {
-            LOG_WARN("MRNF place gate set but LFS_EXP_ERRMAP={} — placement disabled "
-                     "(requires mode 2 or 3)",
-                     place_errmap_mode());
-            _place_gate_warned = true;
-        }
-        if (merge_permille_per_window() > 0 && _params->max_cap > 0 &&
-            iter < static_cast<int>(_params->stop_refine) &&
-            static_cast<double>(active_count()) >=
-                0.98 * static_cast<double>(_params->max_cap)) {
-            merge_redundant_pairs(iter);
         }
 
         const size_t n = static_cast<size_t>(_splat_data->size());
@@ -1762,18 +1357,13 @@ namespace lfs::training {
         }
 
         const bool growing = iter < effective_grow_until_iter();
-        const bool seed_far = growing && far_field_requested() && !far_seeds_disabled() && kExploreSeeds > 0;
+        const bool seed_far = growing && far_field_requested() && kExploreSeeds > 0;
         int reserved_seeds = seed_far ? starved_cadence_count(kExploreSeeds) : 0;
         if (seed_far && cfg_seed_dose() > 0)
             reserved_seeds = std::max(reserved_seeds, cfg_seed_dose());
         begin_far_growth_window(n, reserved_seeds);
 
-        // Replacement should stay active even after growth stop. The pending view
-        // gives P4 (LFS_EXP_PLACE) access to the current render without changing
-        // the grow_and_split signature used by the unit tests.
-        _pending_place_view = &render_output;
         grow_and_split(iter, pruned_count);
-        _pending_place_view = nullptr;
         if (seed_far) {
             seed_from_view(iter, render_output);
         }
@@ -1796,58 +1386,12 @@ namespace lfs::training {
         apply_decay(iter);
         ensure_mean_step_far_mask();
 
-        // Round 10 experiment (LFS_EXP_MEANS_LR_FLOOR): record the fill iteration
-        // once, at the first refine window where the active population reaches
-        // >= 0.98*max_cap.
-        if (means_lr_floor_fraction() > 0.0 && _params->max_cap > 0 &&
-            _means_floor_fill_iter < 0 &&
-            static_cast<double>(active_count()) >=
-                0.98 * static_cast<double>(_params->max_cap)) {
-            _means_floor_fill_iter = iter;
-            LOG_INFO("MRNF means-lr floor armed at fill iter={} active={} cap={} fraction={}",
-                     iter, active_count(), _params->max_cap, means_lr_floor_fraction());
-        }
-
-        // Round 20 experiment (R2): the same fill-iteration record for the
-        // young-LR gate (independent of MEANS_LR_FLOOR being set).
-        if (young_lr_windows() > 0 && _params->max_cap > 0 &&
-            _young_fill_iter < 0 &&
-            static_cast<double>(active_count()) >=
-                0.98 * static_cast<double>(_params->max_cap)) {
-            _young_fill_iter = iter;
-            publish_young_lr_state(iter);
-            if (!_young_fill_logged) {
-                LOG_INFO("MRNF young-lr armed: fill_iter={} windows={} cap={:.3f} gamma={:.6f}",
-                         iter, young_lr_windows(), young_lr_cap(), _mean_lr_gamma);
-                _young_fill_logged = true;
-            }
-        }
-
         const size_t new_n = static_cast<size_t>(_splat_data->size());
         const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
-        if (cfg_ratio_rank_on() || replace_err_needs_ratio()) {
+        if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_refine_ratio_max, new_n, _splat_data->means().device(), tracking_capacity);
-        }
-        // Round 20 experiment (R2): unlike the per-window buffers above, births
-        // persist across windows; only the row count is reconciled here. Round 22
-        // (Rule P): the same birth buffer provides row age for young_dispersion,
-        // so it is also maintained when only LFS_EXP_PACE_AUTO is set.
-        if (young_lr_windows() > 0) {
-            ensure_young_birth_buffer(new_n);
-            publish_young_lr_state(iter);
-        } else if (pace_auto_enabled() || seed_grace_iters() > 0) {
-            ensure_young_birth_buffer(new_n);
-        }
-        // Round 22 experiment (Rule P): re-baseline the snapshot to the final
-        // post-mutation positions of this window (after enforce_max_cap, so any
-        // compaction that happened this window is already reflected).
-        if (pace_auto_enabled()) {
-            refresh_pace_prev_means();
-        }
-        if (_place_cooldown.is_valid() && _place_cooldown.numel() > 0) {
-            ensure_place_cooldown(new_n);
         }
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
@@ -1872,35 +1416,25 @@ namespace lfs::training {
     }
 
     bool MRNF::cfg_ratio_rank_on() const {
-        return growth_ratio_rank_enabled() || (_params && _params->growth_ratio_rank);
+        return _params && _params->growth_ratio_rank;
     }
 
     float MRNF::cfg_ratio_pow() const {
-        const float env_pow = growth_ratio_pow();
-        if (env_pow != 0.0f) {
-            return env_pow;
-        }
         return (_params && _params->growth_ratio_rank) ? _params->growth_ratio_pow : 0.0f;
     }
 
     int MRNF::cfg_fill_target_iter() const {
-        int target = fill_pacing_target_iter();
-        if (_params && _params->fill_pacing_iter > 0) {
-            target = std::max(target, static_cast<int>(_params->fill_pacing_iter));
-        }
-        return target;
+        return (_params && _params->fill_pacing_iter > 0)
+                   ? static_cast<int>(_params->fill_pacing_iter)
+                   : 0;
     }
 
     int MRNF::cfg_seed_dose() const {
-        const int env_dose = seed_dose_per_window();
-        if (env_dose > 0) {
-            return env_dose;
-        }
         return _params ? static_cast<int>(_params->far_seed_dose) : 0;
     }
 
     bool MRNF::cfg_seed_far_on() const {
-        return seed_far_enabled() || cfg_seed_dose() > 0;
+        return cfg_seed_dose() > 0;
     }
 
     bool MRNF::far_field_requested() const {
@@ -2061,7 +1595,7 @@ namespace lfs::training {
     }
 
     float MRNF::effective_far_growth_cap() const {
-        if (!far_field_requested() || far_growth_cap_disabled()) {
+        if (!far_field_requested()) {
             return 1.0f;
         }
         return 1.0f - _far_starvation * (1.0f - kFarGrowthCap);
@@ -2166,7 +1700,7 @@ namespace lfs::training {
         if (!_optimizer) {
             return;
         }
-        if (!far_field_requested() || far_step_disabled()) {
+        if (!far_field_requested()) {
             _optimizer->set_mean_step_far_mask(nullptr, 0);
             return;
         }
@@ -2432,16 +1966,7 @@ namespace lfs::training {
         int desired_total = static_cast<int>(
             std::round(static_cast<float>(host_counts[0]) * _params->grow_fraction));
         const int candidate_count = static_cast<int>(host_counts[0]);
-        // Density candidacy restricts WHO is eligible; the growth VOLUME must still follow
-        // the full visible pool, otherwise the run starves (round 17 C30: never filled).
-        if (cand_density_fraction() > 0.0f && candidate_count > 0) {
-            desired_total = static_cast<int>(std::round(
-                static_cast<float>(candidate_count) / cand_density_fraction() * _params->grow_fraction));
-        }
 
-        // Round 10 experiment (LFS_EXP_FILL_ITER): pace growth so the population
-        // reaches max_cap at the target iteration on a smooth schedule. The paced
-        // quota only ever caps the legacy grow_fraction desire.
         int pacing_windows_left = 0;
         if (cfg_fill_target_iter() > 0 && _params->max_cap > 0) {
             const int refine_every = std::max(1, static_cast<int>(_params->refine_every));
@@ -2453,50 +1978,11 @@ namespace lfs::training {
                 (remaining + static_cast<long long>(pacing_windows_left) - 1) /
                 static_cast<long long>(pacing_windows_left); // ceil(remaining / windows_left)
 
-            // Round 22 experiment (Rule P): keep pacing only while candidate
-            // pressure holds AND the young cohort has settled; the first failing
-            // window trips a sticky flag that releases the full grow_fraction
-            // desire for the rest of the run.
-            bool pace_auto_allow = true;
-            if (pace_auto_enabled()) {
-                const float pressure =
-                    static_cast<float>(candidate_count) /
-                    static_cast<float>(std::max<size_t>(1, current_active));
-                const float young_disp = compute_young_dispersion(iter, n);
-                if (!_pace_released &&
-                    !(pressure >= MRNF_PACE_AUTO_PRESSURE_FLOOR &&
-                      young_disp <= MRNF_PACE_AUTO_DISP_CAP)) {
-                    _pace_released = true;
-                    if (turnover_log_enabled()) {
-                        LOG_INFO("MRNF pace-auto stopped: iter={} pressure={} young_disp={} active={}",
-                                 iter, pressure, young_disp, current_active);
-                    }
-                }
-                pace_auto_allow = !_pace_released;
-                if (turnover_log_enabled()) {
-                    LOG_INFO("MRNF pace-auto iter={} pressure={} young_disp={} active={}",
-                             iter, pressure, young_disp, current_active);
-                }
-            }
-
-            if (pace_auto_allow && desired_total > 0 && paced < static_cast<long long>(desired_total)) {
+            if (desired_total > 0 && paced < static_cast<long long>(desired_total)) {
                 desired_total = static_cast<int>(std::min<long long>(paced, INT_MAX));
             }
         }
         const int selectable_replace = static_cast<int>(host_counts[2]);
-
-        // Round 10 experiment (LFS_EXP_PLACE): error-anchored rows claim the
-        // merge-freed slots (bounded by the cap budget) BEFORE the
-        // regular replacement path samples; the remaining free slots still flow to
-        // replacement/growth.
-        if (_merge_freed_slots > 0 &&
-            _pending_place_view != nullptr && placement_active()) {
-            const int m = std::min(_merge_freed_slots, budget);
-            const int placed = place_freed_at_error_pixels(iter, m);
-            _merge_freed_slots -= placed;
-            if (budget != INT_MAX)
-                budget = std::max(0, budget - placed);
-        }
 
         if (requested_replace > 0) {
             actual_replace = std::min(requested_replace, selectable_replace);
@@ -2516,62 +2002,10 @@ namespace lfs::training {
             }
         }
 
-        // Round 35 experiment (LFS_EXP_SPLIT_MODE=topk): ExploreGS-faithful
-        // explore funding. The largest-scale cohort claims its share of the
-        // budget BEFORE growth samples so growth cannot crowd the channel out;
-        // starvation scaling and far_operators_active() are ignored here (the
-        // far_field_requested() and grow-until gates still apply).
-        const bool split_topk_mode = split_mode_topk();
-        Tensor topk_cohort_mask;
-        int topk_reserved_explore = 0;
-        if (split_topk_mode && iter < effective_grow_until_iter() && far_field_requested() &&
-            !far_explore_splits_disabled() && kExploreSplits > 0) {
-            auto log_scales = _splat_data->scaling_raw();
-            if (log_scales.ndim() == 2 && log_scales.shape()[0] == n && log_scales.shape()[1] == 3) {
-                auto scale_sum = log_scales.sum(1);
-                auto eligible = trainable_mask.is_valid()
-                                    ? trainable_mask
-                                    : Tensor::ones_bool({n}, Device::CUDA);
-                if (active_mask.is_valid()) {
-                    eligible = eligible.logical_and(active_mask);
-                }
-                if (replace_mask.is_valid()) {
-                    eligible = eligible.logical_and(replace_mask.logical_not());
-                }
-                auto vals_h = scale_sum.masked_select(eligible).cpu().contiguous();
-                const size_t m = static_cast<size_t>(vals_h.numel());
-                if (m > 0) {
-                    std::vector<float> sorted(vals_h.ptr<float>(),
-                                              vals_h.ptr<float>() + m);
-                    const size_t rank = static_cast<size_t>(std::max(
-                        1.0,
-                        std::ceil((1.0 - static_cast<double>(split_top_pct())) *
-                                  static_cast<double>(m))));
-                    const size_t kth = std::min(m - 1, rank - 1);
-                    std::nth_element(sorted.begin(),
-                                     sorted.begin() + static_cast<std::ptrdiff_t>(kth),
-                                     sorted.end());
-                    topk_cohort_mask = eligible.logical_and(scale_sum.ge(sorted[kth]));
-                    const int cohort_count =
-                        topk_cohort_mask.to(DataType::Int32).sum().item<int>();
-                    const long long share_budget =
-                        budget >= INT_MAX
-                            ? static_cast<long long>(INT_MAX)
-                            : static_cast<long long>(std::floor(
-                                  split_budget_share() * static_cast<double>(budget)));
-                    topk_reserved_explore = static_cast<int>(std::min<long long>(
-                        {static_cast<long long>(cadence_scaled(kExploreSplits)),
-                         share_budget,
-                         static_cast<long long>(std::max(0, cohort_count))}));
-                    topk_reserved_explore = std::max(0, topk_reserved_explore);
-                }
-            }
-        }
-
         if (iter < effective_grow_until_iter()) {
             above_threshold = refine_candidates;
             n_grow = std::max(0, desired_total - actual_replace);
-            n_grow = std::min(n_grow, budget - actual_replace - topk_reserved_explore);
+            n_grow = std::min(n_grow, budget - actual_replace);
         }
 
         if (n_grow > 0) {
@@ -2611,37 +2045,6 @@ namespace lfs::training {
 
         ++_growth_window_count;
 
-        // Round 22 experiment (Rule O): churn-coupled opacity regularization
-        // dose. s_t = min(1, replace / (RHO * active)), zeroed by a margin
-        // circuit breaker once growth windows are exhausted while the population
-        // still sits >5% under cap. Held constant between refine windows via the
-        // public getter (trainer multiplies config opacity_reg by it).
-        if (oreg_auto_enabled()) {
-            float s = 1.0f;
-            const double denom =
-                MRNF_OREG_AUTO_RHO * static_cast<double>(std::max<size_t>(1, current_active));
-            if (actual_replace > 0) {
-                _oreg_auto_armed = true;
-            }
-            if (_oreg_auto_armed && actual_replace < denom) {
-                s = static_cast<float>(static_cast<double>(actual_replace) / denom);
-            }
-            const double live_after_replace =
-                static_cast<double>(current_active) + static_cast<double>(actual_replace);
-            if (_params->max_cap > 0 && iter >= effective_grow_until_iter() &&
-                (static_cast<double>(_params->max_cap) - live_after_replace) /
-                        static_cast<double>(_params->max_cap) >
-                    MRNF_OREG_AUTO_CAP_MARGIN) {
-                s = 0.0f;
-            }
-            _oreg_auto_factor = s;
-            if ((_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
-                LOG_INFO("MRNF oreg-auto iter={} replace={} s={} w={}",
-                         iter, actual_replace, s,
-                         static_cast<float>(_params->opacity_reg) * s);
-            }
-        }
-
         if (cfg_ratio_rank_on() &&
             (_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
             const int grow_sampled =
@@ -2654,22 +2057,9 @@ namespace lfs::training {
             LOG_INFO("MRNF pacing iter={} active={} desired={} windows_left={}",
                      iter, current_active, desired_total, pacing_windows_left);
         }
-        if (cand_density_fraction() > 0.0f &&
-            (_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
-            LOG_INFO("MRNF cand-density iter={} frac={} threshold={} candidates={}",
-                     iter, cand_density_fraction(), _cand_density_last_threshold,
-                     candidate_count);
-        }
-        // Round 20 experiment (R1): per-25-windows status of error-aware parents.
-        if (replace_err_mode() > 0 &&
-            (_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
-            LOG_INFO("MRNF replace-err mode={} replace={}",
-                     replace_err_mode(), actual_replace);
-        }
-
         Tensor explore_inds;
-        if (!split_topk_mode && iter < effective_grow_until_iter() && far_field_requested() &&
-            !far_explore_splits_disabled() && kExploreSplits > 0 && far_operators_active()) {
+        if (iter < effective_grow_until_iter() && far_field_requested() &&
+            kExploreSplits > 0 && far_operators_active()) {
             const int growth_count = (growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0);
             const int remaining_budget = std::max(0, budget - actual_replace - growth_count);
             int n_explore = std::min(starved_cadence_count(kExploreSplits), remaining_budget);
@@ -2706,68 +2096,6 @@ namespace lfs::training {
             }
         }
 
-        // Round 35 experiment (LFS_EXP_SPLIT_MODE=topk): uniform picks without
-        // replacement from the largest-scale cohort (seed+2 stream), disjoint
-        // from replacement and growth.
-        if (split_topk_mode && topk_reserved_explore > 0 && topk_cohort_mask.is_valid() &&
-            topk_cohort_mask.numel() == n) {
-            auto cohort_final = topk_cohort_mask;
-            if (growth_inds.is_valid() && growth_inds.numel() > 0) {
-                auto growth_mask = Tensor::zeros_bool({n}, Device::CUDA);
-                auto true_vals = Tensor::ones_bool({growth_inds.numel()}, Device::CUDA);
-                growth_mask.index_put_(growth_inds, true_vals);
-                cohort_final = topk_cohort_mask.logical_and(growth_mask.logical_not());
-            }
-            auto cohort_weights = cohort_final.to(DataType::Float32);
-            kernels::launch_packed_refine_counts(
-                nullptr, 0, nullptr, 0,
-                cohort_weights.ptr<float>(), n,
-                nullptr, 0,
-                _refine_counts_dev.ptr<int64_t>());
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                           4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-                "MRNF split-topk nnz D2H");
-            const int cohort_final_count = static_cast<int>(host_counts[2]);
-            const int growth_count_now =
-                growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0;
-            const int slack = std::max(0, budget - actual_replace - growth_count_now);
-            int n_explore = std::min({topk_reserved_explore, cohort_final_count, slack});
-            if (n_explore > 0) {
-                explore_inds = sample_gumbel_with_far_guard(
-                    cohort_weights, n_explore, seed + 2,
-                    static_cast<size_t>(cohort_final_count));
-                n_explore = explore_inds.is_valid() ? static_cast<int>(explore_inds.numel()) : 0;
-                LFS_COUNTER_ADD("strategy.mrnf.explore_split", n_explore);
-            }
-            if ((_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
-                float med_cam_radius_orbits = 0.0f;
-                if (explore_inds.is_valid() && explore_inds.numel() > 0 && _orbit_radius > 0.0f) {
-                    auto picked_means =
-                        _splat_data->means().index_select(0, explore_inds).cpu().contiguous();
-                    const size_t picked_n = static_cast<size_t>(picked_means.shape()[0]);
-                    std::vector<float> dists(picked_n);
-                    for (size_t i = 0; i < picked_n; ++i) {
-                        const float* p = picked_means.ptr<float>() + i * 3;
-                        const float dx = p[0] - _cam_centroid[0];
-                        const float dy = p[1] - _cam_centroid[1];
-                        const float dz = p[2] - _cam_centroid[2];
-                        dists[i] = std::sqrt(dx * dx + dy * dy + dz * dz);
-                    }
-                    if (picked_n > 0) {
-                        std::nth_element(dists.begin(),
-                                         dists.begin() + static_cast<std::ptrdiff_t>(picked_n / 2),
-                                         dists.end());
-                        med_cam_radius_orbits = dists[picked_n / 2] / _orbit_radius;
-                    }
-                }
-                LOG_INFO("MRNF split-topk iter={} cohort={} picked={} med_cam_radius_orbits={}",
-                         iter, cohort_final_count,
-                         explore_inds.is_valid() ? static_cast<int>(explore_inds.numel()) : 0,
-                         med_cam_radius_orbits);
-            }
-        }
-
         std::vector<Tensor> split_parts;
         if (replace_inds.is_valid() && replace_inds.numel() > 0) {
             split_parts.push_back(replace_inds);
@@ -2782,16 +2110,6 @@ namespace lfs::training {
             split_indices = split_parts[0];
         } else if (split_parts.size() > 1) {
             split_indices = Tensor::cat(split_parts, 0);
-        }
-
-        if (turnover_log_enabled()) {
-            const int grow_count =
-                growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0;
-            const int explore_count =
-                explore_inds.is_valid() ? static_cast<int>(explore_inds.numel()) : 0;
-            LOG_INFO("MRNF turnover iter={} active={} pruned={} budget={} replace={} grow={} explore={}",
-                     iter, current_active, pruned_count, budget, actual_replace,
-                     grow_count, explore_count);
         }
 
         if (!split_indices.is_valid() || split_indices.numel() == 0) {
@@ -2837,8 +2155,7 @@ namespace lfs::training {
             split_indices.ptr<int64_t>(),
             static_cast<int>(K),
             0,
-            nullptr,
-            las_iso_shrink_enabled());
+            nullptr);
 
         if (use_shN) {
             shN_swizzled_gather_to_linear_i64(
@@ -2889,28 +2206,18 @@ namespace lfs::training {
         publish_vram_attribution();
     }
 
-    // Round 20 experiment (R1): replacement parent sampling weights.
-    // Legacy (mode 0): opacity * (vis_count > 0) [* masks] [* edge].
-    // mode 1: legacy * _refine_weight_max (error mass of the window).
-    // mode 2: legacy * _refine_ratio_max (err/vis^p density; plain err/vis when
-    //         GROWTH_RATIO is off — the fold site arms the same buffer).
-    // mode 3: clamp(opacity/0.2, 0, 1) REPLACES the opacity factor, then the
-    //         mode-2 density multiply. Masks and edge guidance still apply.
     lfs::core::Tensor MRNF::build_replace_parent_weights(
         const size_t n,
         const lfs::core::Tensor& active_mask,
         const lfs::core::Tensor& trainable_mask,
         const lfs::core::Tensor& edge_guidance) const {
         using namespace lfs::core;
-        auto opacities = _splat_data->get_opacity();
-        if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
-            opacities = opacities.squeeze(-1);
 
         Tensor replace_weights;
-        const int err_mode = replace_err_mode();
-        if (err_mode == 3) {
-            replace_weights = (opacities / 0.2f).clamp(0.0f, 1.0f);
-        } else {
+        {
+            auto opacities = _splat_data->get_opacity();
+            if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
+                opacities = opacities.squeeze(-1);
             replace_weights = opacities * (_vis_count > 0.0f);
         }
         if (active_mask.is_valid()) {
@@ -2922,42 +2229,6 @@ namespace lfs::training {
         if (edge_guidance.is_valid()) {
             replace_weights = replace_weights * edge_guidance;
         }
-        if ((err_mode == 1 && _refine_weight_max.numel() == n) ||
-            (err_mode >= 2 && _refine_ratio_max.numel() == n)) {
-            const Tensor& error_factor =
-                err_mode == 1 ? _refine_weight_max : _refine_ratio_max;
-            replace_weights = replace_weights * error_factor;
-        } else if (err_mode > 0) {
-            LOG_WARN("MRNF replace-err: score buffer size mismatch (mode={} "
-                     "weight_n={} ratio_n={}) — falling back to legacy factor",
-                     err_mode, _refine_weight_max.numel(), _refine_ratio_max.numel());
-            if (err_mode == 3) {
-                // Rebuild with the legacy opacity factor for this window.
-                replace_weights = opacities * (_vis_count > 0.0f);
-                if (active_mask.is_valid()) {
-                    replace_weights = replace_weights * active_mask;
-                }
-                if (trainable_mask.is_valid()) {
-                    replace_weights = replace_weights * trainable_mask;
-                }
-                if (edge_guidance.is_valid()) {
-                    replace_weights = replace_weights * edge_guidance;
-                }
-            }
-        }
-
-        // Round 35 experiment (LFS_EXP_SEED_GRACE_ITERS): rows born within the
-        // grace span are excluded from the replacement (opacity-ranked eviction)
-        // candidate mask this window. The prune-by-min-opacity path is untouched.
-        const int grace_iters = seed_grace_iters();
-        if (grace_iters > 0 && _birth_iter.is_valid() &&
-            _birth_iter.numel() == n && _birth_iter.dtype() == DataType::Int32) {
-            const long long min_birth =
-                std::max<long long>(1, static_cast<long long>(_young_now_stamp_iter) -
-                                           grace_iters + 1);
-            replace_weights =
-                replace_weights.masked_fill(_birth_iter.ge(min_birth), 0.0f);
-        }
 
         // Stash into scratch so subsequent growth_weights path can reuse
         // the same physical buffer after replace stage is done.
@@ -2966,245 +2237,10 @@ namespace lfs::training {
         return w_view;
     }
 
-    // Round 20 experiment (R2): birth-iteration bookkeeping. The buffer follows
-    // _vis_count's lifecycle (initialize / post-refine resize / compact) EXCEPT
-    // it is never zeroed per window — existing rows keep their stamps.
-    void MRNF::ensure_young_birth_buffer(const size_t n) {
-        if (young_lr_windows() <= 0 && !pace_auto_enabled() && seed_grace_iters() <= 0) {
-            return;
-        }
-        const auto device = _splat_data->means().device();
-        const size_t tracking_capacity =
-            _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
-
-        auto resize_int32 = [&](lfs::core::Tensor& tensor) {
-            const size_t desired_capacity =
-                tracking_capacity > 0 ? std::max(tracking_capacity, n) : n;
-            const bool wrong_shape = !tensor.is_valid() || tensor.ndim() != 1 ||
-                                     tensor.dtype() != lfs::core::DataType::Int32 ||
-                                     tensor.device() != device;
-            if (wrong_shape) {
-                if (desired_capacity > n) {
-                    tensor = lfs::core::Tensor::zeros_direct(
-                        lfs::core::TensorShape({n}), desired_capacity, device,
-                        lfs::core::DataType::Int32);
-                } else {
-                    tensor = lfs::core::Tensor::zeros({n}, device, lfs::core::DataType::Int32);
-                }
-                return;
-            }
-            const size_t current_size = tensor.numel();
-            if (current_size == n) {
-                if (desired_capacity > n && tensor.capacity() < desired_capacity) {
-                    tensor.reserve(desired_capacity);
-                }
-                return; // births persist
-            }
-            if (current_size < n) {
-                if (tensor.capacity() < desired_capacity) {
-                    tensor.reserve(desired_capacity);
-                }
-                tensor.append_zeros(n - current_size); // new rows birth=0
-                return;
-            }
-            // Shrink happens only via compact_splats; a raw shrink here would
-            // drop rows, so rebuild only on genuine over-size.
-            tensor = lfs::core::Tensor::zeros({n}, device, lfs::core::DataType::Int32);
-        };
-
-        resize_int32(_birth_iter);
-    }
-
-    void MRNF::stamp_births(const lfs::core::Tensor& indices) {
-        if ((young_lr_windows() <= 0 && !pace_auto_enabled() && seed_grace_iters() <= 0) ||
-            !indices.is_valid() || indices.numel() == 0 ||
-            !_birth_iter.is_valid()) {
-            return;
-        }
-        mrnf_strategy::launch_stamp_birth_iterations(
-            _birth_iter.ptr<int32_t>(),
-            indices.ptr<int64_t>(),
-            static_cast<size_t>(indices.numel()),
-            _young_now_stamp_iter);
-    }
-
-    // Pushes the current young-LR state into the optimizer. Called from
-    // MRNF::step(iter) before every Adam pass (exact age check for that step)
-    // and right after any birth-buffer reassignment (pointer freshness).
-    void MRNF::publish_young_lr_state(const int iter) {
-        if (!_optimizer) {
-            return;
-        }
-        if (young_lr_windows() <= 0 || !_birth_iter.is_valid() ||
-            _young_fill_iter < 0 ||
-            _birth_iter.numel() != static_cast<size_t>(_splat_data->size())) {
-            _optimizer->set_young_lr_means(nullptr, 0, 0, 0, 1.0f, young_lr_cap());
-            return;
-        }
-        const long long span =
-            static_cast<long long>(young_lr_windows()) *
-            std::max(1, static_cast<int>(_params->refine_every));
-        const long long min_birth =
-            static_cast<long long>(iter) - span + 1; // age < windows*refine_every
-        _optimizer->set_young_lr_means(
-            _birth_iter.ptr<int32_t>(),
-            static_cast<int>(_birth_iter.numel()),
-            _young_fill_iter,
-            static_cast<int>(std::max<long long>(0, min_birth)),
-            static_cast<float>(_mean_lr_gamma),
-            young_lr_cap());
-    }
-
-    // Round 22 experiment (Rule P): [N,3] float copy of means as of the previous
-    // window end. Lifecycle mirrors the birth buffer (initialize / post-refine
-    // reconcile / compact) but the content is fully refreshed after every refine
-    // window, so appended rows enter with their creation position and reused
-    // free slots are re-baselined by the next refresh.
-    void MRNF::ensure_pace_prev_means(const size_t n) {
-        if (!pace_auto_enabled() || n == 0) {
-            return;
-        }
-        const auto device = _splat_data->means().device();
-        const size_t tracking_capacity =
-            _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
-        const bool wrong_shape = !_pace_prev_means.is_valid() ||
-                                 _pace_prev_means.ndim() != 2 ||
-                                 _pace_prev_means.shape()[1] != 3 ||
-                                 _pace_prev_means.shape()[0] != n ||
-                                 _pace_prev_means.device() != device;
-        if (wrong_shape) {
-            const size_t desired_capacity =
-                tracking_capacity > n ? std::max(tracking_capacity, n) : n;
-            if (desired_capacity > n) {
-                _pace_prev_means = lfs::core::Tensor::zeros_direct(
-                    lfs::core::TensorShape({n, 3}), desired_capacity, device,
-                    lfs::core::DataType::Float32);
-            } else {
-                _pace_prev_means = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({n, 3}), device,
-                    lfs::core::DataType::Float32);
-            }
-        } else {
-            const size_t desired_capacity =
-                tracking_capacity > n ? std::max(tracking_capacity, n) : n;
-            if (desired_capacity > n && _pace_prev_means.capacity() < desired_capacity) {
-                _pace_prev_means.reserve(desired_capacity);
-            }
-        }
-    }
-
-    void MRNF::refresh_pace_prev_means() {
-        using namespace lfs::core;
-        if (!pace_auto_enabled()) {
-            return;
-        }
-        const Tensor means = _splat_data->means();
-        const size_t n = means.ndim() == 2 ? static_cast<size_t>(means.shape()[0]) : 0;
-        ensure_pace_prev_means(n);
-        if (_pace_prev_means.is_valid() &&
-            _pace_prev_means.shape()[0] == n && _pace_prev_means.shape()[1] == 3) {
-            _pace_prev_means.copy_(means);
-        }
-    }
-
-    // Round 22 experiment (Rule P): median over live rows born within the last
-    // MRNF_PACE_AUTO_YOUNG_WINDOWS refine windows of
-    // ||means_now - means_prev_window|| / current_global_means_lr. Rows without a
-    // snapshot yet return 0 (vacuously settled), so pressure alone decides.
-    float MRNF::compute_young_dispersion(const int iter, const size_t n) {
-        using namespace lfs::core;
-        if (n == 0 ||
-            !_pace_prev_means.is_valid() || _pace_prev_means.ndim() != 2 ||
-            _pace_prev_means.shape()[0] != n || _pace_prev_means.shape()[1] != 3 ||
-            !_birth_iter.is_valid() || _birth_iter.numel() != n) {
-            return 0.0f;
-        }
-        const double lr_now =
-            _mean_lr_unscaled *
-            (_bounds_valid ? static_cast<double>(_bounds.median_size) : 1.0);
-        if (!(lr_now > 0.0) || !std::isfinite(lr_now)) {
-            return 0.0f;
-        }
-        const long long span =
-            static_cast<long long>(MRNF_PACE_AUTO_YOUNG_WINDOWS) *
-            std::max(1, static_cast<int>(_params->refine_every));
-        const int min_birth = static_cast<int>(
-            std::max<long long>(1, static_cast<long long>(iter) - span + 1));
-        auto young = _birth_iter.ge(min_birth);
-        if (_free_mask.is_valid() && _free_mask.numel() >= n) {
-            young = young.logical_and(_free_mask.slice(0, 0, n).logical_not());
-        }
-        // Far-masked rows step up to 300x the global means LR (per-splat ratio), so their
-        // LR-normalized displacement is not comparable; the settlement signal is about young
-        // rows inside the hull.
-        if (_far_field_mask.is_valid() && _far_field_mask.numel() >= n &&
-            _far_field_mask.dtype() == DataType::Bool) {
-            young = young.logical_and(_far_field_mask.slice(0, 0, n).logical_not());
-        }
-        auto delta = _splat_data->means().sub(_pace_prev_means);
-        auto disp = delta.mul(delta).sum(1).sqrt().div(
-            static_cast<float>(lr_now));
-        auto values = disp.masked_select(young);
-        float median = 0.0f;
-        if (values.is_valid() && values.numel() > 0 && values.dtype() == DataType::Float32) {
-            mrnf_strategy::launch_sorted_median(
-                values.ptr<float>(), values.numel(), &median, &_median_scratch);
-        }
-        return median;
-    }
-
     lfs::core::Tensor MRNF::compute_refine_candidates() const {
         using namespace lfs::core;
-        // Round 17 experiment (LFS_EXP_CAND_DENSITY): error-density candidacy. The
-        // mass threshold is NOT applied; candidates are the top density fraction of
-        // the trainable, active, visible rows. Density per row is _refine_ratio_max
-        // (per-window max of err/vis^p when GROWTH_RATIO is on, plain err/vis
-        // otherwise — see the fold site).
-        const float density_frac = cand_density_fraction();
-        if (!(density_frac > 0.0f)) {
-            auto candidate_weights = apply_crop_damping_to_scores(*_optimizer, _refine_weight_max);
-            return (candidate_weights > _params->growth_grad_threshold) && (_vis_count > 0.0f);
-        }
-
-        _cand_density_last_threshold = 0.0f;
-        const size_t n = static_cast<size_t>(_splat_data->size());
-        if (_refine_ratio_max.numel() != n || _vis_count.numel() != n ||
-            n == 0) {
-            auto candidate_weights = apply_crop_damping_to_scores(*_optimizer, _refine_weight_max);
-            return (candidate_weights > _params->growth_grad_threshold) && (_vis_count > 0.0f);
-        }
-
-        auto eligible = _vis_count > 0.0f;
-        if (_free_mask.is_valid() && _free_mask.numel() >= n) {
-            eligible = eligible.logical_and(_free_mask.slice(0, 0, n).logical_not());
-        }
-        if (auto trainable_mask = make_trainable_mask(*_splat_data, n, _splat_data->means().device());
-            trainable_mask.is_valid()) {
-            eligible = eligible.logical_and(trainable_mask);
-        }
-        // grow_and_split ANDs active/trainable masks again; that path is untouched.
-
-        auto elig_inds = eligible.nonzero().squeeze(-1);
-        const long long elig_count = static_cast<long long>(elig_inds.numel());
-        if (elig_count == 0) {
-            return Tensor::zeros_bool({n}, Device::CUDA);
-        }
-
-        auto densities = _refine_ratio_max.index_select(0, elig_inds).contiguous();
-        const long long kth =
-            std::max<long long>(1, std::llround(static_cast<double>(density_frac) *
-                                                static_cast<double>(elig_count)));
-        float threshold = 0.0f;
-        mrnf_strategy::launch_kth_largest_value(
-            densities.ptr<float>(),
-            static_cast<size_t>(elig_count),
-            static_cast<size_t>(kth),
-            &threshold);
-        _cand_density_last_threshold = threshold;
-
-        // Rows at the threshold value are included (ties keep >= semantics);
-        // deterministic because the sort is a total order on bits.
-        return eligible.logical_and(_refine_ratio_max >= threshold);
+        auto candidate_weights = apply_crop_damping_to_scores(*_optimizer, _refine_weight_max);
+        return (candidate_weights > _params->growth_grad_threshold) && (_vis_count > 0.0f);
     }
 
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {
@@ -3425,20 +2461,6 @@ namespace lfs::training {
             compact(_refine_ratio_max);
         if (_vis_count.is_valid() && _vis_count.numel() > new_size)
             compact(_vis_count);
-        // Round 20 experiment (R2): births follow the same gather (persist).
-        if (_birth_iter.is_valid() && _birth_iter.numel() > new_size)
-            compact(_birth_iter);
-        // Round 22 experiment (Rule P): prev-window means follow the same gather
-        // so row identity survives compaction between refreshes.
-        if (_pace_prev_means.is_valid() &&
-            _pace_prev_means.numel() > new_size * 3)
-            compact(_pace_prev_means);
-        // Compaction reallocated the buffer — re-point the optimizer state.
-        if (young_lr_windows() > 0) {
-            publish_young_lr_state(_young_now_stamp_iter);
-        }
-        if (_place_cooldown.is_valid() && _place_cooldown.numel() > new_size)
-            compact(_place_cooldown);
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
             compact(_precomputed_edge_scores);
         if (_explore_score_sum.is_valid() && _explore_score_sum.numel() > new_size)
@@ -3478,7 +2500,7 @@ namespace lfs::training {
 
         const float train_t = static_cast<float>(iter) / static_cast<float>(_params->iterations);
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
-        const bool scale_far = far_field_requested() && !far_decay_disabled() &&
+        const bool scale_far = far_field_requested() &&
                                _camera_hull_valid && kFarDecayScale != 1.0f;
         if (scale_far) {
             refresh_far_field_mask(n);
@@ -3707,9 +2729,6 @@ namespace lfs::training {
 
         set_deleted_mask_rows(*_splat_data, _free_mask, target_indices, false);
 
-        // Round 20 experiment (R2): refilled slots are new births.
-        stamp_births(target_indices);
-
         return {target_indices, count - slots_to_fill};
     }
 
@@ -3823,24 +2842,12 @@ namespace lfs::training {
             apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
         }
 
-        // Round 20 experiment (R2): appended rows are new births. The birth
-        // buffer is grown here (not at window end) so the stamp stays in bounds.
-        // Round 22 (Rule P): same stamps feed young_dispersion row age.
-        if ((young_lr_windows() > 0 || pace_auto_enabled() || seed_grace_iters() > 0) &&
-            _birth_iter.is_valid()) {
-            ensure_young_birth_buffer(old_size + n_append);
-            mrnf_strategy::launch_stamp_birth_iterations_range(
-                _birth_iter.ptr<int32_t>(),
-                static_cast<int64_t>(old_size),
-                n_append,
-                _young_now_stamp_iter);
-        }
         return n_append;
     }
 
     void MRNF::seed_from_view(int iter, const RenderOutput& render_output) {
         using namespace lfs::core;
-        if (!far_field_requested() || far_seeds_disabled() || kExploreSeeds <= 0 ||
+        if (!far_field_requested() || kExploreSeeds <= 0 ||
             iter >= effective_grow_until_iter() ||
             !_camera_hull_valid || !_bounds_valid) {
             return;
@@ -3911,9 +2918,6 @@ namespace lfs::training {
         const int remaining_budget = (_params->max_cap > 0)
                                          ? std::max(0, _params->max_cap - static_cast<int>(active_count()))
                                          : static_cast<int>(std::min(hw, static_cast<size_t>(INT_MAX)));
-        // Round 17 experiment (LFS_EXP_SEED_DOSE): when set, n_seed per window is
-        // that value (still subject to remaining budget / far-growth reservation
-        // below); unset keeps today's starved kExploreSeeds path.
         const int dose_seeds = cfg_seed_dose();
         const int requested_cadence =
             dose_seeds > 0 ? dose_seeds : starved_cadence_count(kExploreSeeds);
@@ -4020,105 +3024,6 @@ namespace lfs::training {
                                       ? std::max(0, _far_growth.reserved_for_seeds)
                                       : n_seed;
 
-        // Round 35 experiment (LFS_EXP_SEED_LADDER): a fixed share of each
-        // window's seeds draws depth log-uniformly in [2R, bbox-sphere exit]
-        // (alpha <= 0.5 pixels only); far rows land beyond 2R so they are
-        // charged against the existing far reservation accounting above.
-        const bool ladder_on = seed_ladder_enabled();
-        int far_ladder_remaining =
-            ladder_on
-                ? static_cast<int>(std::lround(
-                      static_cast<double>(seed_ladder_share()) * static_cast<double>(n_seed)))
-                : 0;
-        long long kept_lt2r = 0;
-        long long kept_2to4r = 0;
-        long long kept_gt4r = 0;
-
-        // Round 17 experiment (LFS_EXP_SEED_BOUNDED): compactness context built
-        // once per window — a deterministic stride subsample of at most 200k live
-        // rows feeds the merge-code kNN helper plus the median live splat extent.
-        const bool bounded_seeds = seed_bounded_enabled();
-        long long rejected_far = 0;
-        long long rejected_lonely = 0;
-        Tensor bounded_means_sub;
-        Tensor bounded_scales_sub;
-        MergePointCloudAdaptor loneliness_adaptor{};
-        std::unique_ptr<MergeKDTree> loneliness_tree;
-        float lonely_limit = 0.0f;
-        // Row count of the per-window subsample the kNN tree was built from;
-        // hoisted so the seed loop's bounds check can see it.
-        size_t loneliness_subsample_n = 0;
-        if (bounded_seeds) {
-            auto live_inds = get_active_indices();
-            const size_t live_total = static_cast<size_t>(live_inds.numel());
-            const long long stride =
-                live_total > 0
-                    ? std::max<long long>(
-                          1,
-                          static_cast<long long>(
-                              (live_total + MRNF_SEED_KNN_SUBSAMPLE_MAX - 1) /
-                              MRNF_SEED_KNN_SUBSAMPLE_MAX))
-                    : 1;
-            auto take = live_total > 0
-                            ? Tensor::arange(
-                                  0.0f,
-                                  static_cast<float>(live_total),
-                                  static_cast<float>(stride))
-                                  .to(DataType::Int64)
-                            : Tensor{};
-            const size_t subsample_n = take.is_valid() ? static_cast<size_t>(take.numel()) : 0;
-            loneliness_subsample_n = subsample_n;
-            if (subsample_n > 0) {
-                auto sel = live_inds.index_select(0, take);
-                bounded_means_sub =
-                    _splat_data->means().index_select(0, sel).cpu().contiguous();
-                bounded_scales_sub =
-                    _splat_data->scaling_raw().index_select(0, sel).cpu().contiguous();
-
-                // Median geomean extent over the subsample (positive rows,
-                // sorted[c/2] convention like store_positive_median_kernel).
-                std::vector<float> pos_extents(subsample_n);
-                size_t pos_count = 0;
-                for (size_t s_i = 0; s_i < subsample_n; ++s_i) {
-                    const float ext = geomean_extent(bounded_scales_sub.ptr<float>() + s_i * 3);
-                    if (std::isfinite(ext) && ext > 0.0f) {
-                        pos_extents[pos_count++] = ext;
-                    }
-                }
-                if (pos_count > 0) {
-                    std::nth_element(pos_extents.begin(),
-                                     pos_extents.begin() + static_cast<std::ptrdiff_t>(pos_count / 2),
-                                     pos_extents.begin() + static_cast<std::ptrdiff_t>(pos_count));
-                    const float median_extent = pos_extents[pos_count / 2];
-                    if (median_extent > 0.0f) {
-                        lonely_limit = MRNF_SEED_LONELY_MEDIAN_FACTOR * median_extent;
-                    }
-                }
-
-                loneliness_adaptor = {bounded_means_sub.ptr<float>(), subsample_n};
-                loneliness_tree = std::make_unique<MergeKDTree>(
-                    3, loneliness_adaptor, nanoflann::KDTreeSingleIndexAdaptorParams(10));
-                loneliness_tree->buildIndex();
-            }
-        }
-        auto log_bounded_seeds = [&]() {
-            if (!bounded_seeds ||
-                (_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) != 1) {
-                return;
-            }
-            LOG_INFO("MRNF bounded-seeds iter={} requested={} placed={} "
-                     "rejected_far={} rejected_lonely={}",
-                     iter, n_seed, kept, rejected_far, rejected_lonely);
-        };
-        auto log_seed_ladder = [&]() {
-            if (!ladder_on ||
-                (_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) != 1) {
-                return;
-            }
-            LOG_INFO("MRNF seed-ladder iter={} lt2R={} mid2to4R={} gt4R={}",
-                     iter, kept_lt2r, kept_2to4r, kept_gt4r);
-        };
-
         for (int i = 0; i < n_seed; ++i) {
             const int64_t pix = pix_ptr[i];
             if (pix < 0 || static_cast<size_t>(pix) >= hw) {
@@ -4136,69 +3041,18 @@ namespace lfs::training {
             } else if (cfg_seed_far_on() && _orbit_radius > 0.0f) {
                 d_lo = std::max(d_lo, kFarMaskOrbits * _orbit_radius);
             }
-
-            // Round 17 experiment (LFS_EXP_SEED_BOUNDED): clamp the far depth to
-            // the ray's exit from the population-bounds sphere (center
-            // _bounds.center, radius _bounds.max_extent); skip pixels whose ray
-            // misses the sphere entirely. d_lo keeps today's semantics (SEED_FAR
-            // still applies to alpha <= 0.5 pixels).
-            // Round 35 experiment (LFS_EXP_SEED_LADDER): d_far = min(d_hi,
-            // bbox-sphere exit) is computed for every row regardless of
-            // SEED_BOUNDED; a ray that misses the sphere folds its far slot back
-            // to the legacy sampler via the compact guard below (d_far <= 2R).
-            float d_hi_eff = d_hi;
-            float d_far = d_hi;
-            if (bounded_seeds || ladder_on) {
-                const float dir_x = R[0] * u + R[3] * v + R[6];
-                const float dir_y = R[1] * u + R[4] * v + R[7];
-                const float dir_z = R[2] * u + R[5] * v + R[8];
-                const float ox = cam_pos[0] - _bounds.center[0];
-                const float oy = cam_pos[1] - _bounds.center[1];
-                const float oz = cam_pos[2] - _bounds.center[2];
-                const float qa = dir_x * dir_x + dir_y * dir_y + dir_z * dir_z;
-                const float qb = dir_x * ox + dir_y * oy + dir_z * oz;
-                const float qc =
-                    ox * ox + oy * oy + oz * oz - _bounds.max_extent * _bounds.max_extent;
-                const float disc = qb * qb - qa * qc;
-                const float t_exit = disc > 0.0f ? (-qb + std::sqrt(disc)) / qa : -1.0f;
-                d_far = std::min(d_hi, t_exit);
-                if (bounded_seeds) {
-                    if (!(t_exit > 0.0f)) {
-                        ++rejected_far;
-                        continue;
-                    }
-                    d_hi_eff = std::min(d_hi_eff, t_exit);
-                }
-            }
-            if (!(d_lo > 0.0f) || !(d_hi_eff > d_lo) || !std::isfinite(d_lo) ||
-                !std::isfinite(d_hi_eff)) {
-                if (bounded_seeds && d_hi > d_lo && d_lo > 0.0f && std::isfinite(d_lo)) {
-                    ++rejected_far;
-                }
+            if (!(d_lo > 0.0f) || !(d_hi > d_lo) || !std::isfinite(d_lo) ||
+                !std::isfinite(d_hi)) {
                 continue;
             }
 
-            const float inv_hi = 1.0f / d_hi_eff;
+            const float inv_hi = 1.0f / d_hi;
             const float inv_lo = 1.0f / d_lo;
-            float t = 0.0f;
-            bool ladder_far_row = false;
-            if (ladder_on && far_ladder_remaining > 0 && a_p <= 0.5f) {
-                const float lo_far = std::max(d_lo, kFarMaskOrbits * _orbit_radius);
-                if (d_far > lo_far) {
-                    const float ladder_u = unit(rng);
-                    t = std::exp(std::log(lo_far) +
-                                 ladder_u * (std::log(d_far) - std::log(lo_far)));
-                    --far_ladder_remaining;
-                    ladder_far_row = true;
-                }
+            const float inv_t = inv_hi + unit(rng) * (inv_lo - inv_hi);
+            if (!(inv_t > 0.0f) || !std::isfinite(inv_t)) {
+                continue;
             }
-            if (!ladder_far_row) {
-                const float inv_t = inv_hi + unit(rng) * (inv_lo - inv_hi);
-                if (!(inv_t > 0.0f) || !std::isfinite(inv_t)) {
-                    continue;
-                }
-                t = 1.0f / inv_t;
-            }
+            const float t = 1.0f / inv_t;
             const float pcam_x = u * t;
             const float pcam_y = v * t;
             const float pcam_z = t;
@@ -4207,36 +3061,6 @@ namespace lfs::training {
             const float wz = R[2] * pcam_x + R[5] * pcam_y + R[8] * pcam_z + cam_pos[2];
             if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) {
                 continue;
-            }
-
-            // Round 17 experiment (LFS_EXP_SEED_BOUNDED): compactness check —
-            // reject a seed whose nearest live splat (k=1 over the per-window
-            // subsample tree) is farther than 3x the median live extent.
-            // Round 35 experiment (LFS_EXP_SEED_LADDER): skipped for rows placed
-            // beyond the far mask orbit radius while the ladder is armed.
-            if (loneliness_tree && lonely_limit > 0.0f &&
-                !(ladder_on && t > kFarMaskOrbits * _orbit_radius)) {
-                nanoflann::KNNResultSet<float> nn_result(1);
-                size_t nn_index = 0;
-                float nn_dist_sq = 0.0f;
-                nn_result.init(&nn_index, &nn_dist_sq);
-                const float query[3] = {wx, wy, wz};
-                loneliness_tree->findNeighbors(
-                    nn_result, query, nanoflann::SearchParameters());
-                float limit = lonely_limit;
-                if (seed_local_factor() > 0.0f && nn_result.size() > 0 &&
-                    nn_index < loneliness_subsample_n) {
-                    // Scale-robust variant: the admissible radius is k x the extent of the
-                    // seed's OWN nearest splat, not a global median.
-                    const float local_ext =
-                        geomean_extent(bounded_scales_sub.ptr<float>() + nn_index * 3);
-                    if (std::isfinite(local_ext) && local_ext > 0.0f)
-                        limit = seed_local_factor() * local_ext;
-                }
-                if (nn_result.size() > 0 && std::sqrt(nn_dist_sq) > limit) {
-                    ++rejected_lonely;
-                    continue;
-                }
             }
 
             const float far_dx = wx - _cam_centroid[0];
@@ -4268,21 +3092,9 @@ namespace lfs::training {
             if (outside) {
                 ++outside_kept;
             }
-            if (ladder_on) {
-                const float two_r = kFarMaskOrbits * _orbit_radius;
-                if (t < two_r) {
-                    ++kept_lt2r;
-                } else if (t < 2.0f * two_r) {
-                    ++kept_2to4r;
-                } else {
-                    ++kept_gt4r;
-                }
-            }
         }
 
         if (kept == 0) {
-            log_bounded_seeds();
-            log_seed_ladder();
             return;
         }
 
@@ -4306,686 +3118,6 @@ namespace lfs::training {
         _far_growth.outside_used += outside_kept;
         _far_growth.reserved_for_seeds = 0;
         LFS_COUNTER_ADD("strategy.mrnf.explore_seed", kept);
-        log_bounded_seeds();
-        log_seed_ladder();
-    }
-
-    bool MRNF::placement_active() const {
-        if (!place_enabled()) {
-            return false;
-        }
-        const int mode = place_errmap_mode();
-        return mode == 2 || mode == 3;
-    }
-
-    void MRNF::ensure_place_cooldown(size_t n) {
-        using namespace lfs::core;
-        if (n == 0) {
-            return;
-        }
-        const size_t tracking_capacity =
-            _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : n;
-        if (!_place_cooldown.is_valid() ||
-            _place_cooldown.dtype() != DataType::Int32 ||
-            _place_cooldown.device() != Device::CUDA) {
-            _place_cooldown = Tensor::zeros(
-                {std::max(n, tracking_capacity)}, Device::CUDA, DataType::Int32);
-            return;
-        }
-        if (_place_cooldown.numel() < n) {
-            auto grown = Tensor::zeros(
-                {std::max(n, tracking_capacity)}, Device::CUDA, DataType::Int32);
-            if (_place_cooldown.numel() > 0) {
-                grown.slice(0, 0, _place_cooldown.numel()).copy_(_place_cooldown);
-            }
-            _place_cooldown = std::move(grown);
-        }
-    }
-
-    void MRNF::tick_place_cooldown() {
-        using namespace lfs::core;
-        if (_place_cooldown.is_valid() && _place_cooldown.numel() > 0) {
-            _place_cooldown = (_place_cooldown - 1).clamp_min(0);
-        }
-    }
-
-    void MRNF::merge_redundant_pairs(int iter) {
-        LOG_TIMER("MRNF::merge_redundant_pairs");
-        using namespace lfs::core;
-        const int permille = merge_permille_per_window();
-        const int max_cap = _params ? _params->max_cap : 0;
-        if (!_splat_data || !_optimizer || !_bounds_valid || permille <= 0 || max_cap <= 0 ||
-            iter >= static_cast<int>(_params->stop_refine) ||
-            static_cast<double>(active_count()) < 0.98 * static_cast<double>(max_cap)) {
-            return;
-        }
-
-        const size_t n = static_cast<size_t>(_splat_data->size());
-        if (n < 2 || _free_mask.numel() < n) {
-            return;
-        }
-        if (!_far_field_mask.is_valid() || _far_field_mask.numel() < n) {
-            // Spec anchors candidate rows to the camera-hull far-field mask.
-            ++_merge_window_count;
-            if ((_merge_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
-                LOG_INFO("MRNF merge iter={} pairs={} freed={}", iter, 0, 0);
-            }
-            return;
-        }
-
-        // Candidate eligibility: live trainable rows inside the camera hull
-        // (NOT far), excluding frozen rows and rows under P4 cooldown.
-        auto eligible = Tensor::ones_bool({n}, Device::CUDA);
-        eligible = eligible.logical_and(_far_field_mask.slice(0, 0, n).logical_not());
-        eligible = eligible.logical_and(_free_mask.slice(0, 0, n).logical_not());
-        auto trainable_mask = make_trainable_mask(*_splat_data, n, Device::CUDA);
-        if (trainable_mask.is_valid() && trainable_mask.numel() == n) {
-            eligible = eligible.logical_and(trainable_mask);
-        }
-        eligible = exclude_frozen_from_mask(*_splat_data, eligible);
-        ensure_place_cooldown(n);
-        if (_place_cooldown.is_valid() && _place_cooldown.numel() >= n &&
-            _place_cooldown.dtype() == DataType::Int32) {
-            auto cool_ok = _place_cooldown.slice(0, 0, n).le(static_cast<float>(0.5f));
-            if (cool_ok.is_valid() && cool_ok.numel() == n &&
-                cool_ok.dtype() == DataType::Bool) {
-                eligible = eligible.logical_and(cool_ok);
-            }
-        }
-
-        const int64_t live_candidates =
-            eligible.to(DataType::Int32).sum().item<int>();
-        const size_t C = static_cast<size_t>(std::max<int64_t>(0, live_candidates));
-        if (C < 2) {
-            return;
-        }
-
-        auto cand_inds = eligible.nonzero().squeeze(-1); // Int64 [C]
-        auto means_c_t = _splat_data->means().index_select(0, cand_inds).cpu().contiguous();
-        auto scales_c_t = _splat_data->scaling_raw().index_select(0, cand_inds).cpu().contiguous();
-        auto sh0_c_t = _splat_data->sh0()
-                           .index_select(0, cand_inds)
-                           .reshape({static_cast<int64_t>(C), 3})
-                           .cpu()
-                           .contiguous();
-        auto opac_c_t = _splat_data->get_opacity();
-        if (opac_c_t.ndim() == 2 && opac_c_t.shape()[1] == 1) {
-            opac_c_t = opac_c_t.squeeze(-1);
-        }
-        opac_c_t = opac_c_t.index_select(0, cand_inds).cpu().contiguous();
-
-        const float* means_h = means_c_t.ptr<float>();
-        const float* scales_h = scales_c_t.ptr<float>();
-        const float* sh0_h = sh0_c_t.ptr<float>();
-        const float* opa_h = opac_c_t.ptr<float>();
-
-        struct MergePair {
-            float score;
-            int32_t i;
-            int32_t j;
-        };
-
-        MergePointCloudAdaptor adaptor{means_h, C};
-        MergeKDTree tree(3, adaptor, nanoflann::KDTreeSingleIndexAdaptorParams(10));
-        tree.buildIndex();
-
-        std::vector<MergePair> pairs;
-        std::vector<float> extent(C);
-        for (size_t c = 0; c < C; ++c) {
-            extent[c] = geomean_extent(scales_h + c * 3);
-        }
-
-        size_t ret_indices[2];
-        float ret_dist_sqr[2];
-        for (size_t ci = 0; ci < C; ++ci) {
-            nanoflann::KNNResultSet<float> result_set(2);
-            result_set.init(ret_indices, ret_dist_sqr);
-            tree.findNeighbors(result_set, &means_h[ci * 3], nanoflann::SearchParameters());
-            int best_j = -1;
-            float best_d2 = std::numeric_limits<float>::infinity();
-            for (size_t r = 0; r < result_set.size(); ++r) {
-                if (ret_indices[r] == ci || ret_dist_sqr[r] <= 1e-12f) {
-                    continue; // self or colocated duplicate
-                }
-                best_j = static_cast<int>(ret_indices[r]);
-                best_d2 = ret_dist_sqr[r];
-                break;
-            }
-            if (best_j < 0) {
-                continue;
-            }
-            const float dist = std::sqrt(best_d2);
-            const float min_ext = std::min(extent[ci], extent[best_j]);
-            if (!(min_ext > 0.0f) || !(dist < 0.5f * min_ext)) {
-                continue;
-            }
-            const float sh0_dx = sh0_h[ci * 3 + 0] - sh0_h[best_j * 3 + 0];
-            const float sh0_dy = sh0_h[ci * 3 + 1] - sh0_h[best_j * 3 + 1];
-            const float sh0_dz = sh0_h[ci * 3 + 2] - sh0_h[best_j * 3 + 2];
-            const float color_dist =
-                std::sqrt(sh0_dx * sh0_dx + sh0_dy * sh0_dy + sh0_dz * sh0_dz);
-            if (!(color_dist < MRNF_MERGE_SH0_MAX_DIST)) {
-                continue;
-            }
-            const float ratio = extent[ci] / extent[best_j];
-            if (!(ratio <= MRNF_MERGE_SCALE_RATIO_MAX) ||
-                !(ratio >= 1.0f / MRNF_MERGE_SCALE_RATIO_MAX)) {
-                continue;
-            }
-            const float overlap_factor = 1.0f - dist / (0.5f * min_ext);
-            pairs.push_back({opa_h[ci] * opa_h[best_j] * overlap_factor,
-                             static_cast<int32_t>(ci),
-                             static_cast<int32_t>(best_j)});
-        }
-
-        // Deterministic greedy disjoint selection: total order on
-        // (score desc, i asc, j asc); each row joins at most one pair.
-        std::sort(pairs.begin(), pairs.end(), [](const MergePair& a, const MergePair& b) {
-            if (a.score != b.score) {
-                return a.score > b.score;
-            }
-            if (a.i != b.i) {
-                return a.i < b.i;
-            }
-            return a.j < b.j;
-        });
-        const long long want_pairs =
-            std::min<long long>(static_cast<long long>(pairs.size()),
-                                static_cast<long long>(max_cap) *
-                                    static_cast<long long>(permille) / 1000);
-        std::vector<uint8_t> used(C, 0);
-        std::vector<MergePair> chosen;
-        chosen.reserve(static_cast<size_t>(std::max<long long>(0, want_pairs)));
-        for (const MergePair& p : pairs) {
-            if (static_cast<long long>(chosen.size()) >= want_pairs) {
-                break;
-            }
-            if (used[p.i] || used[p.j]) {
-                continue;
-            }
-            used[p.i] = 1;
-            used[p.j] = 1;
-            chosen.push_back(p);
-        }
-
-        if (!chosen.empty()) {
-            // Apply merges: j into i. Opacity composites as 1-(1-a)(1-b),
-            // per-axis scale takes the max, position and SH0 are opacity-weighted
-            // means; rotation and shN keep i's values implicitly (only i's row is
-            // rewritten).
-            auto cand_ids_cpu = cand_inds.cpu().contiguous();
-            const int64_t* cand_ids = cand_ids_cpu.ptr<int64_t>();
-            const size_t P = chosen.size();
-            std::vector<float> new_means(3 * P);
-            std::vector<float> new_scales(3 * P);
-            std::vector<float> new_sh0(3 * P);
-            std::vector<float> new_opac_raw(P);
-            std::vector<int> keep_ids(P);
-            std::vector<int> free_ids(P);
-            for (size_t k = 0; k < P; ++k) {
-                const int32_t ci = chosen[k].i;
-                const int32_t cj = chosen[k].j;
-                const float oi = opa_h[ci];
-                const float oj = opa_h[cj];
-                const float w_sum = std::max(oi + oj, std::numeric_limits<float>::epsilon());
-                for (int axis = 0; axis < 3; ++axis) {
-                    new_means[k * 3 + axis] =
-                        (oi * means_h[ci * 3 + axis] + oj * means_h[cj * 3 + axis]) / w_sum;
-                    new_scales[k * 3 + axis] =
-                        std::log(std::max(std::exp(scales_h[ci * 3 + axis]),
-                                          std::exp(scales_h[cj * 3 + axis])));
-                    new_sh0[k * 3 + axis] =
-                        (oi * sh0_h[ci * 3 + axis] + oj * sh0_h[cj * 3 + axis]) / w_sum;
-                }
-                const float merged_opacity = 1.0f - (1.0f - oi) * (1.0f - oj);
-                new_opac_raw[k] = logit_clamped(merged_opacity);
-                keep_ids[k] = static_cast<int>(cand_ids[ci]);
-                free_ids[k] = static_cast<int>(cand_ids[cj]);
-            }
-
-            auto keep_inds = Tensor::from_vector(keep_ids, TensorShape({P}), Device::CUDA)
-                                 .to(DataType::Int64);
-            auto merged_means =
-                Tensor::from_vector(new_means, TensorShape({P, 3}), Device::CUDA);
-            auto merged_scales =
-                Tensor::from_vector(new_scales, TensorShape({P, 3}), Device::CUDA);
-            auto merged_sh0 = Tensor::from_vector(new_sh0, TensorShape({P, 3}), Device::CUDA);
-            auto merged_opac =
-                Tensor::from_vector(new_opac_raw, TensorShape({P}), Device::CUDA);
-
-            _splat_data->means().index_put_(keep_inds, merged_means);
-            _splat_data->scaling_raw().index_put_(keep_inds, merged_scales);
-            _splat_data->sh0().index_put_(keep_inds, merged_sh0.reshape({P, 1, 3}));
-            auto opacity_raw = _splat_data->opacity_raw();
-            if (opacity_raw.ndim() == 2 && opacity_raw.shape()[1] == 1) {
-                merged_opac = merged_opac.unsqueeze(-1);
-            }
-            opacity_raw.index_put_(keep_inds, merged_opac);
-
-            // Free the absorbed rows through the SAME path as regular prunes:
-            // free slot, deleted mask, zeroed quaternion, Adam state reset.
-            auto free_inds = Tensor::from_vector(free_ids, TensorShape({P}), Device::CUDA)
-                                 .to(DataType::Int64);
-            mark_as_free(free_inds);
-            set_deleted_mask_rows(*_splat_data, _free_mask, free_inds, true);
-            auto zero_rotation = Tensor::zeros({P, 4}, Device::CUDA);
-            _splat_data->rotation_raw().index_put_(free_inds, zero_rotation);
-            const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, free_inds);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, free_inds);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, free_inds, layout_rest);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, free_inds);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, free_inds);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, free_inds);
-
-            _merge_freed_slots = static_cast<int>(P);
-            LFS_COUNTER_ADD("strategy.mrnf.merge", static_cast<int>(P));
-        }
-
-        ++_merge_window_count;
-        if ((_merge_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
-            LOG_INFO("MRNF merge iter={} pairs={} freed={}",
-                     iter, chosen.size(), chosen.size());
-        }
-    }
-
-    int MRNF::place_freed_at_error_pixels(int iter, int m) {
-        using namespace lfs::core;
-        ++_place_window_count;
-        if (m <= 0 || !_splat_data || !_optimizer || !_bounds_valid ||
-            _pending_place_view == nullptr) {
-            return 0;
-        }
-
-        // Resolve the current view: live render first, cached seed view fallback
-        // (same resolution order as seed_from_view).
-        Tensor image = _pending_place_view->image;
-        Tensor target = _pending_place_view->target_image;
-        Tensor alpha = _pending_place_view->alpha;
-        Tensor depth = _pending_place_view->depth;
-        Camera* camera = _pending_place_view->camera;
-        int width = _pending_place_view->width;
-        int height = _pending_place_view->height;
-
-        const bool live_valid = camera &&
-                                is_cuda_image(image) &&
-                                is_cuda_image(target) &&
-                                alpha.is_valid() &&
-                                alpha.device() == Device::CUDA &&
-                                same_spatial(image, target);
-        if (!live_valid) {
-            if (_cached_seed_valid && _cached_seed_camera) {
-                image = _cached_seed_image;
-                target = _cached_seed_target;
-                alpha = _cached_seed_alpha;
-                depth = _cached_seed_depth;
-                camera = _cached_seed_camera;
-                width = _cached_seed_width;
-                height = _cached_seed_height;
-            } else {
-                return 0;
-            }
-        }
-
-        image = to_float01_cuda(image);
-        target = to_float01_cuda(target);
-        alpha = to_float01_cuda(alpha);
-        if (image.ndim() != 3 || target.ndim() != 3) {
-            return 0;
-        }
-        if (width <= 0 || height <= 0) {
-            height = static_cast<int>(image.shape()[1]);
-            width = static_cast<int>(image.shape()[2]);
-        }
-        if (width <= 0 || height <= 0) {
-            return 0;
-        }
-
-        // Current-view error map: mode 2 = DoG detail deficit on rec601 luma,
-        // mode 3 = mean-normalized 0.5/0.5 mix with the L1 residual. Mirrors
-        // Trainer's compute_experimental_error_map.
-        auto render_chw = place_errmap_input_chw_float(image);
-        auto gt_chw = place_errmap_input_chw_float(target);
-        if (!render_chw.is_valid() || !gt_chw.is_valid() ||
-            render_chw.shape()[1] != gt_chw.shape()[1] ||
-            render_chw.shape()[2] != gt_chw.shape()[2]) {
-            return 0;
-        }
-        const size_t H = render_chw.shape()[1];
-        const size_t W = render_chw.shape()[2];
-        const int H_i = static_cast<int>(H);
-        const int W_i = static_cast<int>(W);
-        if (!_place_error_hw.is_valid() ||
-            _place_error_hw.shape()[0] != H || _place_error_hw.shape()[1] != W) {
-            _place_error_hw = Tensor::empty({H, W}, Device::CUDA);
-        }
-        {
-            Tensor luma_render = Tensor::empty({H, W}, Device::CUDA);
-            Tensor luma_gt = Tensor::empty({H, W}, Device::CUDA);
-            Tensor blur_scratch = Tensor::empty({H, W}, Device::CUDA);
-            Tensor blurred_render = Tensor::empty({H, W}, Device::CUDA);
-            Tensor blurred_gt = Tensor::empty({H, W}, Device::CUDA);
-            kernels::launch_errmap_luma_rec601(
-                render_chw.ptr<float>(), 3, H_i, W_i, luma_render.ptr<float>());
-            kernels::launch_errmap_luma_rec601(
-                gt_chw.ptr<float>(), 3, H_i, W_i, luma_gt.ptr<float>());
-            kernels::launch_errmap_gauss7_pass(
-                luma_render.ptr<float>(), H_i, W_i, true, blur_scratch.ptr<float>());
-            kernels::launch_errmap_gauss7_pass(
-                blur_scratch.ptr<float>(), H_i, W_i, false, blurred_render.ptr<float>());
-            kernels::launch_errmap_gauss7_pass(
-                luma_gt.ptr<float>(), H_i, W_i, true, blur_scratch.ptr<float>());
-            kernels::launch_errmap_gauss7_pass(
-                blur_scratch.ptr<float>(), H_i, W_i, false, blurred_gt.ptr<float>());
-            Tensor& detail_map = place_errmap_mode() == 2 ? _place_error_hw : blur_scratch;
-            kernels::launch_errmap_detail_deficit(
-                luma_gt.ptr<float>(), blurred_gt.ptr<float>(),
-                luma_render.ptr<float>(), blurred_render.ptr<float>(),
-                static_cast<size_t>(H_i) * static_cast<size_t>(W_i),
-                detail_map.ptr<float>());
-            if (place_errmap_mode() != 2) {
-                auto detail_mean = detail_map.mean();
-                lfs::core::pin_operands({&detail_map, &detail_mean});
-                kernels::launch_normalize_by_device_scalar(
-                    detail_map.ptr<float>(), detail_map.numel(),
-                    detail_mean.ptr<float>(), 1e-6f);
-                Tensor l1_map = Tensor::empty({H, W}, Device::CUDA);
-                kernels::launch_errmap_l1_residual(
-                    render_chw.ptr<float>(), gt_chw.ptr<float>(), 3, H_i, W_i,
-                    l1_map.ptr<float>());
-                auto l1_mean = l1_map.mean();
-                lfs::core::pin_operands({&l1_map, &l1_mean});
-                kernels::launch_normalize_by_device_scalar(
-                    l1_map.ptr<float>(), l1_map.numel(), l1_mean.ptr<float>(), 1e-6f);
-                kernels::launch_errmap_mix(
-                    l1_map.ptr<float>(), detail_map.ptr<float>(), detail_map.numel(),
-                    _place_error_hw.ptr<float>());
-            }
-        }
-
-        auto error_flat = flatten_hw(_place_error_hw);
-        auto alpha_flat = flatten_hw(alpha);
-        if (!error_flat.is_valid() || !alpha_flat.is_valid() ||
-            error_flat.numel() != alpha_flat.numel()) {
-            return 0;
-        }
-        const size_t hw = error_flat.numel();
-
-        Tensor depth_flat;
-        if (depth.is_valid() && depth.device() == Device::CUDA && depth.numel() > 0) {
-            depth_flat = flatten_hw(to_float01_cuda(depth));
-        }
-        if (!depth_flat.is_valid() || depth_flat.numel() != hw) {
-            depth_flat = Tensor::zeros({hw}, Device::CUDA);
-        }
-
-        // Deterministic top-M argmax with a minimum spacing of 8 px: stable
-        // descending sort (equal values keep ascending pixel order), then a greedy
-        // scan rejecting any pixel within 8 px Euclidean of an accepted one via an
-        // 8 px cell grid (a 3x3 neighborhood covers all pixels closer than 8 px).
-        auto sorted_desc = error_flat.sort(0, true);
-        const Tensor& sorted_idx = sorted_desc.second; // Int64
-        const int spacing = static_cast<int>(MRNF_PLACE_MIN_PIXEL_SPACING);
-        const float spacing_sqr =
-            MRNF_PLACE_MIN_PIXEL_SPACING * MRNF_PLACE_MIN_PIXEL_SPACING;
-        std::unordered_map<uint64_t, std::vector<std::pair<int32_t, int32_t>>> grid;
-        auto cell_key = [spacing](int32_t cx, int32_t cy) {
-            return (static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32) |
-                   static_cast<uint64_t>(static_cast<uint32_t>(cy));
-        };
-        std::vector<int> chosen_pixels;
-        chosen_pixels.reserve(static_cast<size_t>(m));
-        size_t scan = 0;
-        size_t chunk = std::min(hw, std::max<size_t>(8192, static_cast<size_t>(m) * 16));
-        while (chosen_pixels.size() < static_cast<size_t>(m) && scan < hw) {
-            const size_t take = std::min(chunk, hw - scan);
-            auto idx_cpu = sorted_idx.slice(0, static_cast<int64_t>(scan),
-                                            static_cast<int64_t>(scan + take))
-                               .cpu()
-                               .contiguous();
-            const int64_t* p = idx_cpu.ptr<int64_t>();
-            const size_t before = chosen_pixels.size();
-            for (size_t r = 0; r < take && chosen_pixels.size() < static_cast<size_t>(m); ++r) {
-                const int64_t pix = p[r];
-                if (pix < 0 || static_cast<size_t>(pix) >= hw) {
-                    continue;
-                }
-                const int32_t x = static_cast<int32_t>(pix % static_cast<int64_t>(W));
-                const int32_t y = static_cast<int32_t>(pix / static_cast<int64_t>(W));
-                const int32_t cx = x / spacing;
-                const int32_t cy = y / spacing;
-                bool close = false;
-                for (int32_t dx = -1; dx <= 1 && !close; ++dx) {
-                    for (int32_t dy = -1; dy <= 1 && !close; ++dy) {
-                        auto it = grid.find(cell_key(cx + dx, cy + dy));
-                        if (it == grid.end()) {
-                            continue;
-                        }
-                        for (const auto& pt : it->second) {
-                            const float ddx = static_cast<float>(x - pt.first);
-                            const float ddy = static_cast<float>(y - pt.second);
-                            if (ddx * ddx + ddy * ddy < spacing_sqr) {
-                                close = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (close) {
-                    continue;
-                }
-                grid[cell_key(cx, cy)].emplace_back(x, y);
-                chosen_pixels.push_back(pix);
-            }
-            scan += take;
-            if (chosen_pixels.size() == before) {
-                chunk = std::min(hw, chunk * 8); // sparse acceptance: widen window
-            }
-        }
-        if (chosen_pixels.empty()) {
-            return 0;
-        }
-        const size_t K = chosen_pixels.size();
-
-        auto pixel_inds = Tensor::from_vector(chosen_pixels, TensorShape({K}), Device::CUDA)
-                              .to(DataType::Int64);
-        auto rgb = Tensor::empty({K, 3}, Device::CUDA, DataType::Float32);
-        auto seed_alpha = Tensor::empty({K}, Device::CUDA, DataType::Float32);
-        auto seed_depth = Tensor::empty({K}, Device::CUDA, DataType::Float32);
-        const int channels = static_cast<int>(target.shape()[0]);
-        mrnf_strategy::launch_gather_seed_payloads(
-            pixel_inds.ptr<int64_t>(),
-            K,
-            hw,
-            target.ptr<float>(),
-            channels,
-            alpha_flat.ptr<float>(),
-            depth_flat.ptr<float>(),
-            rgb.ptr<float>(),
-            seed_alpha.ptr<float>(),
-            seed_depth.ptr<float>());
-
-        auto rgb_cpu = rgb.cpu().contiguous();
-        auto alpha_cpu = seed_alpha.cpu().contiguous();
-        auto depth_cpu = seed_depth.cpu().contiguous();
-        const float* rgb_ptr = rgb_cpu.ptr<float>();
-        const float* a_ptr = alpha_cpu.ptr<float>();
-        const float* d_ptr = depth_cpu.ptr<float>();
-
-        auto pos_cpu = camera->cam_position().cpu().contiguous();
-        auto R_cpu = camera->R().cpu().contiguous();
-        const float* cam_pos = pos_cpu.ptr<float>();
-        const float* R = R_cpu.ptr<float>();
-        const auto [fx, fy, cx, cy] = camera->get_intrinsics();
-        if (!(fx > 0.0f) || !(fy > 0.0f) || R_cpu.ndim() != 2 || R_cpu.shape()[0] != 3 ||
-            R_cpu.shape()[1] != 3) {
-            return 0;
-        }
-
-        // Build rows deterministically. Depth comes from the rendered
-        // alpha-weighted depth when alpha > 0.5, else from the far-mask distance
-        // (kFarMaskOrbits * orbit radius) along the ray.
-        const float raw_opacity = logit_clamped(0.5f);
-        std::vector<float> new_means;
-        std::vector<float> new_rotations;
-        std::vector<float> new_scales;
-        std::vector<float> new_sh0;
-        std::vector<float> new_opac_raw;
-        new_means.reserve(K * 3);
-        new_rotations.reserve(K * 4);
-        new_scales.reserve(K * 3);
-        new_sh0.reserve(K * 3);
-        new_opac_raw.reserve(K);
-        for (size_t k = 0; k < K; ++k) {
-            const int64_t pix = chosen_pixels[k];
-            const float a_p = a_ptr[k];
-            float t;
-            if (a_p > 0.5f) {
-                t = (a_p > 1e-6f) ? (d_ptr[k] / a_p) : d_ptr[k];
-            } else {
-                if (!(_orbit_radius > 0.0f) || !std::isfinite(_orbit_radius)) {
-                    continue;
-                }
-                t = kFarMaskOrbits * _orbit_radius;
-            }
-            if (!(t > 0.0f) || !std::isfinite(t)) {
-                continue;
-            }
-            const float u =
-                (static_cast<float>(pix % static_cast<int64_t>(W)) + 0.5f - cx) / fx;
-            const float v =
-                (static_cast<float>(pix / static_cast<int64_t>(W)) + 0.5f - cy) / fy;
-            const float wx = R[0] * (u * t) + R[3] * (v * t) + R[6] * t + cam_pos[0];
-            const float wy = R[1] * (u * t) + R[4] * (v * t) + R[7] * t + cam_pos[1];
-            const float wz = R[2] * (u * t) + R[5] * (v * t) + R[8] * t + cam_pos[2];
-            if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) {
-                continue;
-            }
-            const float log_s = std::log(std::max(t * 2.0f / fx, 1e-6f));
-            new_means.push_back(wx);
-            new_means.push_back(wy);
-            new_means.push_back(wz);
-            new_rotations.push_back(1.0f);
-            new_rotations.push_back(0.0f);
-            new_rotations.push_back(0.0f);
-            new_rotations.push_back(0.0f);
-            new_scales.push_back(log_s);
-            new_scales.push_back(log_s);
-            new_scales.push_back(log_s);
-            new_sh0.push_back((rgb_ptr[k * 3 + 0] - 0.5f) / MRNF_SH_C0);
-            new_sh0.push_back((rgb_ptr[k * 3 + 1] - 0.5f) / MRNF_SH_C0);
-            new_sh0.push_back((rgb_ptr[k * 3 + 2] - 0.5f) / MRNF_SH_C0);
-            new_opac_raw.push_back(raw_opacity);
-        }
-        if (new_opac_raw.empty()) {
-            return 0;
-        }
-        const size_t rows = new_opac_raw.size();
-
-        // Free-slot targets in ascending index order minus frozen rows — the same
-        // selection fill_free_slots_with_data uses.
-        const size_t n = static_cast<size_t>(_splat_data->size());
-        auto free_indices = _free_mask.slice(0, 0, n).nonzero().squeeze(-1);
-        if (auto frozen_mask = make_frozen_mask(*_splat_data, n, free_indices.device());
-            frozen_mask.is_valid() && free_indices.numel() > 0) {
-            auto trainable = frozen_mask.index_select(0, free_indices).logical_not();
-            free_indices = free_indices.index_select(0, trainable.nonzero().squeeze(-1));
-        }
-        const int64_t num_free = free_indices.numel();
-        const size_t slots = std::min<size_t>(
-            rows, static_cast<size_t>(std::max<int64_t>(0, num_free)));
-        if (slots == 0) {
-            return 0;
-        }
-        auto target_inds = free_indices.slice(0, 0, static_cast<int64_t>(slots));
-
-        auto src_means =
-            Tensor::from_vector(new_means, TensorShape({rows, 3}), Device::CUDA);
-        auto src_rotations =
-            Tensor::from_vector(new_rotations, TensorShape({rows, 4}), Device::CUDA);
-        auto src_scales =
-            Tensor::from_vector(new_scales, TensorShape({rows, 3}), Device::CUDA);
-        auto src_sh0 = Tensor::from_vector(new_sh0, TensorShape({rows, 3}), Device::CUDA);
-        auto src_opac =
-            Tensor::from_vector(new_opac_raw, TensorShape({rows}), Device::CUDA);
-
-        // One fused write per row: params, zeroed Adam scales, cleared free bit.
-        float* adam_ptrs[12] = {};
-        const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
-        const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
-        kernels::launch_fill_free_slots_fused(
-            target_inds.ptr<int64_t>(),
-            slots,
-            src_means.ptr<float>(),
-            src_rotations.ptr<float>(),
-            src_scales.ptr<float>(),
-            src_sh0.ptr<float>(),
-            src_opac.ptr<float>(),
-            _splat_data->means().ptr<float>(),
-            _splat_data->rotation_raw().ptr<float>(),
-            _splat_data->scaling_raw().ptr<float>(),
-            _splat_data->sh0().ptr<float>(),
-            _splat_data->opacity_raw().ptr<float>(),
-            opacity_dim,
-            adam_ptrs,
-            n_adam,
-            _free_mask.ptr<bool>(),
-            n);
-
-        // Adam moments reset (mirrors the prune path's state handling).
-        const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, target_inds);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, target_inds);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, target_inds, layout_rest);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, target_inds);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, target_inds);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, target_inds);
-
-        // Round 20 experiment (R2): placed rows are new births.
-        stamp_births(target_inds);
-
-        // shN = 0 for placed rows.
-        if (layout_rest > 0 && _splat_data->shN().is_valid() &&
-            _splat_data->shN().numel() > 0) {
-            auto zeros_shN =
-                Tensor::zeros({slots, static_cast<size_t>(layout_rest), 3}, Device::CUDA);
-            auto target_i32 = target_inds.to(DataType::Int32);
-            shN_swizzled_scatter_linear(
-                _splat_data->shN().ptr<float>(),
-                target_i32.ptr<int>(),
-                zeros_shN.ptr<float>(),
-                slots,
-                layout_rest,
-                layout_rest);
-        }
-
-        // Birth stamping: zero tracking buffers so fresh rows start clean.
-        auto zero_rows = Tensor::zeros({slots}, Device::CUDA);
-        if (_vis_count.is_valid() && _vis_count.numel() >= n) {
-            _vis_count.index_put_(target_inds, zero_rows);
-        }
-        if (_refine_weight_max.is_valid() && _refine_weight_max.numel() >= n) {
-            _refine_weight_max.index_put_(target_inds, zero_rows);
-        }
-        if (_refine_ratio_max.is_valid() && _refine_ratio_max.numel() >= n) {
-            _refine_ratio_max.index_put_(target_inds, zero_rows);
-        }
-
-        // Cooldown: protected from merges for MRNF_PLACE_COOLDOWN_WINDOWS windows.
-        ensure_place_cooldown(n);
-        if (_place_cooldown.is_valid() && _place_cooldown.numel() >= n &&
-            _place_cooldown.dtype() == DataType::Int32) {
-            auto cooldown_vals = Tensor::full(
-                {slots}, static_cast<int>(MRNF_PLACE_COOLDOWN_WINDOWS), Device::CUDA,
-                DataType::Int32);
-            _place_cooldown.index_put_(target_inds, cooldown_vals);
-        }
-
-        LFS_COUNTER_ADD("strategy.mrnf.place", static_cast<int>(slots));
-        if ((_place_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
-            LOG_INFO("MRNF place iter={} placed={}", iter, slots);
-        }
-        return static_cast<int>(slots);
     }
 
     void MRNF::compute_bounds() {
@@ -5115,35 +3247,10 @@ namespace lfs::training {
     void MRNF::step(int iter) {
         LOG_TIMER("MRNF::step");
         if (iter < _params->iterations) {
-            // Round 20 experiment (R2): exact per-iteration young-LR state (the
-            // age window is relative to the Adam iteration being applied now).
-            if (young_lr_windows() > 0) {
-                publish_young_lr_state(iter);
-            }
             _optimizer->step(iter);
             _optimizer->zero_grad(iter);
 
             _mean_lr_unscaled *= _mean_lr_gamma;
-            // Round 10 experiment (LFS_EXP_MEANS_LR_FLOOR): from the recorded fill
-            // iteration until stop_refine, clamp the decayed means LR (the scalar
-            // that sync_mean_learning_rate later median-size scales) from below at
-            // fraction * initial means LR, uniformly for all rows. After stop_refine
-            // the clamp stops applying, so normal decay resumes from the clamped
-            // value with no jump up.
-            const double lr_floor =
-                means_lr_floor_fraction() > 0.0 && _params
-                    ? means_lr_floor_fraction() * static_cast<double>(_params->means_lr)
-                    : 0.0;
-            if (lr_floor > 0.0 && _means_floor_fill_iter >= 0 &&
-                iter <= static_cast<int>(_params->stop_refine) &&
-                _mean_lr_unscaled < lr_floor) {
-                if (!_means_floor_bound_logged) {
-                    LOG_INFO("MRNF means-lr floor binds at iter={} lr {:.6e} -> {:.6e}",
-                             iter, _mean_lr_unscaled, lr_floor);
-                    _means_floor_bound_logged = true;
-                }
-                _mean_lr_unscaled = lr_floor;
-            }
             _scale_lr_current *= _scale_lr_gamma;
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();
@@ -5192,7 +3299,7 @@ namespace lfs::training {
         }
 
         auto normalized_edge = normalized_by_positive_median(_precomputed_edge_scores, &_median_scratch);
-        return normalized_edge.mul(exp_edge_weight()).add(1.0f);
+        return normalized_edge.mul(MRNF_EDGE_SCORE_WEIGHT).add(1.0f);
     }
 
     namespace {
@@ -5324,30 +3431,6 @@ namespace lfs::training {
         }
         _explore_sample_count = 0;
         _explore_last_sample_iter = -1;
-        // Round 10 experiment state: transient, rebuilt on demand from gates.
-        _merge_freed_slots = 0;
-        _merge_window_count = 0;
-        _place_window_count = 0;
-        _place_gate_warned = false;
-        _pending_place_view = nullptr;
-        _place_error_hw = lfs::core::Tensor();
-        _place_cooldown = lfs::core::Tensor();
-        _means_floor_fill_iter = -1;
-        _means_floor_bound_logged = false;
-        // Round 20 experiment state (R2): births are transient and NOT
-        // serialized; rebuild from gates for the loaded model.
-        _birth_iter = lfs::core::Tensor();
-        _young_fill_iter = -1;
-        _young_fill_logged = false;
-        _young_now_stamp_iter = 0;
-        if (_optimizer && young_lr_windows() > 0) {
-            _optimizer->set_young_lr_means(nullptr, 0, 0, 0, 1.0f, young_lr_cap());
-        }
-        // Round 22 experiment state (Rules P/O): transient, not serialized.
-        _pace_prev_means = lfs::core::Tensor();
-        _pace_released = false;
-        _oreg_auto_factor = 1.0f;
-        _oreg_auto_armed = false;
         ensure_densification_info_shape();
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
@@ -5420,31 +3503,6 @@ namespace lfs::training {
         std::swap(_scale_lr_current, source._scale_lr_current);
         std::swap(_mean_lr_gamma, source._mean_lr_gamma);
         std::swap(_scale_lr_gamma, source._scale_lr_gamma);
-        // Round 10 experiment state (means-LR floor arming).
-        std::swap(_means_floor_fill_iter, source._means_floor_fill_iter);
-        std::swap(_means_floor_bound_logged, source._means_floor_bound_logged);
-        // Round 20 experiment state (R1/R2): transient young-LR bookkeeping.
-        std::swap(_birth_iter, source._birth_iter);
-        std::swap(_young_fill_iter, source._young_fill_iter);
-        std::swap(_young_fill_logged, source._young_fill_logged);
-        std::swap(_young_now_stamp_iter, source._young_now_stamp_iter);
-        // Round 22 experiment state (Rules P/O): transient pacing/dose state.
-        std::swap(_pace_prev_means, source._pace_prev_means);
-        std::swap(_pace_released, source._pace_released);
-        std::swap(_oreg_auto_factor, source._oreg_auto_factor);
-        std::swap(_oreg_auto_armed, source._oreg_auto_armed);
-        // Round 10 experiment state (merge/place slot recycling).
-        std::swap(_merge_freed_slots, source._merge_freed_slots);
-        std::swap(_merge_window_count, source._merge_window_count);
-        std::swap(_place_window_count, source._place_window_count);
-        std::swap(_place_gate_warned, source._place_gate_warned);
-        std::swap(_place_cooldown, source._place_cooldown);
-        std::swap(_place_error_hw, source._place_error_hw);
-        // Round 20 experiment (R2): re-point the optimizer at this instance's
-        // birth buffer after the swap.
-        if (young_lr_windows() > 0) {
-            publish_young_lr_state(_young_now_stamp_iter);
-        }
         publish_vram_attribution();
     }
 

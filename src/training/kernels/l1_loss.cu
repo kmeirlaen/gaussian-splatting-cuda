@@ -33,12 +33,7 @@ namespace lfs::training::kernels {
         float* __restrict__ grad_out,
         float* __restrict__ partial_sums,
         size_t N,
-        float grad_scale,
-        int band_h = 0,
-        int band_w = 0,
-        int band_top_rows = 0,
-        float band_w_top = 1.0f,
-        float band_w_rest = 1.0f) {
+        float grad_scale) {
 
         // Thread-local sum
         float local_sum = 0.0f;
@@ -48,27 +43,14 @@ namespace lfs::training::kernels {
              idx < N;
              idx += blockDim.x * gridDim.x) {
 
-            float diff = img1[idx] - target_value(img2, idx);
-            float abs_diff = fabsf(diff);
-
-            // Round 23 D1: row-band weight for the loss contribution and the
-            // gradient alike. Inactive when band_top_rows == 0.
-            float band_weight = 1.0f;
-            if (band_top_rows > 0) {
-                const int h = static_cast<int>((idx / static_cast<size_t>(band_w)) %
-                                               static_cast<size_t>(band_h));
-                band_weight = (h < band_top_rows) ? band_w_top : band_w_rest;
-                abs_diff *= band_weight;
-            }
-
-            // Accumulate for loss
-            local_sum += abs_diff;
+            const float diff = img1[idx] - target_value(img2, idx);
+            local_sum += fabsf(diff);
 
             // Store gradient: sign(diff) * grad_scale
             // NOTE: sign(0) = 0 to match PyTorch behavior
             // copysignf returns ±grad_scale even for 0.0, which is wrong
             float grad = (diff > 0.0f) ? grad_scale : ((diff < 0.0f) ? -grad_scale : 0.0f);
-            grad_out[idx] = band_top_rows > 0 ? grad * band_weight : grad;
+            grad_out[idx] = grad;
         }
 
         // Block-level warp reduction (tiny-cuda-nn style - much faster!)
@@ -110,12 +92,7 @@ namespace lfs::training::kernels {
         float* loss_out,
         float* temp_buffer,
         size_t N,
-        cudaStream_t stream,
-        int band_image_h,
-        int band_image_w,
-        int band_top_rows,
-        float band_w_top,
-        float band_w_rest) {
+        cudaStream_t stream) {
         LFS_ASSERT_MSG(img1 != nullptr && img2 != nullptr && grad_out != nullptr &&
                            loss_out != nullptr && temp_buffer != nullptr,
                        "Fused L1 loss pointers must be non-null");
@@ -129,8 +106,7 @@ namespace lfs::training::kernels {
 
         // Launch fused kernel
         fused_l1_kernel<TargetT><<<num_blocks, block_size, 0, stream>>>(
-            img1, img2, grad_out, temp_buffer, N, grad_scale,
-            band_image_h, band_image_w, band_top_rows, band_w_top, band_w_rest);
+            img1, img2, grad_out, temp_buffer, N, grad_scale);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.l1.fused");
 
         // Launch final reduction (normalize by N for mean)
@@ -147,16 +123,9 @@ namespace lfs::training::kernels {
         float* loss_out,
         float* temp_buffer,
         size_t N,
-        cudaStream_t stream,
-        int band_image_h,
-        int band_image_w,
-        int band_top_rows,
-        float band_w_top,
-        float band_w_rest) {
+        cudaStream_t stream) {
         stream = resolve_stream(stream);
-        launch_fused_l1_loss_impl(img1, img2, grad_out, loss_out, temp_buffer, N, stream,
-                                  band_image_h, band_image_w, band_top_rows,
-                                  band_w_top, band_w_rest);
+        launch_fused_l1_loss_impl(img1, img2, grad_out, loss_out, temp_buffer, N, stream);
     }
 
     void launch_fused_l1_loss(
@@ -166,16 +135,9 @@ namespace lfs::training::kernels {
         float* loss_out,
         float* temp_buffer,
         size_t N,
-        cudaStream_t stream,
-        int band_image_h,
-        int band_image_w,
-        int band_top_rows,
-        float band_w_top,
-        float band_w_rest) {
+        cudaStream_t stream) {
         stream = resolve_stream(stream);
-        launch_fused_l1_loss_impl(img1, img2, grad_out, loss_out, temp_buffer, N, stream,
-                                  band_image_h, band_image_w, band_top_rows,
-                                  band_w_top, band_w_rest);
+        launch_fused_l1_loss_impl(img1, img2, grad_out, loss_out, temp_buffer, N, stream);
     }
 
 } // namespace lfs::training::kernels

@@ -102,13 +102,6 @@ namespace lfs::training {
         void set_training_dataset(std::shared_ptr<CameraDataset> views) override;
         void set_image_loader(lfs::io::PipelinedImageLoader* loader) override { _image_loader = loader; }
 
-        // Round 22 experiment (Rule O): the trainer multiplies the configured
-        // opacity_reg weight by this factor. The factor is refreshed once per
-        // refine window and held constant between windows; it is 1.0 when the
-        // LFS_EXP_OREG_AUTO gate is off or before the first window.
-        [[nodiscard]] bool opacity_reg_auto_enabled() const;
-        [[nodiscard]] float opacity_reg_auto_factor() const { return _oreg_auto_factor; }
-
     private:
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
@@ -150,11 +143,6 @@ namespace lfs::training {
         void refine(int iter, RenderOutput& render_output);
         void grow_and_split(int iter, int pruned_count);
         [[nodiscard]] int effective_grow_until_iter() const;
-        [[nodiscard]] bool placement_active() const;
-        void merge_redundant_pairs(int iter);
-        [[nodiscard]] int place_freed_at_error_pixels(int iter, int m);
-        void tick_place_cooldown();
-        void ensure_place_cooldown(size_t n);
         [[nodiscard]] lfs::core::Tensor compute_refine_candidates() const;
         void apply_decay(int iter);
         void inject_noise(int iter);
@@ -298,62 +286,17 @@ namespace lfs::training {
         float _median_splat_extent = 0.0f;
         bool _median_splat_extent_valid = false;
 
-        // Round 17 experiment (LFS_EXP_CAND_DENSITY): density threshold picked by
-        // the last compute_refine_candidates() pass, for the per-window log.
-        mutable float _cand_density_last_threshold = 0.0f;
-
-        // Round 20 experiment (LFS_EXP_REPLACE_ERR / LFS_EXP_YOUNG_LR) state.
-        // _birth_iter: int32 per-row birth iteration; same lifecycle as
-        // _vis_count (initialize / grow resize / compact) EXCEPT the per-window
-        // reset — rows keep their birth stamp. Not serialized.
-        lfs::core::Tensor _birth_iter;
-        int _young_fill_iter = -1;
-        bool _young_fill_logged = false;
-        int _young_now_stamp_iter = 0;
         [[nodiscard]] lfs::core::Tensor build_replace_parent_weights(
             size_t n,
             const lfs::core::Tensor& active_mask,
             const lfs::core::Tensor& trainable_mask,
             const lfs::core::Tensor& edge_guidance) const;
-        void ensure_young_birth_buffer(size_t n);
-        void stamp_births(const lfs::core::Tensor& indices);
-        void publish_young_lr_state(int iter);
-
-        // Round 22 experiment (Rule P): threshold-free pacing gate state.
-        // _pace_prev_means: [N,3] float means snapshot as of the previous window
-        // end (same lifecycle as _birth_iter, content refreshed every window).
-        // _pace_released: sticky flag — once pacing self-aborts it stays off.
-        lfs::core::Tensor _pace_prev_means;
-        bool _pace_released = false;
-        [[nodiscard]] float compute_young_dispersion(int iter, size_t n);
-        void ensure_pace_prev_means(size_t n);
-        void refresh_pace_prev_means();
-
-        // Round 22 experiment (Rule O): churn-coupled dose factor s_t in
-        // [0,1], updated once per refine window; held between windows.
-        float _oreg_auto_factor = 1.0f;
-        bool _oreg_auto_armed = false;
 
         // MRNF uses independent exponential schedules for mean and scale learning rates.
         double _mean_lr_unscaled = 0.0;
         double _scale_lr_current = 0.0;
         double _mean_lr_gamma = 1.0;
         double _scale_lr_gamma = 1.0;
-
-        // Round 10 experiment (LFS_EXP_MEANS_LR_FLOOR): refine iteration at which the
-        // active population first reached >= 0.98*max_cap (-1 = not armed yet), plus a
-        // once-only log flag for the first iteration the floor actually binds.
-        int _means_floor_fill_iter = -1;
-        bool _means_floor_bound_logged = false;
-
-        // Round 10 experiment (LFS_EXP_MERGE / LFS_EXP_PLACE) state.
-        int _merge_freed_slots = 0;  // slots freed by merges in the current window
-        int _merge_window_count = 0; // post-fill windows in which merge was attempted
-        int _place_window_count = 0; // post-fill windows in which placement was attempted
-        bool _place_gate_warned = false;
-        lfs::core::Tensor _place_error_hw; // [H, W] float32 scratch for P4
-        lfs::core::Tensor _place_cooldown; // [N] int32 per-row merge/prune cooldown
-        const RenderOutput* _pending_place_view = nullptr;
     };
 
 } // namespace lfs::training

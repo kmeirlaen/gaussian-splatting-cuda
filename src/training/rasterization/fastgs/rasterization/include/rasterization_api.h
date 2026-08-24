@@ -86,12 +86,7 @@ namespace fast_lfs::rasterization {
         float near_plane,
         float far_plane,
         bool mip_filter = false,
-        cudaStream_t stream = nullptr, // nullptr → getCurrentCUDAStream()
-        // Round 23 diagnostic D2 (LFS_EXP_DILATION): runtime dilation added to
-        // cov2d.x/.z in the forward preprocess kernel. Defaults to the
-        // compile-time config::dilation, which is bit-identical to the
-        // previous behaviour.
-        float dilation = config::dilation,
+        cudaStream_t stream = nullptr,              // nullptr → getCurrentCUDAStream()
         const float* sh_value_bounds_ptr = nullptr, // float2 per 256; null = fp32/IEEE-f16 shN
         unsigned int sh_value_n_cells = 0,
         unsigned int sh_value_bits = 0); // 0=fp32, 16=q16(+bounds) or IEEE f16

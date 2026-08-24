@@ -224,7 +224,6 @@ namespace fast_lfs::rasterization {
         float far_plane,
         bool mip_filter,
         cudaStream_t stream,
-        float dilation, // Round 23 D2: runtime override of config::dilation
         const float* sh_value_bounds_ptr,
         unsigned int sh_value_n_cells,
         unsigned int sh_value_bits) {
@@ -376,7 +375,6 @@ namespace fast_lfs::rasterization {
                                                    near_plane,
                                                    far_plane,
                                                    mip_filter,
-                                                   dilation,
                                                    stream);
 
             // Verify allocations happened
