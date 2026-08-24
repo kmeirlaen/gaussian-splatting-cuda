@@ -1,11 +1,11 @@
 {
   "iterations": 30000,
   "sh_degree_interval": 1000,
-  "means_lr": 0.000128,
-  "means_lr_end": 0.00000016,
+  "means_lr": 2e-05,
+  "means_lr_end": 2e-07,
   "shs_lr": 0.005,
   "opacity_lr": 0.025,
-  "scaling_lr": 0.020,
+  "scaling_lr": 0.02,
   "scaling_lr_end": 0.005,
   "rotation_lr": 0.0015,
   "lambda_dssim": 0.2,
@@ -20,8 +20,14 @@
   "init_scaling": 0.1,
   "max_cap": 1000000,
   "strategy": "mrnf",
-  "eval_steps": [7000, 30000],
-  "save_steps": [7000, 30000],
+  "eval_steps": [
+    7000,
+    30000
+  ],
+  "save_steps": [
+    7000,
+    30000
+  ],
   "enable_eval": false,
   "enable_save_eval_images": true,
   "mip_filter": false,
