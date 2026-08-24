@@ -116,7 +116,7 @@ namespace {
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.003f);
         EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 200u);
     }
 
@@ -136,6 +136,10 @@ namespace {
             {"use_edge_map", {"mrnf"}},
             {"use_far_field", {"mrnf"}},
             {"far_scene_min_fraction", {"mrnf"}},
+            {"growth_ratio_rank", {"mrnf"}},
+            {"growth_ratio_pow", {"mrnf"}},
+            {"fill_pacing_iter", {"mrnf"}},
+            {"far_seed_dose", {"mrnf"}},
             {"prune_opacity", {"igs+"}},
             {"reset_every", {"igs+"}},
             {"min_opacity", {"mcmc"}},
@@ -517,10 +521,11 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0x34461733f20c7388ULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xb497e2da2f611314ULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
-        EXPECT_FLOAT_EQ(mrnf_result->means_lr, 0.000128f);
+        EXPECT_FLOAT_EQ(mrnf_result->means_lr, 2e-05f);
+        EXPECT_FLOAT_EQ(mrnf_result->means_lr_end, 2e-07f);
         EXPECT_EQ(mrnf_result->start_refine, 500u);
         EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);

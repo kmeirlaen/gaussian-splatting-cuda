@@ -660,11 +660,16 @@ namespace lfs::core {
             p.rotation_lr = 2e-3f;
             p.shs_lr = 2e-3f;
             p.lambda_dssim = 0.2f;
-            p.opacity_reg = 0.0f;
+            p.opacity_reg = 0.003f;
             p.scale_reg = 0.0f;
             p.use_error_map = true;
             p.use_edge_map = true;
             p.use_far_field = true;
+            p.far_scene_min_fraction = 0.0f;
+            p.growth_ratio_rank = true;
+            p.growth_ratio_pow = 0.75f;
+            p.fill_pacing_iter = 15'000;
+            p.far_seed_dose = 2'000;
             return p;
         }
 
