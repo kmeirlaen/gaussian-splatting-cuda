@@ -7,10 +7,34 @@
 #include "lfs/training/refine_scratch.hpp"
 #include <cub/cub.cuh>
 #include <limits>
+#include <string>
 
 #include "kernel_stream.hpp"
 
 namespace lfs::training::kernels {
+
+    namespace {
+
+        [[nodiscard]] std::string size_pair_message(
+            const char* message,
+            const char* lhs_name,
+            size_t lhs_value,
+            const char* rhs_name,
+            size_t rhs_value) {
+            std::string result(message);
+            result += " (";
+            result += lhs_name;
+            result += "=";
+            result += std::to_string(lhs_value);
+            result += ", ";
+            result += rhs_name;
+            result += "=";
+            result += std::to_string(rhs_value);
+            result += ")";
+            return result;
+        }
+
+    } // namespace
 
     // ============================================================================
     // Helper functions
@@ -526,7 +550,8 @@ namespace lfs::training::kernels {
             LFS_ASSERT_MSG(scratch->n_capacity >= n &&
                                scratch->selected.is_valid() &&
                                scratch->selected.ptr<float>() != nullptr,
-                           "positive-median selected scratch must cover n");
+                           size_pair_message("positive-median selected scratch must cover n",
+                                             "cap", scratch->n_capacity, "n", n));
             LFS_ASSERT_MSG(scratch->sorted.is_valid() && scratch->sorted.ptr<float>() != nullptr,
                            "positive-median sorted scratch must be a non-null CUDA f32 tensor");
             LFS_ASSERT_MSG(scratch->count.is_valid() && scratch->count.ptr<int>() != nullptr,
@@ -551,7 +576,9 @@ namespace lfs::training::kernels {
                                (scratch->select_temp.is_valid() &&
                                 scratch->select_temp_bytes >= temp_bytes &&
                                 scratch->select_temp.data_ptr() != nullptr),
-                           "positive-median select temp must cover queried bytes");
+                           size_pair_message("positive-median select temp must cover queried bytes",
+                                             "have", scratch->select_temp_bytes,
+                                             "need", temp_bytes));
             LFS_CUDA_CHECK_MSG(
                 cub::DeviceSelect::If(
                     temp_bytes == 0 ? nullptr : scratch->select_temp.data_ptr(),
@@ -569,7 +596,9 @@ namespace lfs::training::kernels {
                                (scratch->sort_temp.is_valid() &&
                                 scratch->sort_temp_bytes >= sort_bytes &&
                                 scratch->sort_temp.data_ptr() != nullptr),
-                           "positive-median sort temp must cover queried bytes");
+                           size_pair_message("positive-median sort temp must cover queried bytes",
+                                             "have", scratch->sort_temp_bytes,
+                                             "need", sort_bytes));
             LFS_CUDA_CHECK_MSG(
                 cub::DeviceRadixSort::SortKeys(
                     sort_bytes == 0 ? nullptr : scratch->sort_temp.data_ptr(),
