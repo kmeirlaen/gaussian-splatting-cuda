@@ -174,6 +174,11 @@ namespace lfs::training {
         void cache_seed_view(int iter, const RenderOutput& render_output);
         [[nodiscard]] bool should_cache_seed_view(int iter) const;
         void seed_from_view(int iter, const RenderOutput& render_output);
+        [[nodiscard]] bool cfg_ratio_rank_on() const;
+        [[nodiscard]] float cfg_ratio_pow() const;
+        [[nodiscard]] int cfg_fill_target_iter() const;
+        [[nodiscard]] int cfg_seed_dose() const;
+        [[nodiscard]] bool cfg_seed_far_on() const;
         [[nodiscard]] bool far_field_requested() const;
         [[nodiscard]] bool far_operators_active() const;
         void refresh_camera_hull();

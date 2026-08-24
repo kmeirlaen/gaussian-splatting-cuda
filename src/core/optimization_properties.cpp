@@ -507,6 +507,36 @@ namespace lfs::core::param {
             .ui_step(0.01)
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
+            .bool_prop(&OptimizationParameters::growth_ratio_rank,
+                       "growth_ratio_rank", "Growth Ratio Rank", d.growth_ratio_rank,
+                       "Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error")
+            .locale("training.advanced.growth_ratio_rank")
+            .tooltip("training.tooltip.growth_ratio_rank")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .float_prop(&OptimizationParameters::growth_ratio_pow,
+                        "growth_ratio_pow", "Growth Ratio Pow", d.growth_ratio_pow, 0.0f, 1.0f,
+                        "Visibility exponent p for the err/vis^p growth rank")
+            .locale("training.advanced.growth_ratio_pow")
+            .tooltip("training.tooltip.growth_ratio_pow")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .size_prop(&OptimizationParameters::fill_pacing_iter,
+                       "fill_pacing_iter", "Fill Pacing Iter", d.fill_pacing_iter, 0, 100000,
+                       "Pace MRNF cap fill until this iteration (0 = fill as fast as possible)")
+            .locale("training.advanced.fill_pacing_iter")
+            .tooltip("training.tooltip.fill_pacing_iter")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .size_prop(&OptimizationParameters::far_seed_dose,
+                       "far_seed_dose", "Far Seed Dose", d.far_seed_dose, 0, 100000,
+                       "Far-field seeds injected per refine window (0 = starvation-scaled default)")
+            .locale("training.advanced.far_seed_dose")
+            .tooltip("training.tooltip.far_seed_dose")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
 
             // Flags
             .all_strategies()

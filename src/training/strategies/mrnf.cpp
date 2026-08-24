@@ -1085,7 +1085,7 @@ namespace lfs::training {
         const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
-        if (growth_ratio_rank_enabled() || replace_err_needs_ratio()) {
+        if (cfg_ratio_rank_on() || replace_err_needs_ratio()) {
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
         // Round 20 experiment (R2): birth iterations for young-row LR. Rows that
@@ -1564,7 +1564,7 @@ namespace lfs::training {
             // buffer so C1 works alone (ratio_sqrt=false, ratio_pow=0 below).
             // Round 20 experiment (R1): modes 2/3 read _refine_ratio_max too, so
             // REPLACE_ERR arms the same fold (plain err/vis when GROWTH_RATIO off).
-            if ((growth_ratio_rank_enabled() || cand_density_fraction() > 0.0f ||
+            if ((cfg_ratio_rank_on() || cand_density_fraction() > 0.0f ||
                  replace_err_needs_ratio()) &&
                 _refine_ratio_max.numel() == n) {
                 ratio_max_ptr = _refine_ratio_max.ptr<float>();
@@ -1578,7 +1578,7 @@ namespace lfs::training {
                 densification_row_count(),
                 ratio_max_ptr,
                 growth_ratio_sqrt_enabled(),
-                growth_ratio_pow());
+                cfg_ratio_pow());
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             if (ratio_max_ptr != nullptr) {
                 zero_frozen_scores_inplace(*_splat_data, _refine_ratio_max);
@@ -1620,7 +1620,7 @@ namespace lfs::training {
         int value = static_cast<int>(_params->grow_until_iter);
         // Round 10 experiment (LFS_EXP_FILL_ITER): growth windows must stay available
         // until the pacing target so the schedule can actually reach max_cap.
-        const int fill_iter = fill_pacing_target_iter();
+        const int fill_iter = cfg_fill_target_iter();
         if (fill_iter > 0) {
             value = std::max(value, fill_iter);
         }
@@ -1755,8 +1755,8 @@ namespace lfs::training {
         const bool growing = iter < effective_grow_until_iter();
         const bool seed_far = growing && far_field_requested() && !far_seeds_disabled() && kExploreSeeds > 0;
         int reserved_seeds = seed_far ? starved_cadence_count(kExploreSeeds) : 0;
-        if (seed_far && seed_dose_per_window() > 0)
-            reserved_seeds = std::max(reserved_seeds, seed_dose_per_window());
+        if (seed_far && cfg_seed_dose() > 0)
+            reserved_seeds = std::max(reserved_seeds, cfg_seed_dose());
         begin_far_growth_window(n, reserved_seeds);
 
         // Replacement should stay active even after growth stop. The pending view
@@ -1818,7 +1818,7 @@ namespace lfs::training {
         const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
-        if (growth_ratio_rank_enabled() || replace_err_needs_ratio()) {
+        if (cfg_ratio_rank_on() || replace_err_needs_ratio()) {
             reset_vector_buffer(_refine_ratio_max, new_n, _splat_data->means().device(), tracking_capacity);
         }
         // Round 20 experiment (R2): unlike the per-window buffers above, births
@@ -1860,6 +1860,38 @@ namespace lfs::training {
         // that bars Scene rebuild / preview from holding the float workspace
         // (trainer acquires exclusive for refining steps around post_backward).
         lfs::core::Tensor::trim_memory_pool();
+    }
+
+    bool MRNF::cfg_ratio_rank_on() const {
+        return growth_ratio_rank_enabled() || (_params && _params->growth_ratio_rank);
+    }
+
+    float MRNF::cfg_ratio_pow() const {
+        const float env_pow = growth_ratio_pow();
+        if (env_pow != 0.0f) {
+            return env_pow;
+        }
+        return (_params && _params->growth_ratio_rank) ? _params->growth_ratio_pow : 0.0f;
+    }
+
+    int MRNF::cfg_fill_target_iter() const {
+        int target = fill_pacing_target_iter();
+        if (_params && _params->fill_pacing_iter > 0) {
+            target = std::max(target, static_cast<int>(_params->fill_pacing_iter));
+        }
+        return target;
+    }
+
+    int MRNF::cfg_seed_dose() const {
+        const int env_dose = seed_dose_per_window();
+        if (env_dose > 0) {
+            return env_dose;
+        }
+        return _params ? static_cast<int>(_params->far_seed_dose) : 0;
+    }
+
+    bool MRNF::cfg_seed_far_on() const {
+        return seed_far_enabled() || cfg_seed_dose() > 0;
     }
 
     bool MRNF::far_field_requested() const {
@@ -2402,9 +2434,9 @@ namespace lfs::training {
         // reaches max_cap at the target iteration on a smooth schedule. The paced
         // quota only ever caps the legacy grow_fraction desire.
         int pacing_windows_left = 0;
-        if (fill_pacing_target_iter() > 0 && _params->max_cap > 0) {
+        if (cfg_fill_target_iter() > 0 && _params->max_cap > 0) {
             const int refine_every = std::max(1, static_cast<int>(_params->refine_every));
-            pacing_windows_left = std::max(1, (fill_pacing_target_iter() - iter) / refine_every);
+            pacing_windows_left = std::max(1, (cfg_fill_target_iter() - iter) / refine_every);
             const long long remaining = std::max<long long>(
                 0,
                 static_cast<long long>(_params->max_cap) - static_cast<long long>(current_active));
@@ -2534,7 +2566,7 @@ namespace lfs::training {
         }
 
         if (n_grow > 0) {
-            const bool use_ratio_rank = growth_ratio_rank_enabled() &&
+            const bool use_ratio_rank = cfg_ratio_rank_on() &&
                                         _refine_ratio_max.is_valid() &&
                                         _refine_ratio_max.numel() == n;
             Tensor growth_weights =
@@ -2601,14 +2633,14 @@ namespace lfs::training {
             }
         }
 
-        if (growth_ratio_rank_enabled() &&
+        if (cfg_ratio_rank_on() &&
             (_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
             const int grow_sampled =
                 growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0;
             LOG_INFO("MRNF ratio-rank iter={} candidates={} grow={}",
                      iter, candidate_count, grow_sampled);
         }
-        if (fill_pacing_target_iter() > 0 &&
+        if (cfg_fill_target_iter() > 0 &&
             (_growth_window_count % MRNF_RATIO_RANK_LOG_INTERVAL) == 1) {
             LOG_INFO("MRNF pacing iter={} active={} desired={} windows_left={}",
                      iter, current_active, desired_total, pacing_windows_left);
@@ -3873,7 +3905,7 @@ namespace lfs::training {
         // Round 17 experiment (LFS_EXP_SEED_DOSE): when set, n_seed per window is
         // that value (still subject to remaining budget / far-growth reservation
         // below); unset keeps today's starved kExploreSeeds path.
-        const int dose_seeds = seed_dose_per_window();
+        const int dose_seeds = cfg_seed_dose();
         const int requested_cadence =
             dose_seeds > 0 ? dose_seeds : starved_cadence_count(kExploreSeeds);
         int n_seed = std::min({requested_cadence, remaining_budget,
@@ -4092,7 +4124,7 @@ namespace lfs::training {
             if (a_p > 0.5f) {
                 const float depth_acc = d_ptr[i];
                 d_lo = (a_p > 1e-6f) ? (depth_acc / a_p) : depth_acc;
-            } else if (seed_far_enabled() && _orbit_radius > 0.0f) {
+            } else if (cfg_seed_far_on() && _orbit_radius > 0.0f) {
                 d_lo = std::max(d_lo, kFarMaskOrbits * _orbit_radius);
             }
 
@@ -5278,7 +5310,7 @@ namespace lfs::training {
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_explore_score_sum, n, _splat_data->means().device(), tracking_capacity);
-        if (growth_ratio_rank_enabled()) {
+        if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
         _explore_sample_count = 0;
