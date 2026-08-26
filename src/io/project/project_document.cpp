@@ -6,6 +6,7 @@
 #include "io/project_document.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "io/loader.hpp"
 #include "io/project_recovery.hpp"
 #include "project_container_internal.hpp"
@@ -18,6 +19,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <format>
 #include <istream>
 #include <limits>
@@ -52,6 +54,38 @@ namespace lfs::io::project {
             std::uint32_t reserved[3]{};
         };
         static_assert(sizeof(PpispFileHeader) == 32);
+
+        void encode_staged_splat_shN(lfs::core::Scene& scene) {
+            bool encoded = false;
+            for (const auto* node : scene.getNodes()) {
+                if (!node ||
+                    node->type != lfs::core::NodeType::SPLAT) {
+                    continue;
+                }
+                auto* live = scene.getNodeById(node->id);
+                if (!live || !live->model) {
+                    continue;
+                }
+                auto& model = *live->model;
+                if (!model.has_tensor_allocator() ||
+                    model.shN_value_quantized() ||
+                    !model.shN_raw().is_valid() ||
+                    model.shN_raw().numel() == 0) {
+                    continue;
+                }
+                try {
+                    encoded =
+                        model.apply_shN_value_quant() || encoded;
+                } catch (const std::exception& error) {
+                    LOG_WARN(
+                        "Hydrated splat SH q16 skipped for '{}': {}",
+                        live->name, error.what());
+                }
+            }
+            if (encoded) {
+                lfs::core::Tensor::trim_memory_pool();
+            }
+        }
 
         lfs::Error document_error(const lfs::ErrorCode code,
                                   std::string message,
@@ -2688,6 +2722,33 @@ namespace lfs::io::project {
                 "Automatic saves must carry THMB forward",
                 "save.preview_png");
         }
+        std::vector<std::byte> dataset_preview;
+        std::span<const std::byte> preview_png = options.preview_png;
+#if !defined(LFS_FORMAT_TEST_TARGET)
+        if (!is_autosave &&
+            (options.commit.kind == CommitKind::Explicit ||
+             options.commit.kind == CommitKind::Recovered)) {
+            const auto project_root =
+                impl_->source_path ? impl_->source_path->parent_path()
+                                   : std::filesystem::path{};
+            if (const auto first = first_dataset_image(
+                    impl_->project, impl_->references, impl_->parameters,
+                    project_root)) {
+                auto encoded = dataset_preview_png(*first);
+                if (encoded) {
+                    LOG_INFO(
+                        "Embedded dataset image as project preview: {}",
+                        lfs::core::path_to_utf8(*first));
+                    dataset_preview = std::move(*encoded);
+                    preview_png = dataset_preview;
+                } else {
+                    LOG_WARN(
+                        "Could not encode dataset image as project preview: {}",
+                        lfs::format_for_developer(encoded.error()));
+                }
+            }
+        }
+#endif
         auto normalized = normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
@@ -3069,9 +3130,9 @@ namespace lfs::io::project {
             !result) {
             return std::move(result).error();
         }
-        if (!options.preview_png.empty()) {
+        if (!preview_png.empty()) {
             auto added = checked_add(
-                *planned_bytes, options.preview_png.size(),
+                *planned_bytes, preview_png.size(),
                 "save.preview_bytes");
             if (!added) {
                 return std::move(added).error();
@@ -3179,15 +3240,22 @@ namespace lfs::io::project {
         }
 
         ProjectDocumentSaveReport report;
-        if (!options.preview_png.empty()) {
-            if (auto result = writer->set_preview(options.preview_png);
+        if (!preview_png.empty()) {
+            if (auto result = writer->set_preview(preview_png);
                 !result) {
-                return std::move(result).error();
+                if (dataset_preview.empty()) {
+                    return std::move(result).error();
+                }
+                LOG_WARN(
+                    "Could not embed dataset image as project preview: {}",
+                    lfs::format_for_developer(result.error()));
+                preview_png = {};
+            } else {
+                ++report.rewritten_chunks;
             }
-            ++report.rewritten_chunks;
         }
         for (const auto& [key, source] : impl_->source_rows) {
-            if (!options.preview_png.empty() &&
+            if (!preview_png.empty() &&
                 key.fourcc == FOURCC_THMB) {
                 continue;
             }
@@ -3958,6 +4026,8 @@ namespace lfs::io::project {
                  impl_->checkpoints) {
                 std::optional<lfs::core::SplatData>
                     materialized;
+                const auto ckpt_started =
+                    std::chrono::steady_clock::now();
                 auto decoded = payload.visit_stream(
                     [&](std::istream& stream,
                         const std::uint64_t bytes)
@@ -3997,6 +4067,9 @@ namespace lfs::io::project {
                             std::move(*model));
                         return {};
                     });
+                splat_materialize_ms += milliseconds(
+                    ckpt_started,
+                    std::chrono::steady_clock::now());
                 if (!decoded) {
                     return std::move(decoded).error();
                 }
@@ -4256,6 +4329,7 @@ namespace lfs::io::project {
             (*staged_scene)
                 ->installRestoreSelectionState(
                     std::move(staged_selection->state));
+            encode_staged_splat_shN(**staged_scene);
 
             auto plan =
                 std::make_unique<ProjectHydrationPlan::Impl>();
@@ -4278,6 +4352,11 @@ namespace lfs::io::project {
                         checkpoint_uuid.has_value(),
                     .pending_session =
                         std::move(pending_session),
+                    .splat_read_ms = splat_read_ms,
+                    .splat_hash_ms = splat_hash_ms,
+                    .splat_copy_ms = splat_copy_ms,
+                    .splat_materialize_ms =
+                        splat_materialize_ms,
                 };
             const double total_ms = milliseconds(
                 hydration_started,

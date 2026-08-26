@@ -257,6 +257,17 @@ def pause_training() -> None:
 def resume_training() -> None:
     """Resume a paused training run"""
 
+def project_training_session_state() -> dict:
+    """Return the stored training-session restore state for the open project"""
+
+def restore_training_session(then_start: bool = False) -> None:
+    """Hydrate the stored training session on demand"""
+
+def training_get_state() -> dict:
+    """
+    Return the live trainer state, or the stored session when the trainer is not hydrated
+    """
+
 def stop_training() -> None:
     """Stop the current training run"""
 

@@ -4936,6 +4936,30 @@ namespace lfs::training {
                             return std::move(staged)
                                 .error();
                         }
+                        if (const auto first =
+                                lfs::io::project::
+                                    first_dataset_image(
+                                        chapters
+                                            ->parameters
+                                            .dataset)) {
+                            auto encoded =
+                                lfs::io::project::
+                                    dataset_preview_png(
+                                        *first);
+                            if (encoded) {
+                                LOG_INFO(
+                                    "Embedded dataset image as project preview: {}",
+                                    lfs::core::path_to_utf8(
+                                        *first));
+                                preview_png =
+                                    std::move(*encoded);
+                            } else {
+                                LOG_WARN(
+                                    "Could not encode dataset image as project preview: {}",
+                                    lfs::format_for_developer(
+                                        encoded.error()));
+                            }
+                        }
 
                         const auto wallclock_ns =
                             static_cast<std::uint64_t>(
@@ -8770,7 +8794,8 @@ namespace lfs::training {
     CheckpointLoadResult Trainer::load_checkpoint(
         std::istream& source,
         const std::uint64_t source_bytes,
-        const std::string_view source_name) {
+        const std::string_view source_name,
+        lfs::core::SplatData* preloaded_model) {
         if (!strategy_) {
             return std::unexpected("Cannot load checkpoint: no strategy initialized");
         }
@@ -8837,7 +8862,7 @@ namespace lfs::training {
             bilateral_grid_.get(), ppisp_.get(),
             ppisp_controller_pool_.get(),
             dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()),
-            splat_tensor_allocator_, source_name);
+            splat_tensor_allocator_, source_name, preloaded_model);
         if (!result) {
             return result;
         }

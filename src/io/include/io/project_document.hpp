@@ -108,6 +108,19 @@ namespace lfs::io::project {
         bool leave_unbound = false;
     };
 
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
+    dataset_preview_png(const std::filesystem::path& first_image,
+                        int max_size = 512);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const lfs::core::param::DatasetConfig& dataset);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const ProjectChapter& project,
+                        const ReferencesChapter& references,
+                        const ParametersChapter& parameters,
+                        const std::filesystem::path& project_root = {});
+
     struct ProjectDocumentAutosaveOptions {
         lfs::core::Uuid file_uuid;
         lfs::core::Uuid base_explicit_commit_uuid;
@@ -156,6 +169,10 @@ namespace lfs::io::project {
         std::size_t hydrated_payload_units = 0;
         std::size_t invalidated_payload_units = 0;
         bool selection_installed = false;
+        double splat_read_ms = 0;
+        double splat_hash_ms = 0;
+        double splat_copy_ms = 0;
+        double splat_materialize_ms = 0;
     };
 
     class LFS_IO_API ProjectHydrationPlan {

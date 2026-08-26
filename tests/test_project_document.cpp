@@ -4,6 +4,7 @@
  */
 
 #include "app/headless_recovery_document.hpp"
+#include "core/image_io.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
@@ -111,6 +112,33 @@ namespace {
         const std::uint64_t identity_tag, const std::uint64_t wallclock) {
         return lfs::test::licht::deterministic_document_save_options(
             0x70000000, identity_tag, wallclock);
+    }
+
+    void write_solid_png(const fs::path& path, const int width, const int height) {
+        auto image = Tensor::empty(
+            {static_cast<std::size_t>(height),
+             static_cast<std::size_t>(width), 3},
+            Device::CPU, DataType::UInt8);
+        auto* pixels = image.ptr<std::uint8_t>();
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const auto offset =
+                    (static_cast<std::size_t>(y) * width + x) * 3;
+                pixels[offset] = static_cast<std::uint8_t>(x & 0xff);
+                pixels[offset + 1] = static_cast<std::uint8_t>(y & 0xff);
+                pixels[offset + 2] = 160;
+            }
+        }
+        lfs::core::save_image_u8(path, image);
+    }
+
+    lfs::core::Uuid bind_dataset(ProjectDocument& document,
+                                 const fs::path& dataset_root) {
+        const auto uuid = require_result(upsert_path_reference(
+            document.edit_references(), {}, dataset_root, "dataset.root",
+            "dataset"));
+        require_status(document.edit_project().set_dataset_reference(uuid));
+        return uuid;
     }
 
     void inject_legacy_gui_window(
@@ -1800,6 +1828,182 @@ namespace {
         auto bytes = reader->read_preview();
         ASSERT_TRUE(bytes);
         EXPECT_EQ(*bytes, preview);
+    }
+
+    TEST(ProjectDocumentTest, FirstDatasetImageOrdersLexicographically) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images / "nested");
+        std::ofstream(images / "zebra.png") << "z";
+        std::ofstream(images / "mango.jpg") << "m";
+        std::ofstream(images / "apple.png") << "a";
+        std::ofstream(images / "notes.txt") << "ignore";
+        std::ofstream(images / "nested" / "aardvark.png") << "nested";
+
+        lfs::core::param::DatasetConfig dataset;
+        dataset.data_path = temporary.path;
+        dataset.images = "images";
+        const auto first = first_dataset_image(dataset);
+        ASSERT_TRUE(first);
+        EXPECT_EQ(first->filename(), "apple.png");
+    }
+
+    TEST(ProjectDocumentTest, FirstDatasetImageMissingDirectoryIsEmpty) {
+        lfs::core::param::DatasetConfig dataset;
+        dataset.data_path = fs::path("/definitely/missing/lfs-dataset-preview");
+        dataset.images = "images";
+        EXPECT_FALSE(first_dataset_image(dataset));
+
+        TemporaryDirectory temporary;
+        dataset.data_path = temporary.path;
+        fs::create_directories(temporary.path / "images");
+        EXPECT_FALSE(first_dataset_image(dataset));
+    }
+
+    TEST(ProjectDocumentTest, SaveEmbedsDatasetImageWhenPreviewEmpty) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images);
+        write_solid_png(images / "scene.png", 800, 400);
+
+        auto document = make_empty_document(fixed_uuid(2100), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        const auto path = temporary.path / "dataset-preview.licht";
+        auto saved = document->save(path, save_options(2101, 200));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        ASSERT_TRUE(reader->preview());
+        auto png = reader->read_preview();
+        ASSERT_TRUE(png);
+        ASSERT_FALSE(png->empty());
+        const auto [pixels, width, height, channels] =
+            lfs::core::load_image_from_memory(
+                reinterpret_cast<const std::uint8_t*>(png->data()),
+                png->size());
+        ASSERT_NE(pixels, nullptr);
+        EXPECT_LE(std::max(width, height), 512);
+        EXPECT_GT(width, 0);
+        EXPECT_GT(height, 0);
+        EXPECT_GE(channels, 1);
+        lfs::core::free_image(pixels);
+    }
+
+    TEST(ProjectDocumentTest, DatasetImageWinsOverCallerPreview) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images);
+        write_solid_png(images / "scene.png", 800, 400);
+
+        auto document = make_empty_document(fixed_uuid(2110), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        const auto preview = one_pixel_png();
+        auto options = save_options(2111, 200);
+        options.preview_png = std::span<const std::byte>(preview);
+        const auto path = temporary.path / "dataset-wins.licht";
+        auto saved = document->save(path, options);
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        auto png = reader->read_preview();
+        ASSERT_TRUE(png);
+        ASSERT_FALSE(png->empty());
+        EXPECT_NE(*png, preview);
+        const auto [pixels, width, height, channels] =
+            lfs::core::load_image_from_memory(
+                reinterpret_cast<const std::uint8_t*>(png->data()),
+                png->size());
+        ASSERT_NE(pixels, nullptr);
+        EXPECT_LE(std::max(width, height), 512);
+        EXPECT_GT(width, 1);
+        EXPECT_GT(height, 1);
+        EXPECT_GE(channels, 1);
+        lfs::core::free_image(pixels);
+    }
+
+    TEST(ProjectDocumentTest, CallerPreviewUsedWhenNoDatasetImage) {
+        TemporaryDirectory temporary;
+        fs::create_directories(temporary.path / "images");
+
+        auto document = make_empty_document(fixed_uuid(2130), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        const auto preview = one_pixel_png();
+        auto options = save_options(2131, 200);
+        options.preview_png = std::span<const std::byte>(preview);
+        const auto path = temporary.path / "caller-preview.licht";
+        auto saved = document->save(path, options);
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
+    }
+
+    TEST(ProjectDocumentTest,
+         ExplicitSaveReplacesExistingThumbWithDatasetImage) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images);
+
+        auto document = make_empty_document(fixed_uuid(2150), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        const auto preview = one_pixel_png();
+        auto first_options = save_options(2151, 200);
+        first_options.preview_png = std::span<const std::byte>(preview);
+        const auto path = temporary.path / "replace-thumb.licht";
+        auto first_saved = document->save(path, first_options);
+        ASSERT_TRUE(first_saved)
+            << lfs::format_for_developer(first_saved.error());
+
+        auto first_reader = ProjectReader::open(path);
+        ASSERT_TRUE(first_reader);
+        auto first_bytes = first_reader->read_preview();
+        ASSERT_TRUE(first_bytes);
+        EXPECT_EQ(*first_bytes, preview);
+
+        write_solid_png(images / "scene.png", 800, 400);
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        auto second_saved = reopened->save(path, save_options(2152, 300));
+        ASSERT_TRUE(second_saved)
+            << lfs::format_for_developer(second_saved.error());
+
+        auto second_reader = ProjectReader::open(path);
+        ASSERT_TRUE(second_reader);
+        auto png = second_reader->read_preview();
+        ASSERT_TRUE(png);
+        ASSERT_FALSE(png->empty());
+        EXPECT_NE(*png, preview);
+        const auto [pixels, width, height, channels] =
+            lfs::core::load_image_from_memory(
+                reinterpret_cast<const std::uint8_t*>(png->data()),
+                png->size());
+        ASSERT_NE(pixels, nullptr);
+        EXPECT_LE(std::max(width, height), 512);
+        EXPECT_GT(width, 1);
+        EXPECT_GT(height, 1);
+        EXPECT_GE(channels, 1);
+        lfs::core::free_image(pixels);
     }
 
     TEST(ProjectDocumentTest,
@@ -4744,6 +4948,55 @@ namespace {
         expect_splats_bit_equal(*materialized_node->model, *shuffled_node->model);
         EXPECT_EQ(splat_provenance_hash(*shuffled_deferred, splat_uuid),
                   xxh3_128(shuffled_bytes));
+    }
+
+    TEST(ProjectDocumentTest,
+         HydrationPipelineTensorChecksumsMatchMaterialized) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "splat-checksum.licht";
+        const Uuid project_uuid = fixed_uuid(12200);
+        const Uuid splat_uuid = fixed_uuid(12201);
+        auto model = make_splat(8);
+        model->set_frozen_ranges({{1, 2}, {5, 1}});
+        write_one_splat_document(path, *model, project_uuid, splat_uuid, 12210);
+        rewrite_splat_chunk(path, splat_uuid,
+                            Compression::ByteShuffleZstdFramed, 12220);
+
+        auto materialized = require_result_ptr(ProjectDocument::open(path));
+        Scene materialized_scene;
+        auto materialized_report = materialized->hydrate(materialized_scene);
+        ASSERT_TRUE(materialized_report)
+            << lfs::format_for_developer(materialized_report.error());
+        const auto* materialized_node =
+            materialized_scene.getNodeByUuid(splat_uuid);
+        ASSERT_NE(materialized_node, nullptr);
+        ASSERT_NE(materialized_node->model, nullptr);
+
+        auto deferred = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        Scene deferred_scene;
+        auto deferred_report = deferred->hydrate(deferred_scene);
+        ASSERT_TRUE(deferred_report)
+            << lfs::format_for_developer(deferred_report.error());
+        const auto* deferred_node = deferred_scene.getNodeByUuid(splat_uuid);
+        ASSERT_NE(deferred_node, nullptr);
+        ASSERT_NE(deferred_node->model, nullptr);
+
+        const auto checksum = [](const Tensor& tensor) {
+            const auto bytes = tensor_bytes(tensor);
+            return xxh3_128(bytes);
+        };
+        EXPECT_EQ(checksum(materialized_node->model->means()),
+                  checksum(deferred_node->model->means()));
+        EXPECT_EQ(checksum(materialized_node->model->sh0()),
+                  checksum(deferred_node->model->sh0()));
+        EXPECT_EQ(checksum(materialized_node->model->scaling_raw()),
+                  checksum(deferred_node->model->scaling_raw()));
+        EXPECT_EQ(checksum(materialized_node->model->rotation_raw()),
+                  checksum(deferred_node->model->rotation_raw()));
+        EXPECT_EQ(checksum(materialized_node->model->opacity_raw()),
+                  checksum(deferred_node->model->opacity_raw()));
+        expect_splats_bit_equal(*materialized_node->model, *deferred_node->model);
     }
 
     TEST(ProjectDocumentTest, StreamHydrateForwardsMonotonicPayloadProgress) {

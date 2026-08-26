@@ -571,6 +571,12 @@ namespace lfs::vis {
                     state.progress = project_open->progress;
                     state.stage = project_open->stage;
                     state.dataset_type = "project";
+                    if (const auto info =
+                            gm->getViewer()->projectGetInfo();
+                        info && info->path) {
+                        state.path = lfs::core::path_to_utf8(
+                            info->path->filename());
+                    }
                     return state;
                 }
                 const auto& tasks = gm->asyncTasks();
@@ -1269,6 +1275,25 @@ namespace lfs::vis {
                 LOG_WARN("Cannot reset: no dataset");
                 return;
             }
+            if (project_lifecycle_ &&
+                (!trainer_manager_ ||
+                 !trainer_manager_->hasTrainer())) {
+                const auto session =
+                    project_lifecycle_->trainingSessionState();
+                if (session.available && !session.hydrated) {
+                    if (auto restored =
+                            project_lifecycle_
+                                ->restoreTrainingSession(
+                                    false, true);
+                        !restored) {
+                        LOG_ERROR(
+                            "Failed to restore training session before reset: {}",
+                            lfs::format_for_developer(
+                                restored.error()));
+                    }
+                    return;
+                }
+            }
             if (trainer_manager_ &&
                 (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
                 trainer_manager_->suppressCompletionNotification();
@@ -1337,6 +1362,8 @@ namespace lfs::vis {
                             gui::error_op::kProjectSettings);
                         return;
                     }
+                    project_lifecycle_
+                        ->abandonStoredTrainingSession();
                 }
                 if (scene_manager_) {
                     scene_manager_->switchToEditMode();
@@ -3314,9 +3341,58 @@ namespace lfs::vis {
         shutdown_requested_callback_ = std::move(callback);
     }
 
+    VisualizerImpl::ProjectTrainingSessionState
+    VisualizerImpl::projectTrainingSessionState() const {
+        if (!project_lifecycle_) {
+            return {};
+        }
+        const auto session =
+            project_lifecycle_->trainingSessionState();
+        ProjectTrainingSessionState state;
+        state.available = session.available;
+        state.iteration = session.iteration;
+        state.max_iterations = session.max_iterations;
+        state.strategy = session.strategy;
+        state.completed = session.completed;
+        state.hydrated = session.hydrated;
+        state.restoring = session.restoring;
+        state.error = session.error;
+        return state;
+    }
+
+    lfs::Result<void>
+    VisualizerImpl::restoreProjectTrainingSession(
+        const bool then_start) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->restoreTrainingSession(
+            then_start);
+    }
+
     std::expected<void, std::string> VisualizerImpl::startTraining() {
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
+        if (project_lifecycle_ &&
+            !trainer_manager_->hasTrainer()) {
+            const auto session =
+                project_lifecycle_->trainingSessionState();
+            if (session.available && !session.hydrated) {
+                if (auto restored =
+                        project_lifecycle_
+                            ->restoreTrainingSession(true);
+                    !restored) {
+                    return std::unexpected(
+                        lfs::format_for_developer(
+                            restored.error()));
+                }
+                return {};
+            }
+        }
         if (trainer_manager_->isPaused()) {
             if (project_lifecycle_) {
                 if (auto* const trainer = getTrainer()) {

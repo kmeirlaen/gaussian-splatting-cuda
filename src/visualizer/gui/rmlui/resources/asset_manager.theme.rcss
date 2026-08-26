@@ -139,6 +139,14 @@
     color: @{text_dim};
 }
 
+.asset-gallery-notice {
+    color: @{warning};
+}
+
+.asset-gallery-scan-status {
+    color: @{text_dim};
+}
+
 /* ── Asset Cards ─────────────────────────────────────────── */
 
 .asset-card {
@@ -158,9 +166,8 @@
     border-bottom-color: @{border};
 }
 
-.asset-pill-mp4 {
-    background-color: @{alpha(warning,0.25)};
-    color: @{warning};
+.asset-card-placeholder {
+    color: @{text_dim};
 }
 
 .asset-card-title {
