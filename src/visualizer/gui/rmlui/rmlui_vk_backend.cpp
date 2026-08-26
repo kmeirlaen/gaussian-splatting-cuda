@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: MIT */
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
-#include "core/image_io.hpp"
 #include "core/error.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
