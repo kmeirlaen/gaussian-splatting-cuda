@@ -262,7 +262,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1040,27 +1040,59 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("wait") = false,
         "Save the active project to a new .licht path");
     m.def(
+        "project_poll_write", []() {
+            nb::dict result;
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return result;
+            }
+            auto poll = viewer->projectPollWrite();
+            if (!poll) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_poll_write failed: {}",
+                        lfs::format_for_developer(
+                            poll.error())));
+            }
+            result["running"] = poll->running;
+            result["generation"] = poll->generation;
+            result["path"] =
+                poll->path
+                    ? lfs::core::path_to_utf8(
+                          *poll->path)
+                    : std::string{};
+            result["error"] = poll->error;
+            return result;
+        },
+        "Return the active .licht project write state");
+    m.def(
         "project_open",
         [](const std::string& path,
            const bool discard_changes,
-           const bool stop_training) {
+           const bool stop_training,
+           const bool keep_asset_manager_open) {
             const auto project_path =
                 python_utf8_path(path);
-            if (project_path.empty() || stop_training) {
+            if (project_path.empty() || stop_training ||
+                keep_asset_manager_open) {
                 nb::gil_scoped_release release;
                 emit_project_cmd_marshaled(
                     project_path.empty()
                         ? "python.project_open_dialog"
                         : "python.project_open",
                     [project_path, discard_changes,
-                     stop_training] {
+                     stop_training,
+                     keep_asset_manager_open] {
                         lfs::core::events::cmd::
                             ProjectOpen{
                                 .path = project_path,
                                 .discard_changes =
                                     discard_changes,
                                 .stop_training =
-                                    stop_training}
+                                    stop_training,
+                                .keep_asset_manager_open =
+                                    keep_asset_manager_open}
                                 .emit();
                     });
                 return lfs::vis::
@@ -1090,6 +1122,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("path") = "",
         nb::arg("discard_changes") = false,
         nb::arg("stop_training") = false,
+        nb::arg("keep_asset_manager_open") = false,
         "Open a .licht project");
     m.def(
         "project_compact", []() {

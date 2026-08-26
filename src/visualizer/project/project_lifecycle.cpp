@@ -7489,6 +7489,7 @@ namespace lfs::vis::project {
                         candidate.master_path,
                         disposition);
                 } else {
+                    viewer_.keep_asset_manager_open_after_restore_ = false;
                     handleRecoverySkip(candidate);
                     autosave_sequence_ =
                         previous_autosave_sequence;
@@ -7517,6 +7518,7 @@ namespace lfs::vis::project {
                 }
                 recovery_prompt_pending_ = false;
                 pending_recovery_candidate_.reset();
+                viewer_.keep_asset_manager_open_after_restore_ = false;
                 handleRecoverySkip(candidate);
                 autosave_sequence_ =
                     previous_autosave_sequence;

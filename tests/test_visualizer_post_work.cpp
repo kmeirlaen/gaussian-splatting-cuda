@@ -41,6 +41,7 @@
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/preferences.hpp"
 #include "visualizer/project/project_switch_error.hpp"
+#include "visualizer/project/session_state.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
 #include <algorithm>
@@ -4354,6 +4355,7 @@ namespace lfs::vis {
                 lfs::core::NULL_NODE);
 
             bool drag_drop_prompted = false;
+            bool keep_asset_manager_open = false;
             std::filesystem::path prompted_path;
             lfs::core::events::cmd::
                 ShowProjectSwitchConfirmation::
@@ -4361,12 +4363,16 @@ namespace lfs::vis {
                         drag_drop_prompted = true;
                         prompted_path =
                             event.path;
+                        keep_asset_manager_open =
+                            event.keep_asset_manager_open;
                     });
             lfs::core::events::cmd::
                 ProjectOpen{
-                    .path = project_path}
+                    .path = project_path,
+                    .keep_asset_manager_open = true}
                     .emit();
             EXPECT_TRUE(drag_drop_prompted);
+            EXPECT_TRUE(keep_asset_manager_open);
             EXPECT_EQ(
                 prompted_path, project_path);
             EXPECT_NE(
@@ -4397,6 +4403,57 @@ namespace lfs::vis {
                 viewer.getScene().getNodeCount(),
                 0u);
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AssetManagerProjectRestorePreservesLeftDockWidth) {
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+
+        auto current_layout =
+            gui->panelLayout().captureProjectState();
+        current_layout.left_dock_width = 487.0f;
+        gui->panelLayout().applyProjectState(
+            current_layout);
+
+        auto session = lfs::test::licht::
+            make_populated_session_chapters();
+        auto prepared = project::prepareGuiSessionRestore(
+            std::move(session));
+        ASSERT_TRUE(prepared)
+            << lfs::format_for_developer(
+                   prepared.error());
+        auto restored_layout = lfs::test::licht::json_root(
+            prepared->chapters.gui_layout.dom());
+        std::optional<float> restored_left_dock_width;
+        lfs::io::project::
+            for_each_fixed_arrangement_payload(
+                restored_layout,
+                [&](const auto& payload) {
+                    restored_left_dock_width =
+                        payload.value(
+                            "left_dock_width", 0.0f);
+                });
+        ASSERT_TRUE(restored_left_dock_width);
+        ASSERT_FLOAT_EQ(
+            *restored_left_dock_width,
+            271.0f);
+
+        viewer.keep_asset_manager_open_after_restore_ =
+            true;
+        const auto ticket =
+            viewer.stagePreparedProjectSessionRestore(
+                std::move(*prepared));
+        ASSERT_NE(ticket, 0u);
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+
+        EXPECT_FLOAT_EQ(
+            gui->panelLayout().getLeftDockWidth(),
+            487.0f);
+        EXPECT_FALSE(
+            viewer.keep_asset_manager_open_after_restore_);
     }
 
     TEST_F(VisualizerImplResetTest,
