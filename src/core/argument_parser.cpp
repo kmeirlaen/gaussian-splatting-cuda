@@ -356,6 +356,9 @@ namespace {
         return {};
     }
 
+    std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str);
+    std::expected<std::vector<lfs::core::param::OutputFormat>, std::string> parseFormatList(const std::string& formats_str);
+
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
         lfs::core::param::TrainingParameters& params) {
@@ -415,6 +418,7 @@ namespace {
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
             ::args::Flag no_provenance(paths_group, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
+            ::args::ValueFlag<std::string> export_formats(paths_group, "formats", "Also export the final trained splat next to project.licht: comma-separated ply, sog, spz, usd, usda, usdc, html, rad", {"export"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -844,6 +848,14 @@ namespace {
                     params.add_splat_paths.push_back(splat_path);
                     params.add_splat_freeze.push_back((*add_splat_freeze)[i]);
                 }
+            }
+
+            if (export_formats) {
+                auto formats = parseFormatList(::args::get(export_formats));
+                if (!formats) {
+                    return std::unexpected(formats.error());
+                }
+                params.export_formats = std::move(*formats);
             }
 
             // Training mode
