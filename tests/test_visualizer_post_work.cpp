@@ -477,15 +477,19 @@ protected:
         const bool done = pumpUntil(
             queue_mutex, queue,
             [&] {
+                // The trainer pointer is installed before its paused/finished
+                // presentation. Wait for the restore worker to publish completion.
+                const auto session =
+                    viewer.projectTrainingSessionState();
+                if (session.restoring) {
+                    return false;
+                }
                 if (viewer.getTrainerManager() &&
                     viewer.getTrainerManager()
                         ->hasTrainer()) {
                     return true;
                 }
-                const auto session =
-                    viewer.projectTrainingSessionState();
-                return !session.restoring &&
-                       !session.error.empty();
+                return !session.error.empty();
             },
             timeout);
         return done && viewer.getTrainerManager() &&

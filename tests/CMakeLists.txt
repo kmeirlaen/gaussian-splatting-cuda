@@ -285,6 +285,8 @@ set(TEST_FILES
     test_sh_value_storage.cpp
     test_morton_reorder.cpp
     test_transform_bake_q16.cpp
+    test_splat_affine_transform.cpp
+    test_splat_sh_affine.cpp
     test_splat_data_clone.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
@@ -358,6 +360,7 @@ set(TEST_FILES
     test_geometry_payload.cpp
     test_selection_chapter.cpp
     test_project_document.cpp
+    test_gallery_scene_publication.cpp
     test_project_lifecycle.cpp
     test_p8_compatibility.cpp
     test_job_registry.cpp
@@ -432,6 +435,7 @@ set(TEST_FILES
     test_scene_graph_fuzz.cpp
     test_uuid.cpp
     test_render_settings_defaults.cpp
+    test_portal_render_profile.cpp
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp

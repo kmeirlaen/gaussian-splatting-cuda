@@ -230,6 +230,14 @@ namespace lfs::vis::project {
         [[nodiscard]] std::filesystem::path
         projectRootFor(
             const ProjectDocument& document) {
+            if (auto refs = document.references().records(); refs) {
+                for (const auto& ref : *refs) {
+                    if (document.find_dataset_source(ref.uuid)) {
+                        if (auto directory = document.embedded_asset_directory(); directory)
+                            return *directory;
+                    }
+                }
+            }
             if (const auto source =
                     document.source_path();
                 source && !source->empty()) {
@@ -5846,6 +5854,18 @@ namespace lfs::vis::project {
             const auto existing =
                 bindings.find(node->uuid);
             if (existing != bindings.end()) {
+                // Keep the original encoding for view-only saves. Geometry edits
+                // must capture the current resident splats instead of reusing the
+                // uploaded DSRC bytes and silently losing those edits on reopen.
+                if (node->type == lfs::core::NodeType::SPLAT && existing->second.fourcc == "DSRC" &&
+                    node->payload_hydration == lfs::core::PayloadHydrationState::Loaded &&
+                    (payload_dirty_.load(std::memory_order_acquire) || node->payload_diverged)) {
+                    existing->second = PayloadBinding{
+                        .fourcc = "SPLT",
+                        .instance_uuid = node->uuid,
+                        .reference_uuid = std::nullopt,
+                        .source_kind = "generated"};
+                }
                 continue;
             }
             if (node->uuid == training_uuid) {
@@ -7400,10 +7420,9 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
-        // A stale import completion must not outlive
-        // a project switch.
+        // Invalidate gallery imports before swapping scenes; their workers drain asynchronously.
         if (auto* const gui = viewer_.getGuiManager()) {
-            gui->asyncTasks().cancelImport();
+            gui->asyncTasks().cancelImport(false);
         }
 
         stopHydrationThreads(false);

@@ -59,6 +59,9 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<LazyChunkValue>
         from_owned(std::vector<std::byte> bytes,
                    const lfs::core::Uuid& snapshot_uuid);
+        // Independent owner of the same file-backed or owned bytes. Safe to
+        // retain after the source ProjectDocument is closed or replaced.
+        [[nodiscard]] lfs::Result<LazyChunkValue> share() const;
 
         [[nodiscard]] std::uint64_t size() const noexcept;
         [[nodiscard]] const lfs::core::Uuid& snapshot_uuid() const noexcept;
@@ -304,6 +307,9 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<std::filesystem::path> embedded_asset_directory() const;
+        [[nodiscard]] lfs::Result<std::filesystem::path>
+        materialize_embedded_asset(const lfs::core::Uuid& uuid, std::string_view extension) const;
         [[nodiscard]] std::vector<lfs::core::Uuid>
         dataset_source_uuids() const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>

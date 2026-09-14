@@ -86,16 +86,16 @@ namespace lfs::vis {
     }
 
     namespace {
-        std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
+        std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x, const int sh_degree = 0) {
             using lfs::core::DataType;
             using lfs::core::Device;
             using lfs::core::Tensor;
 
             return std::make_unique<lfs::core::SplatData>(
-                0,
+                sh_degree,
                 Tensor::from_vector({x, 0.0f, 2.0f}, {size_t{1}, size_t{3}}, Device::CPU),
                 Tensor::from_vector({1.0f, 1.0f, 1.0f}, {size_t{1}, size_t{1}, size_t{3}}, Device::CPU),
-                Tensor::zeros({size_t{1}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({size_t{1}, static_cast<size_t>((sh_degree + 1) * (sh_degree + 1) - 1), size_t{3}}, Device::CPU, DataType::Float32),
                 Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{3}}, Device::CPU),
                 Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{4}}, Device::CPU),
                 Tensor::from_vector({8.0f}, {size_t{1}, size_t{1}}, Device::CPU),
@@ -942,8 +942,10 @@ namespace lfs::vis {
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
 
         auto& scene = manager.getScene();
-        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f));
-        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f));
+        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f, 3));
+        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f, 3));
+        scene.getNodeById(left_id)->model->set_active_sh_degree(1);
+        scene.getNodeById(right_id)->model->set_active_sh_degree(2);
         scene.setNodeTransform(
             left_id, glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
         scene.setNodeTransform(
@@ -1005,11 +1007,19 @@ namespace lfs::vis {
             EXPECT_FALSE(panel.presentation.normalize_x_to_panel);
             EXPECT_EQ(panel.content.gaussian_render->scene.transform_indices, nullptr);
             EXPECT_TRUE(panel.content.gaussian_render->scene.node_visibility_mask.empty());
+            EXPECT_TRUE(panel.content.gaussian_render->scene.node_active_sh_degrees.empty());
             EXPECT_TRUE(panel.content.gaussian_render->filters.view_volume.has_value());
             EXPECT_TRUE(panel.content.gaussian_render->overlay.markers.show_rings);
             EXPECT_FALSE(panel.content.gaussian_render->overlay.cursor.enabled);
             EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
             EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
+
+            auto scoped_state = scene_state;
+            const auto& node = i == 0 ? *left_node : *right_node;
+            scopeSceneRenderStateToVisibleSplatNode(
+                scoped_state, scene, node, static_cast<int>(i), panel.content.model_transform);
+            EXPECT_EQ(scoped_state.node_active_sh_degrees,
+                      std::vector<int>{static_cast<int>(i) + 1});
         }
 
         EXPECT_FALSE(scene.hasPreparedCombinedModel());
@@ -1222,6 +1232,23 @@ namespace lfs::vis {
         EXPECT_EQ(metadata_again.selection_mask, nullptr);
         EXPECT_TRUE(scene.hasPreparedCombinedModel());
         EXPECT_FALSE(scene.combinedModelBuildPending());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, ActiveShChangesRefreshFullAndMetadataSnapshots) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto id = scene.addSplat("model", makeTestSplat(0.0f, 3));
+        auto* model = scene.getNodeById(id)->model.get();
+        for (const bool metadata_only : {false, true}) {
+            model->set_active_sh_degree(1);
+            const auto before = manager.buildRenderState({.metadata_only = metadata_only});
+            EXPECT_EQ(before.node_active_sh_degrees, std::vector<int>{1});
+            model->set_active_sh_degree(2);
+            const auto after = manager.buildRenderState({.metadata_only = metadata_only});
+            EXPECT_EQ(after.node_active_sh_degrees, std::vector<int>{2});
+            EXPECT_EQ(after.combined_model, metadata_only ? nullptr : model);
+        }
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonPivotSamplesClickedOwnedNode) {
