@@ -371,12 +371,11 @@ namespace lfs::vis::gui {
                 cls, i, btn.disabled ? " disabled=\"disabled\"" : "", btn.label);
         }
         el_button_row_->SetInnerRML(btn_html);
-
     }
 
     bool RmlModalOverlay::updateForm(const std::string& key,
-                                   const std::optional<std::string>& body_rml,
-                                   const std::vector<lfs::core::ModalButtonSpec>& buttons) {
+                                     const std::optional<std::string>& body_rml,
+                                     const std::vector<lfs::core::ModalButtonSpec>& buttons) {
         if (key.empty())
             return false;
         if (!active_ || active_->key != key) {

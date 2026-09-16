@@ -33,8 +33,8 @@
 #include "tools/tool_base.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/training_manager.hpp"
-#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL.h>
@@ -2383,7 +2383,7 @@ namespace lfs::vis {
                 if (panels.is_panel_enabled("lfs.asset_manager")) {
                     if (const auto panel = panels.get_panel_instance("lfs.asset_manager");
                         panel && panel->onViewportDrop(
-                            "application/x-lichtfeld-project-file", paths.front())) {
+                                     "application/x-lichtfeld-project-file", paths.front())) {
                         LOG_INFO("Added project to Asset Manager via drag-and-drop: {}",
                                  lfs::core::path_to_utf8(dropped_path.filename()));
                         return;

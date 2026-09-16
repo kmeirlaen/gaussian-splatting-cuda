@@ -157,7 +157,7 @@ namespace lfs::python {
             switch (modal.type) {
             case ModalDialogType::Confirm: {
                 for (size_t i = 0; i < modal.buttons.size(); ++i) {
-                const std::string style = (i == 0) ? "primary" : "secondary";
+                    const std::string style = (i == 0) ? "primary" : "secondary";
                     const std::string button_style =
                         (i == 0 && modal.style == MessageStyle::Error) ? "error" : style;
                     req.buttons.push_back({modal.buttons[i], button_style});
@@ -291,7 +291,8 @@ namespace lfs::python {
                         return false;
                     gui->enqueueModal(std::move(req));
                     return true;
-                }, false);
+                },
+                                        false);
             },
             nb::arg("key"), nb::arg("title"), nb::arg("body_rml"), nb::arg("buttons"),
             nb::arg("callback"), nb::arg("on_change") = nb::none(), nb::arg("width") = 640,
@@ -305,7 +306,8 @@ namespace lfs::python {
                     auto* gui = get_gui_manager();
                     auto* overlay = gui ? gui->modalOverlay() : nullptr;
                     return overlay && overlay->updateForm(key, body_rml, specs);
-                }, false);
+                },
+                                        false);
             },
             nb::arg("key"), nb::arg("buttons"), nb::arg("body_rml") = nb::none(),
             "Update a matching live or queued form. Omit body_rml to preserve input focus and values.");
