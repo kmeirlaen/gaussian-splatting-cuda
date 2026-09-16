@@ -2509,6 +2509,60 @@ namespace lfs::io::project {
         return mutate_document(path, "thumbnail_changed", [](ProjectDocument&) -> lfs::Result<void> { return {}; }, png_bytes);
     }
 
+    lfs::Result<ProjectThumbnailSourceAvailability>
+    inspect_project_thumbnail_sources(
+        const std::filesystem::path& path) {
+        auto opened = ProjectDocument::open(path);
+        if (!opened) {
+            return std::move(opened).error();
+        }
+        auto& document = *opened;
+        ProjectThumbnailSourceAvailability availability;
+
+        try {
+            if (const auto first = first_dataset_image(
+                    document.project(), document.references(),
+                    document.parameters(), path.parent_path())) {
+                availability.first_dataset_image =
+                    static_cast<bool>(dataset_preview_png(*first));
+            }
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): a bad external source only removes
+            // this optional choice; keep the other thumbnail sources available.
+            availability.first_dataset_image = false;
+        }
+
+        auto manifest = document.parameters().embedded_dataset();
+        if (!manifest) {
+            return availability;
+        }
+        if (*manifest) {
+            const auto first_image = std::ranges::find_if(
+                (**manifest).entries,
+                [](const EmbeddedDatasetEntry& entry) {
+                    return entry.kind == "image";
+                });
+            if (first_image != (**manifest).entries.end()) {
+                const auto* payload =
+                    document.find_dataset_source(first_image->chunk_uuid);
+                if (payload) {
+                    auto bytes = read_lazy_payload(*payload);
+                    if (bytes) {
+                        try {
+                            availability.first_embedded_image =
+                                static_cast<bool>(encode_image_bytes(*bytes));
+                        } catch (...) {
+                            // LFS-CENSUS-OK(empty-catch): a corrupt optional
+                            // embedded source must not hide other choices.
+                            availability.first_embedded_image = false;
+                        }
+                    }
+                }
+            }
+        }
+        return availability;
+    }
+
     lfs::Result<ProjectInspectorCard>
     preview_from_first_dataset_image(const std::filesystem::path& path) {
         auto lease = acquire_operation_lock(path);
