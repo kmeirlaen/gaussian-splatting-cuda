@@ -512,6 +512,10 @@ class GallerySync:
                 etag = self._list_etag if same else None
                 self._session, self._owner, self._origin = session, capabilities["id"], origin
                 bucket = self._bucket()
+                linked_scene_ids = {
+                    link.get("sceneId") for link in bucket["links"].values()
+                    if isinstance(link, dict) and link.get("sceneId") and not link.get("remoteDeleted")
+                }
                 cache_key = hashlib.sha256(json.dumps([origin, self._owner]).encode()).hexdigest()
                 cache_file = FileBackend(self.root / ("listing-" + cache_key + ".json"))
                 cache = {}
@@ -559,6 +563,12 @@ class GallerySync:
                 # This also handles an old portal whose first-page ETag does
                 # not describe the later pages.
                 scenes = client.list_scenes()
+            # A stale incremental cache can legitimately have no events while
+            # still missing a scene that is referenced by the local journal.
+            # Re-walk the owner listing before declaring those projects removed.
+            listed_scene_ids = {scene.get("id") for scene in scenes if isinstance(scene, dict)}
+            if linked_scene_ids - listed_scene_ids:
+                scenes = client.list_scenes()
             # The changes feed may contain compact scene summaries. Resolve
             # them before comparing or applying authored view settings. This
             # also repairs a cache written by an earlier client.
@@ -585,8 +595,11 @@ class GallerySync:
                 self._checked_at = time.time()
                 if scenes is not None:
                     self.scenes = scenes
+                recovered = self._origin_publication_links(self.scenes, self._bucket()["links"])
                 for link in self._bucket()["links"].values():
                     link["checkedAt"] = self._checked_at
+                if recovered:
+                    self._save()
                 self._refresh_ok = True
                 self._relink_identity = None
                 self._unsupported_identity = None
@@ -680,6 +693,32 @@ class GallerySync:
                     entry = self._poster_entries.pop(scene["id"], None)
                     if entry:
                         Path(entry["path"]).unlink(missing_ok=True)
+
+    @staticmethod
+    def _origin_publication_links(scenes, links):
+        """Recover unambiguous local-project links from an owner listing."""
+        candidates = {}
+        for scene in scenes:
+            project_id = scene.get("originProjectUuid")
+            if scene.get("status") != "ready" or not isinstance(project_id, str) or not project_id:
+                continue
+            candidates.setdefault(project_id, []).append(scene)
+
+        recovered = {}
+        for project_id, matches in candidates.items():
+            if project_id in links or len(matches) != 1:
+                continue
+            scene = matches[0]
+            if not all(isinstance(scene.get(key), str) and scene[key]
+                       for key in ("id", "contentRevision", "metadataRevision")):
+                continue
+            link = exchange_link(scene, scene.get("originCommitUuid") or "")
+            source_format = scene.get("sourceFormat")
+            if isinstance(source_format, str) and source_format:
+                link["uploadFormat"] = source_format
+            links[project_id] = link
+            recovered[project_id] = link
+        return recovered
 
     def queue_prepared_upload(self, staging, metadata, project_id):
         staging = gallery_preparation.staging_path(self.root, staging)
@@ -1897,9 +1936,9 @@ class GallerySync:
             scenes = [scene for scene in scenes if scene.get("originProjectUuid") == project_id
                       and scene.get("status") == "ready"]
             bucket = self._bucket()
-            if len(scenes) == 1 and project_id not in bucket["links"]:
-                scene = scenes[0]
-                bucket["links"][project_id] = exchange_link(scene, scene.get("originCommitUuid") or "")
+            recovered = self._origin_publication_links(scenes, bucket["links"])
+            if recovered:
+                scene = next(iter(recovered.values()))["metadata"]
                 self.scenes = [item for item in self.scenes if item["id"] != scene["id"]] + [scene]
                 self._save()
         self._launch_metadata(action)
