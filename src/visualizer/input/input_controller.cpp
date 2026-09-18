@@ -33,6 +33,7 @@
 #include "tools/tool_base.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
@@ -146,6 +147,7 @@ namespace lfs::vis {
                                  double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::KEY;
+            evt.over_gui = over_gui;
             evt.data = KeyEvent{key, scancode, action, mods};
 
             if (op::operators().hasModalOperator()) {
@@ -171,6 +173,7 @@ namespace lfs::vis {
                                          double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_BUTTON;
+            evt.over_gui = over_gui;
             evt.data = MouseButtonEvent{button, action, mods, {x, y}};
 
             if (op::operators().hasModalOperator()) {
@@ -196,6 +199,7 @@ namespace lfs::vis {
                                        [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_MOVE;
+            evt.over_gui = over_gui;
             evt.data = MouseMoveEvent{{x, y}, {delta_x, delta_y}};
 
             if (op::operators().hasModalOperator()) {
@@ -220,6 +224,7 @@ namespace lfs::vis {
                                     [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_SCROLL;
+            evt.over_gui = over_gui;
             evt.data = MouseScrollEvent{xoff, yoff};
 
             if (op::operators().hasModalOperator()) {
@@ -1051,14 +1056,15 @@ namespace lfs::vis {
                             }
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
-                    } else if (align_tool_ && align_tool_->isEnabled()) {
+                    } else if (align_tool_ && align_tool_->isEnabled() &&
+                               !op::operators().hasModalOperator()) {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
                         props.set("button", button);
                         props.set("modifiers", mods);
                         const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                        if (result.status != op::OperatorResult::CANCELLED) {
+                        if (result.status == op::OperatorResult::RUNNING_MODAL) {
                             return;
                         }
                     }
@@ -1075,14 +1081,15 @@ namespace lfs::vis {
 
             case input::Action::NONE:
             default:
-                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui) {
+                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui &&
+                    !op::operators().hasModalOperator()) {
                     op::OperatorProperties props;
                     props.set("x", x);
                     props.set("y", y);
                     props.set("button", button);
                     props.set("modifiers", mods);
                     const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                    if (result.status != op::OperatorResult::CANCELLED) {
+                    if (result.status == op::OperatorResult::RUNNING_MODAL) {
                         return;
                     }
                 }
@@ -2372,6 +2379,16 @@ namespace lfs::vis {
                         std::tolower(character));
                 });
             if (extension == ".licht") {
+                auto& panels = gui::PanelRegistry::instance();
+                if (panels.is_panel_enabled("lfs.asset_manager")) {
+                    if (const auto panel = panels.get_panel_instance("lfs.asset_manager");
+                        panel && panel->onViewportDrop(
+                                     "application/x-lichtfeld-project-file", paths.front())) {
+                        LOG_INFO("Added project to Asset Manager via drag-and-drop: {}",
+                                 lfs::core::path_to_utf8(dropped_path.filename()));
+                        return;
+                    }
+                }
                 // Unpublished *.tmp.licht names still emit ProjectOpen so
                 // lifecycle can reject with unpublishedLichtUserMessage.
                 cmd::ProjectOpen{.path = dropped_path}.emit();
