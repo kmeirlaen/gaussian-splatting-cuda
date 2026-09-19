@@ -146,6 +146,14 @@ class InspectionFactsPipeline:
                             self._deliver(asset_id, "card", card, None, cancel)
                 if cancel.is_set():
                     return
+                cached = self._cache.get(asset_id)
+                if cached is None or cached.card is None:
+                    continue
+                # Cards classify missing, damaged and newer-version files
+                # without throwing. Structural details require an open project.
+                open_state = value(cached.card, "open_state", "OPEN")
+                if str(value(open_state, "name", open_state)).rsplit(".", 1)[-1] != "OPEN":
+                    continue
                 is_selected = asset_id == selected_id
                 last = self._details_last_started.get(asset_id, 0.0)
                 due = is_selected or time.monotonic() - last >= 0.5

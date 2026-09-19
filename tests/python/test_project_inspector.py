@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import threading
 import time
 
+import pytest
+
 from lfs_plugins.project_inspector import (
     InspectionFactsPipeline,
     details_rows,
@@ -72,6 +74,34 @@ def test_pipeline_cancellation_drops_stale_result():
     time.sleep(0.05)
     assert results == []
     pipeline.close()
+
+
+@pytest.mark.parametrize("state", ["HARD_FAIL", "REPAIR_ONLY", "UNSUPPORTED_NEWER"])
+@pytest.mark.parametrize("selected_id", ["project", ""])
+def test_pipeline_delivers_unavailable_card_without_reading_details(state, selected_id):
+    calls, results = [], []
+    card = SimpleNamespace(open_state=SimpleNamespace(name=state), diagnostic="Unavailable project")
+    pipeline = InspectionFactsPipeline(
+        lambda path: card,
+        lambda path: calls.append(path),
+        lambda *args: results.append(args),
+    )
+    try:
+        pipeline.refresh([_entry()], selected_id)
+        pipeline._thread.join(2)
+        assert not pipeline._thread.is_alive()
+        assert calls == []
+        assert results == [("project", "card", card, None)]
+        assert pipeline.cached("project").error == ""
+
+        # A replaced or restored file must become inspectable again.
+        card = SimpleNamespace(open_state=SimpleNamespace(name="OPEN"))
+        pipeline.refresh([_entry(commit_uuid="restored")], "project")
+        pipeline._thread.join(2)
+        assert calls == ["/tmp/project.licht"]
+        assert [row[1] for row in results] == ["card", "card", "details"]
+    finally:
+        pipeline.close()
 
 
 def test_details_model_hides_metrics_without_samples_and_formats_embedded_dataset():
@@ -336,16 +366,32 @@ def test_queued_inspection_is_discarded_and_retried_after_cancel():
     assert [row[1] for row in results] == ['card', 'details']
 
 
-def test_inspection_failures_are_logged_with_path_and_delivered(caplog):
+def test_card_failure_is_logged_and_delivered_without_reading_details(caplog):
+    results = []
+    details_calls = []
+    def fail(path):
+        raise OSError('unreadable marker')
+    pipeline = InspectionFactsPipeline(fail, details_calls.append, lambda *args: results.append(args))
+    pipeline.refresh([_entry(path='/项目.licht')], 'project')
+    pipeline._thread.join(2)
+    assert len(results) == 1 and isinstance(results[0][3], OSError)
+    assert details_calls == []
+    assert 'Inspect project card failed path=/项目.licht' in caplog.text
+    assert 'Inspect project details failed' not in caplog.text
+    pipeline.close()
+
+
+def test_details_failure_after_readable_card_is_logged_and_delivered(caplog):
     results = []
     def fail(path):
         raise OSError('unreadable marker')
-    pipeline = InspectionFactsPipeline(fail, fail, lambda *args: results.append(args))
+    pipeline = InspectionFactsPipeline(
+        lambda path: SimpleNamespace(open_state="OPEN"), fail, lambda *args: results.append(args))
     pipeline.refresh([_entry(path='/项目.licht')], 'project')
     pipeline._thread.join(2)
-    assert len(results) == 2 and all(isinstance(row[3], OSError) for row in results)
-    assert 'Inspect project card failed path=/项目.licht' in caplog.text
+    assert len(results) == 2 and isinstance(results[1][3], OSError)
     assert 'Inspect project details failed path=/项目.licht' in caplog.text
+    pipeline.close()
 
 
 def test_inspection_scheduler_failure_can_be_retried(caplog):
