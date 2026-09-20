@@ -102,6 +102,7 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path tests without CUDA runtime linkage
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        test_project_save_as_paths.cpp
         test_weight_file_paths.cpp
         test_crash_handler.cpp
         test_converter_output_paths.cpp

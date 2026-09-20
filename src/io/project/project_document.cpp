@@ -12,6 +12,7 @@
 #include "io/project_recovery.hpp"
 #include "project_container_internal.hpp"
 #include "project_framing.hpp"
+#include "project_path_utils.hpp"
 #include "span_streambuf.hpp"
 #include <fstream>
 
@@ -2265,7 +2266,7 @@ namespace lfs::io::project {
                 chapter_scan_finished);
         LOG_DEBUG(
             "Project document open stages: path={} deferred_geometry={} normalize={:.3f} ms reader_parse={:.3f} ms chapter_read={:.3f} ms chapter_decode_scan={:.3f} ms validate={:.3f} ms total={:.3f} ms",
-            normalized->string(),
+            lfs::core::path_to_utf8(*normalized),
             options.defer_geometry_payloads,
             milliseconds(open_started, normalized_at),
             milliseconds(normalized_at, reader_opened_at),
@@ -2772,7 +2773,7 @@ namespace lfs::io::project {
                     lfs::ErrorCode::DataLoss,
                     "An embedded dataset source changed while it was being copied.",
                     std::format("{} has {} bytes, manifest expected {}",
-                                source.source_path.string(), size,
+                                lfs::core::path_to_utf8(source.source_path), size,
                                 source.entry.bytes),
                     "project.dataset_embed");
             }
@@ -2909,7 +2910,8 @@ namespace lfs::io::project {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::PermissionDenied,
                         "An embedded dataset source could not be opened.",
-                        source.source_path.string(), "project.dataset_embed");
+                        lfs::core::path_to_utf8(source.source_path),
+                        "project.dataset_embed");
                 }
                 std::vector<std::byte> bytes(source.entry.bytes);
                 input.read(reinterpret_cast<char*>(bytes.data()),
@@ -2918,13 +2920,15 @@ namespace lfs::io::project {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::DataLoss,
                         "An embedded dataset source changed while it was being copied.",
-                        source.source_path.string(), "project.dataset_embed");
+                        lfs::core::path_to_utf8(source.source_path),
+                        "project.dataset_embed");
                 }
                 if (input.peek() != std::char_traits<char>::eof()) {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::DataLoss,
                         "An embedded dataset source changed while it was being copied.",
-                        source.source_path.string(), "project.dataset_embed");
+                        lfs::core::path_to_utf8(source.source_path),
+                        "project.dataset_embed");
                 }
                 Hash128Stream hasher;
                 if (!hasher.update(bytes) || !hasher.valid() ||
@@ -2932,7 +2936,8 @@ namespace lfs::io::project {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::DataLoss,
                         "An embedded dataset source changed while it was being copied.",
-                        source.source_path.string(), "project.dataset_embed");
+                        lfs::core::path_to_utf8(source.source_path),
+                        "project.dataset_embed");
                 }
                 if (auto written = writer.write_chunk(
                         key, bytes,
@@ -2961,7 +2966,8 @@ namespace lfs::io::project {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::PermissionDenied,
                     "An embedded dataset source could not be opened.",
-                    source.source_path.string(), "project.dataset_embed");
+                    lfs::core::path_to_utf8(source.source_path),
+                    "project.dataset_embed");
             }
             Hash128Stream hasher;
             std::vector<char> buffer(1024 * 1024);
@@ -2978,7 +2984,8 @@ namespace lfs::io::project {
                     return fail<ProjectDocumentSaveReport>(
                         lfs::ErrorCode::DataLoss,
                         "An embedded dataset source could not be hashed.",
-                        source.source_path.string(), "project.dataset_embed");
+                        lfs::core::path_to_utf8(source.source_path),
+                        "project.dataset_embed");
                 }
                 stream.value()->write(buffer.data(), count);
             }
@@ -2986,7 +2993,8 @@ namespace lfs::io::project {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::DataLoss,
                     "An embedded dataset source changed while it was being copied.",
-                    source.source_path.string(), "project.dataset_embed");
+                    lfs::core::path_to_utf8(source.source_path),
+                    "project.dataset_embed");
             }
             if (auto ended = writer.end_chunk(); !ended) {
                 return std::move(ended).error();
@@ -3553,7 +3561,7 @@ namespace lfs::io::project {
                     "Autosave uses one bounded project sidecar.",
                     std::format(
                         "expected '{}'",
-                        expected_sidecar.string()),
+                        lfs::core::path_to_utf8(expected_sidecar)),
                     "autosave.path");
             }
             if (impl_->source_reader->commit().commit_uuid !=
@@ -4334,7 +4342,7 @@ namespace lfs::io::project {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::FailedPrecondition,
                     "The retained recovery lock does not own the Save As destination.",
-                    normalized->string(),
+                    lfs::core::path_to_utf8(*normalized),
                     "writer_lock");
             }
         } else {
@@ -4365,11 +4373,9 @@ namespace lfs::io::project {
         const auto original_dirty = impl_->dirty;
         const auto original_normalized_source_keys =
             impl_->normalized_source_keys;
-        const auto temporary =
-            normalized->parent_path() /
-            std::format(".{}.saveas-{}.tmp",
-                        normalized->filename().string(),
-                        lfs::core::generate_uuid_v4().to_string());
+        const auto temporary = detail::save_as_staging_path(
+            *normalized,
+            lfs::core::generate_uuid_v4().to_string());
 
         const auto remove_temporary = [&temporary] {
             std::error_code error;
@@ -4377,7 +4383,7 @@ namespace lfs::io::project {
                 error) {
                 LOG_WARN(
                     "Could not remove Save As staging file {}: {}",
-                    temporary.string(),
+                    lfs::core::path_to_utf8(temporary),
                     error.message());
             }
             auto lock_path = temporary;
@@ -4691,7 +4697,8 @@ namespace lfs::io::project {
             milliseconds(save_as_validate_finished, save_as_restore_finished),
             milliseconds(save_as_restore_finished, save_as_finished),
             milliseconds(save_as_started, save_as_finished),
-            original_path.string(), normalized->string());
+            lfs::core::path_to_utf8(original_path),
+            lfs::core::path_to_utf8(*normalized));
         saved->generation = impl_->generation;
         return saved;
     }
