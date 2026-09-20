@@ -36,7 +36,7 @@ namespace lfs::vis::gui {
     // Per-document tooltip state. Each renderer owns one instance and drives it
     // from its own input/render passes, so the tooltip element lives inside the
     // hovered context and is positioned in that context's local coordinates.
-    class RmlTooltipController {
+    class LFS_VIS_API RmlTooltipController {
     public:
         // Called from input when the hovered tooltip target changes. Pass
         // {} / nullptr when no tooltip should be shown.
@@ -46,8 +46,8 @@ namespace lfs::vis::gui {
         // `body` if it does not exist, then positions / shows / hides it.
         // mouse_x/y are document-local coordinates; doc_w/h size the clamp.
         // Returns true if the document changed and needs a fresh paint.
-        LFS_VIS_API bool apply(Rml::Element* body, int mouse_x, int mouse_y,
-                               int doc_w, int doc_h);
+        bool apply(Rml::Element* body, int mouse_x, int mouse_y,
+                   int doc_w, int doc_h);
         [[nodiscard]] bool hasActiveState() const {
             return visible_ || pending_target_ != nullptr || !pending_text_.empty();
         }

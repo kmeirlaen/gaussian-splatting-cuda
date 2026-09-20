@@ -23,13 +23,58 @@ if(BUILD_LOCALIZATION_TESTS)
         USES_TERMINAL
     )
     message(STATUS "Registered headless localization contract tests (no LibTorch)")
-    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_VISUALIZER_TESTS)
         return()
     endif()
 endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+
+# =============================================================================
+# CPU-only visualizer tests (no LibTorch)
+# =============================================================================
+if(BUILD_VISUALIZER_TESTS)
+    # The focused menu-bar suite exercises no GPU code. Windows CI installs
+    # the CUDA toolkit but has no display driver, so defer loading nvcuda.dll
+    # until a driver API is actually called. Normal application builds retain
+    # their existing eager driver dependency.
+    if(MSVC)
+        target_link_options(lfs_core PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lfs_core PRIVATE delayimp)
+        target_link_options(lfs_visualizer PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lfs_visualizer PRIVATE delayimp)
+    endif()
+
+    set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_menu_bar_title.cpp
+    )
+    add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
+        ${LICHTFELD_VISUALIZER_TEST_SOURCES}
+    )
+    target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_visualizer_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
+    )
+    target_compile_definitions(lichtfeld_visualizer_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_visualizer
+        GTest::gtest_main
+    )
+    add_test(
+        NAME lichtfeld_visualizer_tests
+        COMMAND lichtfeld_visualizer_tests
+    )
+    set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        TIMEOUT 30
+    )
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
+        return()
+    endif()
+endif()
 
 if(BUILD_PANEL_LAYOUT_TESTS)
     add_executable(panel_layout_tests EXCLUDE_FROM_ALL
@@ -45,7 +90,7 @@ if(BUILD_PANEL_LAYOUT_TESTS)
         $<TARGET_PROPERTY:${PROJECT_NAME},LINK_LIBRARIES>
         GTest::gtest_main
     )
-    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY)
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_VISUALIZER_TESTS)
         return()
     endif()
 endif()
