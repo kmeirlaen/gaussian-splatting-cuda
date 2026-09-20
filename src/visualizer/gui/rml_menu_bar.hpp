@@ -127,7 +127,7 @@ namespace lfs::vis::gui {
         void shutdown();
         void draw(int screen_w, int screen_h);
         LFS_VIS_API void updateLabels(const std::vector<std::string>& labels,
-                          const std::vector<std::string>& idnames);
+                                      const std::vector<std::string>& idnames);
         LFS_VIS_API void updateProjectDisplay(const ProjectDisplayInfo& project_display);
         LFS_VIS_API void updateProjectDisplay(std::string title, std::string tooltip, bool dirty);
         void reloadResources();
