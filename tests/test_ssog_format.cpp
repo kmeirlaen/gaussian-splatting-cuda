@@ -13,9 +13,9 @@
 #include "io/loaders/ssog_loader.hpp"
 #include "io/splat_path.hpp"
 #include <algorithm>
-#include <array>
 #include <archive.h>
 #include <archive_entry.h>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
