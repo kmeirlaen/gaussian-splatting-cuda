@@ -1004,7 +1004,7 @@ namespace lfs::vis::gui {
                                     static_cast<int>(panel_x - input_->screen_x -
                                                      last_fbo_padding_),
                                     static_cast<int>(panel_y - input_->screen_y -
-                                                      last_fbo_padding_),
+                                                     last_fbo_padding_),
                                     openDropdownBounds());
         if (!resize_cursor_override_.empty()) {
             if (auto* const system_interface = Rml::GetSystemInterface())
