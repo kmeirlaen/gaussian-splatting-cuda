@@ -119,6 +119,13 @@ def panel_module(monkeypatch):
             sys.modules.pop(name, None)
     _install_lf_stub(monkeypatch)
     module = import_module("lfs_plugins.asset_manager_panel")
+    monkeypatch.setattr(
+        module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(module, "read_project_manager_state", lambda: {})
+    monkeypatch.setattr(module, "set_project_manager_state", lambda _value: None)
     yield module
     controller_module = sys.modules.get("lfs_plugins.gallery_controller")
     controller = getattr(controller_module, "_controller", None)
@@ -1501,6 +1508,206 @@ def test_thumbnail_size_is_shared_across_responsive_breakpoints(panel_module):
     migrated = panel_module.AssetManagerPanel()
     migrated.apply_chrome({"thumbnail_sizes": {"compact": 112, "wide": 240}})
     assert migrated.get_thumbnail_size() == 240
+
+
+def test_remembered_project_manager_state_overrides_project_chrome(panel_module, monkeypatch):
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"view_mode": "gallery", "thumbnail_size": 208},
+    )
+
+    panel = panel_module.AssetManagerPanel()
+    panel.apply_chrome({"view_mode": "list", "thumbnail_size": 112})
+
+    assert panel._view_mode == "gallery"
+    assert panel.get_thumbnail_size() == 208
+
+
+def test_fixed_project_manager_view_does_not_restore_last_view(panel_module, monkeypatch):
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "gallery", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"view_mode": "list", "thumbnail_size": 208},
+    )
+
+    panel = panel_module.AssetManagerPanel()
+    panel.apply_chrome({"view_mode": "list"})
+
+    assert panel._view_mode == "gallery"
+    assert panel.get_thumbnail_size() == 208
+
+
+def test_project_manager_state_is_device_chrome_not_catalog_selection(panel_module, monkeypatch):
+    stored = []
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(panel_module, "read_project_manager_state", lambda: {})
+    monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
+
+    panel = panel_module.AssetManagerPanel()
+    panel._selected_folder_id = "work"
+    panel.set_view_mode(None, None, ["gallery"])
+
+    assert stored[-1]["view_mode"] == "gallery"
+    assert "selected_folder_id" not in stored[-1]
+
+
+def test_project_manager_state_restores_outer_panel_width(panel_module, monkeypatch):
+    restored_widths = []
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "get_panel",
+        lambda _id: SimpleNamespace(space=panel_module.lf.ui.PanelSpace.LEFT_DOCK),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"view_mode": "list", "panel_width": 468.0},
+    )
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "set_left_dock_width",
+        lambda width: restored_widths.append(width),
+        raising=False,
+    )
+
+    panel_module.AssetManagerPanel()
+
+    assert restored_widths == [468.0]
+
+
+def test_project_manager_state_does_not_resize_left_dock_while_floating(panel_module, monkeypatch):
+    restored_widths = []
+    info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.FLOATING)
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"view_mode": "list", "panel_width": 468.0},
+    )
+    monkeypatch.setattr(
+        panel_module.lf.ui,
+        "set_left_dock_width",
+        lambda width: restored_widths.append(width),
+        raising=False,
+    )
+
+    panel = panel_module.AssetManagerPanel()
+
+    assert restored_widths == []
+    info.space = panel_module.lf.ui.PanelSpace.LEFT_DOCK
+    panel._sync_panel_space_state()
+    assert restored_widths == [468.0]
+
+
+def test_floating_project_manager_preserves_remembered_left_dock_width(panel_module, monkeypatch):
+    stored = []
+    info = SimpleNamespace(space=panel_module.lf.ui.PanelSpace.FLOATING)
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel", lambda _id: info, raising=False)
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"view_mode": "list", "panel_width": 468.0},
+    )
+    monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
+    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 712.0, raising=False)
+
+    panel = panel_module.AssetManagerPanel()
+    panel._sync_panel_space_state()
+    panel._persist_project_manager_state()
+
+    assert stored[-1]["panel_width"] == 468.0
+
+
+def test_project_manager_state_captures_outer_width_without_transient_visibility(panel_module, monkeypatch):
+    stored = []
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(panel_module, "read_project_manager_state", lambda: {})
+    monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
+    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 512.0, raising=False)
+
+    panel = panel_module.AssetManagerPanel()
+    panel._persist_project_manager_state()
+
+    assert "panel_open" not in stored[-1]
+    assert stored[-1]["panel_width"] == 512.0
+
+
+def test_project_manager_state_preserves_last_width_when_native_geometry_is_unavailable(
+        panel_module, monkeypatch):
+    stored = []
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": True},
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_state",
+        lambda: {"panel_width": 468.0, "panel_open": False, "future_key": "keep"},
+    )
+    monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
+    monkeypatch.setattr(panel_module.lf.ui, "get_left_dock_width", lambda: 0.0, raising=False)
+
+    panel = panel_module.AssetManagerPanel()
+    panel._persist_project_manager_state()
+
+    assert stored[-1]["panel_width"] == 468.0
+    assert stored[-1]["future_key"] == "keep"
+    assert "panel_open" not in stored[-1]
+
+
+def test_disabling_project_manager_state_keeps_project_chrome_and_avoids_writes(panel_module, monkeypatch):
+    stored = []
+    monkeypatch.setattr(
+        panel_module,
+        "read_project_manager_preferences",
+        lambda: {"defaultView": "remember", "rememberState": False},
+    )
+    monkeypatch.setattr(panel_module, "read_project_manager_state", lambda: {"view_mode": "gallery"})
+    monkeypatch.setattr(panel_module, "set_project_manager_state", lambda value: stored.append(value))
+
+    panel = panel_module.AssetManagerPanel()
+    panel.apply_chrome({"view_mode": "list", "thumbnail_size": 176})
+    panel.set_thumbnail_size(192)
+
+    assert panel._view_mode == "list"
+    assert panel.get_thumbnail_size() == 192
+    assert stored == []
 
 
 def test_move_to_trash_uses_platform_helper_before_catalog_removal(panel_module, monkeypatch):
@@ -3270,8 +3477,18 @@ def test_compact_view_menu_retains_every_collapsed_toolbar_action(panel_module):
 
     resources = Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources"
     rml = (resources / "asset_manager.rml").read_text()
+    rcss = (resources / "asset_manager.rcss").read_text()
     assert 'class="asset-button asset-button--icon asset-button--toolbar24 asset-add-existing-icon"' in rml
     assert 'class="asset-button asset-button--icon asset-panel-close"' in rml
+    assert rml.count('class="asset-button asset-button--icon asset-view-button"') == 2
+    compact_rules = rcss.split(
+        ".asset-shell.is-compact .asset-toolbar-filter", 1
+    )[1].split(".asset-shell.is-medium", 1)[0]
+    assert ".asset-shell.is-compact .asset-view-toggle-icons" in compact_rules
+    icon_rule = compact_rules.split(
+        ".asset-shell.is-compact .asset-view-toggle-icons", 1
+    )[1].split("}", 1)[0]
+    assert "display: none" not in icon_rule
 
 def test_A4_gallery_scopes_are_outside_the_scrolling_folder_content():
     import xml.etree.ElementTree as ET
@@ -3355,6 +3572,9 @@ def test_P12_model_bindings_do_not_register_duplicate_gallery_width(panel_module
     panel = panel_module.AssetManagerPanel()
     model = StrictBindingModel()
     panel.on_bind_model(_BindingContext(model))
+    assert model.func_bindings['catalog_loading']() is False
+    panel._backend_load_active = True
+    assert model.func_bindings['catalog_loading']() is True
     assert model.func_bindings['check_gallery_tooltip']().startswith('projects.action.check_gallery')
     panel._gallery_state['message'] = 'Sign in'
     assert panel._gallery_notice_text() == ''
