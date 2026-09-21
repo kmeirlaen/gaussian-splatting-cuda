@@ -4,6 +4,7 @@
  */
 
 #include "project_lifecycle.hpp"
+#include "io/project_operations.hpp"
 
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
@@ -4870,7 +4871,13 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::startCompaction(
-        const bool automatic) {
+        const bool automatic, const bool clean,
+        const std::filesystem::path& destination, const lfs::core::Uuid& expected_commit) {
+        if (clean && viewer_.getTrainerManager() && viewer_.getTrainerManager()->isTrainingActive()) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Stop training before cleaning the project.",
+                              "cleanup must retain a stable training resume point", "clean.training");
+        }
         if (!document_ ||
             !document_->source_path() ||
             isScratchBoundSession()) {
@@ -4887,12 +4894,17 @@ namespace lfs::vis::project {
                 "Compaction cannot make the recovery base unreachable",
                 "project.recovery");
         }
-        if (hydration_.load(std::memory_order_acquire) !=
-            Hydration::Complete) {
+        // Empty after first save is already bound; Complete is opened-from-disk.
+        const auto hydration = hydration_.load(
+            std::memory_order_acquire);
+        if (hydration != Hydration::Empty &&
+            hydration != Hydration::Complete) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
-                "Wait for project opening to finish before compacting.",
-                "Compaction requires a fully hydrated project",
+                hydration == Hydration::Failed
+                    ? "The project did not finish opening."
+                    : "Wait for project opening to finish before compacting.",
+                "Compaction requires a fully opened project",
                 "project.hydration");
         }
         if (viewer_.jobs().anyRunning(
@@ -4943,6 +4955,7 @@ namespace lfs::vis::project {
         }
         const auto path =
             *document_->source_path();
+        cleanup_in_progress_ = clean;
         project_write_job_ = *handle;
         project_write_purpose_ =
             ProjectWritePurpose::Compaction;
@@ -4956,13 +4969,19 @@ namespace lfs::vis::project {
             project_write_thread_ =
                 std::jthread(
                     [this, handle = *handle,
-                     path](
+                     path, clean, destination, expected_commit](
                         const std::stop_token stop) {
                         auto& jobs =
                             viewer_.jobs();
                         jobs.work(handle);
-                        auto compacted =
-                            lfs::io::project::
+                        auto compacted = [&]() -> lfs::Result<void> {
+                            if (clean) {
+                                auto result = lfs::io::project::clean_project_file(path, destination, expected_commit, [&jobs, handle](float value, const std::string& stage) { jobs.report(handle, value, stage); }, [&jobs, handle, &stop] { return stop.stop_requested() || jobs.cancelRequested(handle); });
+                                if (!result)
+                                    return lfs::Result<void>::failure(std::move(result).error());
+                                return {};
+                            }
+                            return lfs::io::project::
                                 ProjectWriter::compact(
                                     path,
                                     lfs::io::project::
@@ -5007,6 +5026,7 @@ namespace lfs::vis::project {
                                                         "Building and verifying compact project");
                                                 },
                                         });
+                        }();
                         const auto compact_error_code =
                             compacted
                                 ? std::optional<lfs::ErrorCode>{}
@@ -5025,7 +5045,8 @@ namespace lfs::vis::project {
                                       compacted
                                           .error()),
                             compact_error_code,
-                            compact_typed_error);
+                            compact_typed_error,
+                            clean && compacted.has_value());
                         queueProjectWriteSettlement(
                             handle);
                     });
@@ -5048,6 +5069,16 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::compact() {
         return startCompaction(false);
+    }
+
+    void ProjectLifecycle::cancelCleanup() {
+        if (cleanup_in_progress_ && project_write_job_ && project_write_purpose_ == ProjectWritePurpose::Compaction)
+            viewer_.jobs().requestCancel(*project_write_job_, "Canceling cleanup");
+    }
+
+    lfs::Result<void> ProjectLifecycle::clean(
+        const std::filesystem::path& destination, const lfs::core::Uuid& expected_commit) {
+        return startCompaction(false, true, destination, expected_commit);
     }
 
     void ProjectLifecycle::joinPendingWrite() {

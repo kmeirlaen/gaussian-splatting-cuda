@@ -213,6 +213,9 @@ namespace lfs::vis::project {
                bool allow_existing_destination_replacement = false);
         [[nodiscard]] lfs::Result<void>
         compact();
+        void cancelCleanup();
+        [[nodiscard]] lfs::Result<void> clean(
+            const std::filesystem::path& destination, const lfs::core::Uuid& expected_commit);
         [[nodiscard]] lfs::Result<void>
         newProject(
             ProjectSwitchDisposition disposition =
@@ -564,7 +567,9 @@ namespace lfs::vis::project {
                     ProjectDocumentAutosaveOptions>
                 autosave = std::nullopt);
         [[nodiscard]] lfs::Result<void>
-        startCompaction(bool automatic);
+        startCompaction(bool automatic, bool clean = false,
+                        const std::filesystem::path& destination = {},
+                        const lfs::core::Uuid& expected_commit = {});
         [[nodiscard]] lfs::Result<void>
         startTrainingWrite(
             ProjectWritePurpose purpose,
@@ -771,6 +776,7 @@ namespace lfs::vis::project {
         std::optional<lfs::Error> last_project_write_typed_error_;
         lfs::io::project::ProjectStorageStats
             storage_stats_;
+        bool cleanup_in_progress_ = false;
         bool compaction_suggested_ = false;
         bool compaction_suggestion_reported_ =
             false;
