@@ -19,13 +19,13 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <ctime>
 #include <exception>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <optional>
@@ -35,16 +35,16 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>
 
 #include <iphlpapi.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -111,7 +111,8 @@ namespace lfs::mcp {
                 return read_existing();
             DWORD written = 0;
             const bool saved = WriteFile(file, token.data(), static_cast<DWORD>(token.size()),
-                                         &written, nullptr) && written == token.size() &&
+                                         &written, nullptr) &&
+                               written == token.size() &&
                                FlushFileBuffers(file);
             CloseHandle(file);
 #else
@@ -464,7 +465,7 @@ namespace lfs::mcp {
             const auto request_started = std::chrono::steady_clock::now();
             request_count_.fetch_add(1, std::memory_order_relaxed);
             const auto reject = [this, &req, &res, request_started](int status,
-                                                                     const char* reason) {
+                                                                    const char* reason) {
                 error_count_.fetch_add(1, std::memory_order_relaxed);
                 nlohmann::json event = {
                     {"event", "request"},

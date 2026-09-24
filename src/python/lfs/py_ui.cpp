@@ -5334,8 +5334,7 @@ namespace lfs::python {
 
         m.def("get_mcp_access_token", []() {
             nb::gil_scoped_release release;
-            return mcp::mcpBearerToken();
-        }, "Get the local MCP network access token");
+            return mcp::mcpBearerToken(); }, "Get the local MCP network access token");
 
         m.def(
             "set_mcp_preferences",
