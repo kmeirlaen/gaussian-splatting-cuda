@@ -1661,7 +1661,7 @@ namespace lfs::vis {
         // includes the viewer turn itself.
         return static_cast<float>(std::max<double>(
             framerate_controller_.getSettings().training_frame_refresh_time_sec,
-            idlePreviewIntervalSec(0.0, viewer_turn_ms) + viewer_turn_ms * 1e-3));
+            idlePreviewIntervalSec(viewer_turn_ms) + viewer_turn_ms * 1e-3));
     }
 
     void RenderingManager::pollTrainingRefresh(const bool is_training, const int current_iteration) {
@@ -1671,8 +1671,8 @@ namespace lfs::vis {
             if (!is_training) {
                 has_training_preview_iteration_ = false;
             } else if (has_training_preview_iteration_ &&
-                       !trainingPreviewStepAdvanced(last_training_preview_iteration_, current_iteration)) {
-                frame_demand_ledger_.notePreviewSkippedNoStep();
+                       current_iteration <= last_training_preview_iteration_) {
+                frame_demand_ledger_.countSkippedPreview();
                 return;
             }
             if (is_training) {
@@ -1733,7 +1733,7 @@ namespace lfs::vis {
                               split_right_image_generation_, split_left_source_, split_left_source_size_, split_left_source_camera_uid_,
                               split_left_source_undistorted_, split_right_source_size_, gt_async_held_display_,
                               vksplat_stale_frame_guard_, parked_arena_retry_, last_logged_vksplat_render_error_,
-                              viewport_projection_generation_, vksplat_idle_frame_count_, vksplat_idle_since_,
+                              viewport_projection_generation_, vksplat_idle_since_,
                               camera_settle_pending_, camera_settle_deadline_, navigation_pose_valid_,
                               last_navigation_rotation_, last_navigation_translation_);
         auto saved = std::apply([](auto&... values) { return std::tuple{std::move(values)...}; }, state);
@@ -1864,7 +1864,6 @@ namespace lfs::vis {
             // emitted only after the trainer's B3 cleanup has detached its
             // arena backing, so this also drops the viewer's final import.
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
-            vksplat_idle_frame_count_ = 0;
             vksplat_idle_since_ = {};
         }
 
@@ -4266,7 +4265,7 @@ namespace lfs::vis {
                         // when requested. Resetting it again after a parked
                         // retry adds that delay to every subsequent interval.
                         if (is_training && (frame_dirty & ~DirtyFlag::SPLATS) != 0)
-                            frame_lifecycle_service_.noteTrainingRender();
+                            frame_lifecycle_service_.restartTrainingRefresh();
                         vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
