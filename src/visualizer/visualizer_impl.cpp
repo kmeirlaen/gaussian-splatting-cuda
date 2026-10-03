@@ -4639,26 +4639,20 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
-        const auto current_params = trainer_manager_
-                                        ? trainer_manager_->getEditableTrainingParams(*parameter_manager_)
-                                        : parameter_manager_->createForDataset({}, {});
-        auto result = lfs::core::param::read_training_parameters_from_json(path, current_params);
+        const bool dataset_editable = !trainer_manager_ || trainer_manager_->isDatasetEditable();
+        auto result = parameter_manager_->importConfigFile(path, dataset_editable);
         if (!result) {
             state::ConfigLoadFailed{.path = path, .error = std::string(result.error().detail())}.emit();
             return;
         }
-        result->optimization.apply_step_scaling();
-        if (trainer_manager_) {
-            trainer_manager_->importTrainingParams(*result, *parameter_manager_);
-        } else {
-            parameter_manager_->importTrainingParams(*result);
-        }
-        parameter_manager_->markDirty();
 
         // Bump scene generation so all panels (e.g. training panel) pick up
         // the new parameter values.  Without this, importing a config after a
         // dataset is already loaded leaves the UI showing stale defaults.
         python::bump_scene_generation();
+        // The scene generation is a view input: refresh it once after import.
+        if (rendering_manager_)
+            rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::SceneChange);
     }
 
     void VisualizerImpl::handleTrainingCompleted([[maybe_unused]] const state::TrainingCompleted& event) {
