@@ -1309,6 +1309,16 @@ namespace lfs::vis::gui {
                y >= offset.y && y < offset.y + size.y;
     }
 
+    void RmlMenuBar::updateCompactLayout(const int screen_w, const float dp_ratio) {
+        if (auto* body = document_->GetElementById("body")) {
+            const bool compact = screen_w < 760.0f * dp_ratio;
+            if (body->IsClassSet("compact") != compact) {
+                body->SetClass("compact", compact);
+                render_needed_ = true;
+            }
+        }
+    }
+
     void RmlMenuBar::updateProjectTitleLayout(const int screen_w, const float dp_ratio) {
         if (!project_title_container_ || !project_title_el_)
             return;
@@ -1400,7 +1410,8 @@ namespace lfs::vis::gui {
         std::vector<lfs::vis::WindowManager::HitTestRect> excluded_rects;
         excluded_rects.reserve(3);
         append_element(excluded_rects, menu_items_);
-        append_element(excluded_rects, menu_toolbar_);
+        if (toolbar_fits_)
+            append_element(excluded_rects, menu_toolbar_);
         append_element(excluded_rects, menu_window_controls_);
         wm->setTitlebarDragRegion(bar_height_px, std::move(excluded_rects));
     }
@@ -1561,13 +1572,14 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
+        updateCompactLayout(screen_w, dp_ratio);
         if (dp_ratio != last_dp_ratio_)
             render_needed_ = true;
         last_dp_ratio_ = dp_ratio;
 
         // Portal status and transfer progress can change the right cluster's width.
         // Lay it out before reserving space for the viewport toolbar.
-        if (render_needed_ || screen_w != last_ctx_w_ || dp_ratio != last_dp_ratio_) {
+        if (render_needed_ || screen_w != last_ctx_w_) {
             rml_context_->SetDimensions(Rml::Vector2i(screen_w, std::max(bar_h, last_ctx_h_)));
             rml_context_->Update();
         }

@@ -17,6 +17,7 @@
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/import_error.hpp"
+#include "gui/viewport_gizmo_geometry.hpp"
 #include "preferences.hpp"
 #include "window/vulkan_result.hpp"
 #include <ft2build.h>
@@ -1339,7 +1340,8 @@ namespace lfs::vis::gui {
             const float size,
             const float margin_x,
             const float margin_y) {
-            if (!panel.valid() || size <= 0.0f) {
+            if (!panel.valid() || size <= 0.0f ||
+                !viewportGizmoFits(panel.size.x, panel.size.y, size / kViewportGizmoSize)) {
                 return std::nullopt;
             }
 
@@ -6806,7 +6808,18 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            perf_sampler_.start();
+            const auto* rendering = viewer_->getRenderingManager();
+            const bool idle = rendering && rendering->isFpsIdleFrame();
+            if (idle)
+                perf_sampler_.stop();
+            else
+                perf_sampler_.start();
+            const auto now = std::chrono::steady_clock::now();
+            if (perf_hud_visible_published_ && last_hud_expanded_ == perf_hud_expanded_ &&
+                !idle && now - last_hud_sample_ < std::chrono::milliseconds(250))
+                return;
+            last_hud_sample_ = now;
+            last_hud_expanded_ = perf_hud_expanded_;
 
             {
                 RmlViewportOverlay::VramHudOverlayState overlay;
@@ -6820,14 +6833,16 @@ namespace lfs::vis::gui {
                     perf_snapshot->ram_used_bytes = sample->host.system_used_bytes;
                     perf_snapshot->ram_total_bytes = sample->host.system_total_bytes;
                     perf_snapshot->gpu_utilization_percent = sample->gpu_utilization_percent;
-                    perf_snapshot->gpu_utilization_valid = sample->gpu_utilization_valid;
+                    perf_snapshot->gpu_utilization_valid = sample->gpu_utilization_valid && !idle;
                     perf_snapshot->process_cpu_percent = sample->host.process_cpu_percent;
-                    perf_snapshot->per_core_cpu_percent = sample->host.per_core_cpu_percent;
-                    perf_snapshot->cpu_valid = sample->host.cpu_valid;
+                    if (!idle)
+                        perf_snapshot->per_core_cpu_percent = sample->host.per_core_cpu_percent;
+                    perf_snapshot->cpu_valid = sample->host.cpu_valid && !idle;
                 }
                 if (auto* rm = viewer_->getRenderingManager()) {
-                    perf_snapshot->rate = rm->getAverageFPS();
-                    perf_snapshot->ui_fps = rm->getPresentedAverageFPS();
+                    const auto rates = rm->guiFrameRates();
+                    perf_snapshot->rate = rates.view;
+                    perf_snapshot->ui_fps = rates.ui;
                 }
 
                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -7047,23 +7062,9 @@ namespace lfs::vis::gui {
                 rml_status_bar_.processInput(panel_input, status_bar_x, status_bar_y,
                                              status_bar_w, status_bar_height);
             }
-            if (status_input) {
-                rml_status_bar_.render(draw_ctx,
-                                       status_bar_x,
-                                       status_bar_y,
-                                       status_bar_w,
-                                       status_bar_height,
-                                       panel_input.screen_w,
-                                       panel_input.screen_h);
-            } else {
-                rml_status_bar_.renderCached(draw_ctx,
-                                             status_bar_x,
-                                             status_bar_y,
-                                             status_bar_w,
-                                             status_bar_height,
-                                             panel_input.screen_w,
-                                             panel_input.screen_h);
-            }
+            rml_status_bar_.render(draw_ctx, status_bar_x, status_bar_y,
+                                   status_bar_w, status_bar_height,
+                                   panel_input.screen_w, panel_input.screen_h);
             if (has_status_bar_panels) {
                 auto status_draw_ctx = draw_ctx;
                 status_draw_ctx.bounds = PanelDrawBounds{
@@ -8361,6 +8362,8 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::prepareLayout() {
+        if (auto* console = panels::PythonConsoleState::tryGetInstance())
+            console->setVisible(window_states_["python_console"] && !ui_hidden_);
         if (pending_ui_scale_ > 0.0f) {
             applyUiScale(pending_ui_scale_);
             pending_ui_scale_ = 0.0f;
@@ -8695,6 +8698,9 @@ namespace lfs::vis::gui {
                                "panels");
         }
 
+        if (rml_modal_overlay_)
+            result = min_delay(result, rml_modal_overlay_->secondsUntilNextUpdate(), "modal_overlay");
+
         result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay(),
                            "viewport_overlay");
         result = min_delay(result, rml_status_bar_.secondsUntilAnimationFrame(now),
@@ -8769,7 +8775,6 @@ namespace lfs::vis::gui {
         applyDefaultWindowStates(window_states_);
         show_vram_hud_ = false;
         perf_hud_expanded_ = true;
-        app_store().vram_hud.set(AppStore::VramHud{});
 
         LayoutState user_preferences;
         user_preferences.load();
