@@ -501,6 +501,7 @@ set(TEST_FILES
     test_mask_preprocess_fusion.cpp
     test_roi_weight_map.cpp
     test_mesh_mask_kernels.cpp
+    test_flip.cpp
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
     test_component_config_serialization.cpp
@@ -653,6 +654,7 @@ set(TEST_FILES
     test_project_thumbnail_image.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
+    gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp

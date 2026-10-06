@@ -403,6 +403,10 @@ namespace lfs::io {
             return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr;
         }
 
+        [[nodiscard]] bool decodes_float(const std::filesystem::path& path, const LoadParams& params) {
+            return params.decode_float && lfs::core::image_quantization_step(path) == 0.0f;
+        }
+
         void convert_float_hwc_to_rgb(
             float*& data, const int width, const int height, int& channels) {
             if (channels == 3)
@@ -532,7 +536,7 @@ namespace lfs::io {
                     tensor.shape()[0],
                     stream);
                 tensor = std::move(uint8_tensor);
-            } else {
+            } else if (!params.decode_float) {
                 tensor = quantize_rgb_to_u16_grid(tensor, stream);
             }
             const cudaError_t status = cudaStreamSynchronize(stream);
@@ -1162,7 +1166,7 @@ namespace lfs::io {
             return {};
         };
 
-        if (auto jpeg_data = load_cached_jpeg_blob(cache_key)) {
+        if (auto jpeg_data = params.skip_blob_cache ? nullptr : load_cached_jpeg_blob(cache_key)) {
             if (auto tensor = decode_cached_hit(jpeg_data);
                 tensor.is_valid() && tensor.numel() > 0) {
                 return tensor;
@@ -1173,7 +1177,7 @@ namespace lfs::io {
 
         if (is_original_jpeg) {
             auto data = std::make_shared<std::vector<uint8_t>>(read_file(path));
-            if (!needs_requested_processing) {
+            if (!needs_requested_processing && !params.skip_blob_cache) {
                 put_in_jpeg_cache(cache_key, data);
             }
 
@@ -1189,7 +1193,7 @@ namespace lfs::io {
                               describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
-        } else if (!config_.use_16bit_color && !needs_requested_processing) {
+        } else if (!decodes_16bit(params) && !decodes_float(path, params) && !needs_requested_processing) {
             const std::string path_str = lfs::core::path_to_utf8(path);
             int w = 0, h = 0, ch = 0;
             unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
@@ -1242,7 +1246,7 @@ namespace lfs::io {
             }
             assert(decoded.stream() == stream);
 
-            if (is_nvcodec_available()) {
+            if (is_nvcodec_available() && !params.skip_blob_cache) {
                 try {
                     auto nvcodec = acquire_nvcodec_loader(config_.decoder_pool_size);
                     auto jpeg_bytes = nvcodec->encode_to_jpeg(decoded, config_.cache_jpeg_quality, stream);
@@ -1284,13 +1288,13 @@ namespace lfs::io {
 
     std::optional<PipelinedImageLoader::HostDecodeKind> PipelinedImageLoader::host_decode_kind(
         const std::filesystem::path& path, const LoadParams& params) {
-        if (!config_.use_16bit_color && !load_params_need_processing(params))
+        if (!decodes_16bit(params) && !load_params_need_processing(params))
             return std::nullopt;
         if (is_jpeg_file_signature(path) || load_cached_jpeg_blob(make_cache_key(path, params)))
             return std::nullopt;
-        if (params.undistort)
+        if (params.undistort || decodes_float(path, params))
             return HostDecodeKind::Float32;
-        return config_.use_16bit_color ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
+        return decodes_16bit(params) ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8;
     }
 
     PipelinedImageLoader::HostPixels PipelinedImageLoader::decode_on_host(
@@ -1331,12 +1335,16 @@ namespace lfs::io {
         if (params.undistort) {
             std::ostringstream key;
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex
-                << undistort_cache_hash(params, config_.use_16bit_color, 0x726762ULL);
+                << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
+            if (params.decode_float)
+                key << "_f32";
             return key.str();
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
-        if (config_.use_16bit_color)
+        if (decodes_16bit(params))
             key += "_16b";
+        if (params.decode_float)
+            key += "_f32";
         return key;
     }
 
@@ -1412,7 +1420,7 @@ namespace lfs::io {
             }
             stream = decode_stream_;
         }
-        if (params.undistort) {
+        if (params.undistort || decodes_float(path, params)) {
             auto ahead = take_decoded_ahead(path, HostDecodeKind::Float32);
             auto [img_data, width, height, channels] =
                 ahead ? std::tuple{static_cast<float*>(ahead->data.release()), ahead->width, ahead->height,
@@ -1429,11 +1437,15 @@ namespace lfs::io {
             gpu_staging = cpu_tensor.to(Device::CUDA, stream);
             synchronize_async_upload_before_free(stream, "image");
             lfs::core::free_image_float(img_data);
-            decoded = gpu_staging.permute({2, 0, 1}).contiguous();
+            const auto [target_width, target_height] =
+                lfs::core::resized_image_dimensions(width, height, params.resize_factor, params.max_width);
+            decoded = params.undistort || (target_width == width && target_height == height)
+                          ? gpu_staging.permute({2, 0, 1}).contiguous()
+                          : lfs::core::lanczos_resize(gpu_staging, target_height, target_width, 2, stream);
         } else {
             auto decode_params = params;
             decode_params.cuda_stream = stream;
-            const bool sixteen_bit = config_.use_16bit_color;
+            const bool sixteen_bit = decodes_16bit(params);
             if (auto ahead = take_decoded_ahead(path, sixteen_bit ? HostDecodeKind::UInt16 : HostDecodeKind::UInt8)) {
                 if (!ahead->data || ahead->channels != 3)
                     throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
@@ -1455,7 +1467,7 @@ namespace lfs::io {
                                                    const std::string& cache_key,
                                                    void* cuda_stream,
                                                    const LoadParams& params) {
-        const bool lossless = config_.use_16bit_color || params.undistort;
+        const bool lossless = decodes_16bit(params) || params.undistort;
         if (lossless && !jpeg2k_cache_available_.load(std::memory_order_relaxed))
             return;
 
