@@ -286,7 +286,7 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& img2,
         const lfs::core::Tensor& mask,
         float ssim_weight,
-        MaskedFusedL1SSIMWorkspace& workspace);
+        MaskedFusedL1SSIMWorkspace& workspace, float denominator = 0.0f);
 
     // Fused masked L1+SSIM backward
     lfs::core::Tensor masked_fused_l1_ssim_backward(
@@ -457,7 +457,7 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& gt_img,
         const lfs::core::Tensor& mask,
         float ssim_weight,
-        MaskedDecoupledFusedL1SSIMWorkspace& workspace);
+        MaskedDecoupledFusedL1SSIMWorkspace& workspace, float denominator = 0.0f);
 
     DecoupledGradients masked_decoupled_fused_l1_ssim_backward(
         const MaskedDecoupledFusedL1SSIMContext& ctx,

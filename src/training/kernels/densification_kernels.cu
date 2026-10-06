@@ -744,25 +744,6 @@ namespace lfs::training::kernels {
             const unsigned int axis = get_max_value_index(scale).x;
             log_scales[i * 3 + axis] -= delta;
         }
-
-        __global__ void oversize_split_scores_kernel(
-            const float* __restrict__ error_score,
-            const float* __restrict__ max_share,
-            const bool* __restrict__ frozen_mask,
-            size_t frozen_n,
-            float* __restrict__ out_scores,
-            float limit,
-            size_t n) {
-            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-            if (i >= n)
-                return;
-            if (frozen_mask != nullptr && i < frozen_n && frozen_mask[i]) {
-                out_scores[i] = 0.0f;
-                return;
-            }
-            out_scores[i] = lfs::training::oversize_split_score(
-                error_score[i], max_share[i], limit);
-        }
     } // namespace
 
     void launch_clip_log_scale_by_screen_share(
@@ -783,27 +764,6 @@ namespace lfs::training::kernels {
         clip_log_scale_by_screen_share_kernel<<<blocks, kBlock, 0, stream>>>(
             log_scales, max_share, frozen_mask, frozen_n, limit, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.clip_screen_share");
-    }
-
-    void launch_oversize_split_scores(
-        const float* error_score,
-        const float* max_share,
-        const bool* frozen_mask,
-        size_t frozen_n,
-        float* out_scores,
-        float limit,
-        size_t n,
-        cudaStream_t stream) {
-        LFS_ASSERT_MSG(error_score != nullptr && max_share != nullptr && out_scores != nullptr,
-                       "oversize-split scores require error, max_share, and output");
-        if (n == 0)
-            return;
-        stream = lfs::resolve_stream(stream);
-        constexpr int kBlock = 256;
-        const int blocks = static_cast<int>((n + kBlock - 1) / kBlock);
-        oversize_split_scores_kernel<<<blocks, kBlock, 0, stream>>>(
-            error_score, max_share, frozen_mask, frozen_n, out_scores, limit, n);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.oversize_split_scores");
     }
 
 } // namespace lfs::training::kernels

@@ -2467,6 +2467,48 @@ TEST(NormalLossRegression, AxisTieAndGrazingBranchDiscontinuities) {
     EXPECT_GT(std::sqrt(grazing_jump), 1.5);
 }
 
+TEST(FastGSFusedAdamSettingsTest, CarriesPerSplatMeanStepAndFarMask) {
+    const bool mask[] = {false, true, false, true};
+    FastGSFusedAdamState settings;
+    settings.enabled = true;
+    settings.means.n_primitives = 4;
+    settings.per_splat_mean_step = true;
+    settings.mean_step_median_extent = 0.25f;
+    settings.mean_step_far_mask = mask;
+    settings.mean_step_far_mask_n = 4;
+
+    const auto fused = make_fastgs_fused_adam_settings(settings);
+
+    EXPECT_TRUE(fused.enabled);
+    EXPECT_TRUE(fused.per_splat_mean_step);
+    EXPECT_EQ(fused.mean_step_far_mask, mask);
+    EXPECT_EQ(fused.mean_step_far_mask_n, 4);
+    EXPECT_FLOAT_EQ(fused.mean_step_median_extent, 0.25f);
+}
+
+TEST(FastGSFusedAdamSettingsTest, BoundsFarMaskCountToLiveRows) {
+    const bool mask[] = {false, true, false, true};
+    FastGSFusedAdamState settings;
+    settings.means.n_primitives = 4;
+    settings.per_splat_mean_step = true;
+    settings.mean_step_far_mask = mask;
+    for (const int count : {-1, 0, 2, 4, 8}) {
+        SCOPED_TRACE(count);
+        settings.mean_step_far_mask_n = count;
+        const auto fused = make_fastgs_fused_adam_settings(settings);
+        EXPECT_EQ(fused.mean_step_far_mask, count > 0 ? mask : nullptr);
+        EXPECT_EQ(fused.mean_step_far_mask_n, std::clamp(count, 0, 4));
+    }
+    settings.means.n_primitives = 0;
+    EXPECT_EQ(make_fastgs_fused_adam_settings(settings).mean_step_far_mask, nullptr);
+    EXPECT_EQ(make_fastgs_fused_adam_settings(settings).mean_step_far_mask_n, 0);
+    settings.means.n_primitives = 4;
+    settings.mean_step_far_mask = nullptr;
+    EXPECT_EQ(make_fastgs_fused_adam_settings(settings).mean_step_far_mask_n, 0);
+    settings.per_splat_mean_step = false;
+    EXPECT_FALSE(make_fastgs_fused_adam_settings(settings).per_splat_mean_step);
+}
+
 TEST(NormalLossHunt, JointRotationCodec100kSteps) {
     using C = joint_adam::Codec16;
     constexpr int cells = 256 * 4, steps = 100000;
@@ -2604,7 +2646,8 @@ TEST(ScreenShareAdamHingeTest, HingeDoesNotInflateSecondMoment) {
                 entry.bias_correction2_sqrt_rcp = bc2;
                 fast_lfs::optimizer::adam_step_joint_contiguous_batched(
                     &entry, 1, nullptr, 0, 1.0f, nullptr, 0, 1.0f,
-                    beta1, beta2, eps, nullptr, screen_share.ptr<float>(), 1, limit, penalty);
+                    beta1, beta2, eps, nullptr, nullptr, 0, 0.0f,
+                    nullptr, 0, screen_share.ptr<float>(), 1, limit, penalty);
             } else {
                 fast_lfs::optimizer::adam_step_joint_contiguous_raw(
                     param.ptr<float>(), packed.ptr<std::uint8_t>(), bounds.ptr<float>(), grad.ptr<float>(),

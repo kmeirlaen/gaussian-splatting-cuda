@@ -56,14 +56,23 @@ namespace lfs::training {
             return dst;
         };
         fused_adam.enabled = optimizer_fused.enabled;
+        fused_adam.rendered_count = fused_extra_gradients.rendered_count;
         fused_adam.beta1 = optimizer_fused.beta1;
         fused_adam.beta2 = optimizer_fused.beta2;
         fused_adam.eps = optimizer_fused.eps;
         fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
+        fused_adam.scale_reg_log = fused_extra_gradients.scale_reg_log;
+        fused_adam.scale_reg_normalizer = fused_extra_gradients.scale_reg_normalizer;
+        fused_adam.erank_reg_weight = fused_extra_gradients.erank_reg_weight;
+        fused_adam.dc_reg_weight = fused_extra_gradients.dc_reg_weight;
+        fused_adam.sh_rest_reg_weight = fused_extra_gradients.sh_rest_reg_weight;
         fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
         fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
         fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;
         fused_adam.opacity_reg_loss_out = fused_extra_gradients.opacity_reg_loss_out;
+        fused_adam.erank_reg_loss_out = fused_extra_gradients.erank_reg_loss_out;
+        fused_adam.sh_rest_reg_loss_out = fused_extra_gradients.sh_rest_reg_loss_out;
+        fused_adam.dc_reg_loss_out = fused_extra_gradients.dc_reg_loss_out;
         fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
         fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
         fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
@@ -76,6 +85,16 @@ namespace lfs::training {
         fused_adam.opacity = convert_param(optimizer_fused.opacity);
         fused_adam.sh0 = convert_param(optimizer_fused.sh0);
         fused_adam.shN = convert_param(optimizer_fused.shN);
+        fused_adam.per_splat_mean_step = optimizer_fused.per_splat_mean_step;
+        fused_adam.mean_step_median_extent = optimizer_fused.mean_step_median_extent;
+        // The kernel compares an unsigned row index with this count. Reject
+        // nonpositive counts and limit the mask to live mean rows.
+        if (optimizer_fused.mean_step_far_mask != nullptr &&
+            optimizer_fused.mean_step_far_mask_n > 0 && optimizer_fused.means.n_primitives > 0) {
+            fused_adam.mean_step_far_mask = optimizer_fused.mean_step_far_mask;
+            fused_adam.mean_step_far_mask_n = std::min(
+                optimizer_fused.mean_step_far_mask_n, optimizer_fused.means.n_primitives);
+        }
         return fused_adam;
     }
 

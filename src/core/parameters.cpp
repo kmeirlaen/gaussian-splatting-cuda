@@ -55,6 +55,24 @@ namespace lfs::core {
             using prop::PropertyRegistry;
             using prop::PropType;
 
+            [[nodiscard]] float mrnf_shs_lr_for_capacity(const int max_cap) {
+                constexpr double kReferenceCapacity = 1'000'000.0;
+                const double cap = std::max(static_cast<double>(max_cap), kReferenceCapacity);
+                return static_cast<float>(0.005 * std::sqrt(kReferenceCapacity / cap));
+            }
+
+            [[nodiscard]] float mrnf_grow_fraction_for_capacity(const int max_cap) {
+                constexpr double kReferenceCapacity = 1'000'000.0;
+                constexpr double kSaturationCapacity = 5'000'000.0;
+                constexpr double kAtReference = 0.0758;
+                constexpr double kAtSaturation = 0.12;
+                const double cap = std::clamp(static_cast<double>(max_cap),
+                                              kReferenceCapacity, kSaturationCapacity);
+                const double t = std::log(cap / kReferenceCapacity) /
+                                 std::log(kSaturationCapacity / kReferenceCapacity);
+                return static_cast<float>(kAtReference + t * (kAtSaturation - kAtReference));
+            }
+
             [[nodiscard]] std::string_view optimization_json_key(const PropertyMeta& meta) {
                 return meta.json_key.empty() ? std::string_view(meta.id) : std::string_view(meta.json_key);
             }
@@ -211,6 +229,14 @@ namespace lfs::core {
                 if (const auto removed = json.find("background_improvements");
                     removed != json.end() && removed->is_boolean() && removed->get<bool>()) {
                     LOG_WARN("Ignoring background_improvements: the option was removed and MRNF trains with its default profile");
+                }
+                if (const auto removed = json.find("hard_clip_stop_iter");
+                    removed != json.end() && removed->is_number_integer() && removed->get<int>() != 0) {
+                    LOG_WARN("Ignoring hard_clip_stop_iter: MRNF no longer hard-clips splats by screen share");
+                }
+                if (const auto removed = json.find("oversize_split_fraction");
+                    removed != json.end() && removed->is_number() && removed->get<float>() > 0.0f) {
+                    LOG_WARN("Ignoring oversize_split_fraction: MRNF no longer reserves growth for oversized splats");
                 }
                 read_registered_optimization_properties(json, params, skip_missing);
                 if (const auto image_count_scaler = stored_image_count_scaler(json, params.steps_scaler))
@@ -378,6 +404,25 @@ namespace lfs::core {
             // 1.0 keeps supervision on through the inclusive last iteration.
             return normal_end_fraction >= 1.0f ||
                    static_cast<float>(iter) < normal_end_fraction * total_f;
+        }
+
+        float OptimizationParameters::scale_reg_at(const int iter) const {
+            if (scale_reg_decay_power < 0.0f)
+                return scale_reg;
+            const float p = std::max(scale_reg_decay_power, 0.0f);
+            const float t = std::clamp(static_cast<float>(iter) /
+                                           static_cast<float>(std::max<size_t>(iterations, 1)),
+                                       0.0f, 1.0f);
+            return scale_reg * (p + 1.0f) * std::pow(1.0f - t, p);
+        }
+
+        void OptimizationParameters::resolve_mrnf_capacity_defaults() {
+            if (canonical_strategy_name(strategy) != kStrategyMRNF)
+                return;
+            if (grow_fraction < 0.0f)
+                grow_fraction = mrnf_grow_fraction_for_capacity(max_cap);
+            if (shs_lr < 0.0f)
+                shs_lr = mrnf_shs_lr_for_capacity(max_cap);
         }
 
         int OptimizationParameters::resolved_ppisp_controller_activation_step(const int total_iterations) const {
@@ -629,6 +674,18 @@ namespace lfs::core {
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
             if (!std::isfinite(max_screen_share))
                 return std::format("max_screen_share must be finite (got {})", max_screen_share);
+            if (ppisp_holdout_appearance != PPISPHoldoutAppearance::Mean && ppisp_holdout_appearance != PPISPHoldoutAppearance::Nearest)
+                return "ppisp_holdout_appearance must be mean or nearest";
+            if (!std::isfinite(densify_structure_weight) || densify_structure_weight < 0.0f || densify_structure_weight > 4.0f)
+                return std::format("densify_structure_weight must be finite and within [0, 4] (got {})", densify_structure_weight);
+            if (!std::isfinite(gradient_loss_weight) || gradient_loss_weight < 0.0f || gradient_loss_weight > 8.0f)
+                return std::format("gradient_loss_weight must be finite and within [0, 8] (got {})", gradient_loss_weight);
+            if (!std::isfinite(thin_structure_weight) || thin_structure_weight < 0.0f || thin_structure_weight > 4.0f)
+                return std::format("thin_structure_weight must be finite and within [0, 4] (got {})", thin_structure_weight);
+            if (!std::isfinite(late_lr_anneal) || late_lr_anneal <= 0.0f || late_lr_anneal > 1.0f)
+                return std::format("late_lr_anneal must be finite and within (0, 1] (got {})", late_lr_anneal);
+            if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
+                return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
             if (perf_bench_warmup <= 0)
                 return std::format("perf_bench_warmup must be positive (got {})", perf_bench_warmup);
             if (ppisp_warmup_steps < 0)
@@ -646,6 +703,9 @@ namespace lfs::core {
                 std::pair{"rotation_lr", rotation_lr},
                 std::pair{"opacity_reg", opacity_reg},
                 std::pair{"scale_reg", scale_reg},
+                std::pair{"erank_reg", erank_reg},
+                std::pair{"dc_reg", dc_reg},
+                std::pair{"sh_rest_reg", sh_rest_reg},
                 std::pair{"mask_opacity_penalty_weight", mask_opacity_penalty_weight},
                 std::pair{"depth_loss_weight", depth_loss_weight},
                 std::pair{"bilateral_grid_lr", bilateral_grid_lr},
@@ -659,7 +719,10 @@ namespace lfs::core {
                 std::pair{"screen_share_penalty", screen_share_penalty},
             };
             for (const auto& [name, value] : nonnegative_fields) {
-                if (auto error = invalid_nonnegative(value, name); !error.empty())
+                const bool automatic_mrnf_value = is_mrnf_strategy(strategy) && value == -1.0f &&
+                                                  (std::string_view{name} == "shs_lr");
+                if (auto error = invalid_nonnegative(value, name);
+                    !error.empty() && !automatic_mrnf_value)
                     return error;
             }
 
@@ -671,7 +734,6 @@ namespace lfs::core {
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},
-                std::pair{"oversize_split_fraction", oversize_split_fraction},
                 std::pair{"opacity_decay", opacity_decay},
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},
@@ -680,7 +742,10 @@ namespace lfs::core {
                 std::pair{"normal_end_fraction", normal_end_fraction},
             };
             for (const auto& [name, value] : probability_fields) {
-                if (auto error = invalid_probability(value, name); !error.empty())
+                const bool automatic_mrnf_value = is_mrnf_strategy(strategy) && value == -1.0f &&
+                                                  (std::string_view{name} == "grow_fraction");
+                if (auto error = invalid_probability(value, name);
+                    !error.empty() && !automatic_mrnf_value)
                     return error;
             }
             for (size_t i = 0; i < bg_color.size(); ++i) {
@@ -892,17 +957,31 @@ namespace lfs::core {
             p.start_refine = 0;
             p.stop_refine = 28'500;
             p.max_cap = 5'000'000;
+            p.grow_fraction = -1.0f;
+            p.shs_lr = -1.0f;
+            p.thin_structure_weight = 0.5f;
+            p.gradient_loss_weight = 1.8f;
+            p.opacity_decay_rendered_only = true;
+            p.densify_structure_weight = 1.0f;
             p.min_opacity = 1.0f / 255.0f;
-            p.means_lr = 2e-5f;
             p.means_lr_end = 2e-7f;
             p.opacity_lr = 0.012f;
-            p.scaling_lr = 7e-3f;
             p.scaling_lr_end = 5e-3f;
-            p.rotation_lr = 2e-3f;
-            p.shs_lr = 2e-3f;
-            p.lambda_dssim = 0.2f;
+            p.late_lr_anneal = 0.3f;
+            p.lambda_dssim = 0.22f;
+            p.growth_grad_threshold = 0.00309693f;
+            p.max_screen_share = 0.586511f;
+            p.screen_share_penalty = 0.847085f;
+            p.means_lr = 2.17871e-5f;
+            p.refine_every = 163;
+            p.scaling_lr = 0.00828016f;
+            p.rotation_lr = 0.0015f;
             p.opacity_reg = 0.003f;
-            p.scale_reg = 0.0f;
+            p.scale_reg = 0.01f;
+            p.scale_reg_decay_power = 0.4f;
+            p.erank_reg = 0.001f;
+            p.dc_reg = 0.001f;
+            p.sh_rest_reg = 0.001f;
             p.use_error_map = true;
             p.use_edge_map = true;
             return p;

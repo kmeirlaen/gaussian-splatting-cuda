@@ -2735,7 +2735,8 @@ namespace lfs::vis::gui {
             const std::uint64_t loss_generation = trainer ? trainer->cameraLossColorGeneration() : 0;
 
             if (camera_data_changed) {
-                const auto& all_cameras = scene.getAllCamerasCached();
+                const auto all_cameras_snapshot = scene.getAllCamerasCached();
+                const auto& all_cameras = *all_cameras_snapshot;
                 std::unordered_set<int> scene_camera_uids;
                 scene_camera_uids.reserve(all_cameras.size());
                 for (const auto& camera : all_cameras) {
@@ -2743,7 +2744,8 @@ namespace lfs::vis::gui {
                         scene_camera_uids.insert(camera->uid());
                 }
 
-                const auto& cameras = scene.getVisibleCamerasCached();
+                const auto cameras_snapshot = scene.getVisibleCamerasCached();
+                const auto& cameras = *cameras_snapshot;
                 frustum_cache.begin(scene, scene_render_generation, settings.camera_frustum_scale);
                 const auto scene_transforms = resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
                 const auto disabled_uids = scene.getTrainingDisabledCameraUids();

@@ -557,9 +557,23 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 5000u);
 }
 
-TEST(ArgumentParserTest, ExposureCorrectionFlagSetsField) {
+TEST(ArgumentParserTest, ExposureCorrectionDefaultsOnAndCanBeDisabled) {
     const auto data_path = make_test_path("lfs_arg_parser_exposure_correction_data");
     const auto output_path = make_test_path("lfs_arg_parser_exposure_correction_output");
+
+    const char* default_argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str()};
+    auto default_parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(default_argv)), default_argv);
+    ASSERT_TRUE(default_parsed.has_value()) << default_parsed.error();
+    EXPECT_TRUE((*default_parsed)->optimization.use_exposure_correction);
+    EXPECT_FALSE((*default_parsed)->optimization.use_bilateral_grid);
+    EXPECT_FALSE((*default_parsed)->optimization.use_ppisp);
 
     const char* argv[] = {
         "LichtFeld-Studio",
@@ -568,10 +582,10 @@ TEST(ArgumentParserTest, ExposureCorrectionFlagSetsField) {
         data_path.c_str(),
         "--output-path",
         output_path.c_str(),
-        "--exposure-correction"};
+        "--no-exposure-correction"};
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
-    EXPECT_TRUE((*parsed)->optimization.use_exposure_correction);
+    EXPECT_FALSE((*parsed)->optimization.use_exposure_correction);
     EXPECT_FALSE((*parsed)->optimization.use_bilateral_grid);
     EXPECT_FALSE((*parsed)->optimization.use_ppisp);
     EXPECT_EQ((*parsed)->optimization.exposure_correction_grid_start_iter, 1000);
@@ -636,6 +650,31 @@ TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
         static_cast<int>(std::size(argv_1000)), argv_1000);
     ASSERT_TRUE(parsed_1000.has_value()) << parsed_1000.error();
     EXPECT_EQ((*parsed_1000)->optimization.morton_reorder_interval, 1000u);
+}
+
+TEST(ArgumentParserTest, MrnfCapacityDefaultsResolveAfterCliOverrides) {
+    const auto data_path = make_test_path("lfs_arg_parser_mrnf_capacity_data");
+    const auto output_path = make_test_path("lfs_arg_parser_mrnf_capacity_output");
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--strategy",
+        "mrnf",
+        "--max-cap",
+        "1000000"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FLOAT_EQ((*parsed)->optimization.grow_fraction, -1.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.shs_lr, -1.0f);
+
+    (*parsed)->optimization.resolve_mrnf_capacity_defaults();
+    EXPECT_NEAR((*parsed)->optimization.grow_fraction, 0.0758f, 1.0e-7f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.shs_lr, 0.005f);
 }
 
 TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {
@@ -2396,7 +2435,7 @@ TEST(ArgumentParserTest, ScalingPrecedesAbsoluteStepOverrides) {
     EXPECT_EQ(opt.eval_steps, std::vector<size_t>{1000});
     EXPECT_EQ(opt.iterations, 15000u);
     EXPECT_EQ(opt.stop_refine, 14250u);
-    EXPECT_EQ(opt.refine_every, 100u);
+    EXPECT_EQ(opt.refine_every, 82u);
     EXPECT_TRUE((*parsed)->overrides.has_optimization_key("morton_reorder_interval"));
     lfs::core::param::TrainingParameters restored;
     apply_explicit_training_overrides(restored, (*parsed)->overrides);

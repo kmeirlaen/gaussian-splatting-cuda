@@ -407,6 +407,10 @@ set(TEST_FILES
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp
+    test_thin_structure.cpp
+    test_blob_seeding.cpp
+    test_rendered_structure.cpp
+    test_gradient_residual.cpp
     test_fused_reg_loss.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp

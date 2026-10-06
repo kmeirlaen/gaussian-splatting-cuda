@@ -5,6 +5,7 @@
 #include "trainer.hpp"
 #include "backward.h" // BWD-A T_eff hist arm/flush
 #include "components/bilateral_grid.hpp"
+#include "components/holdout_appearance.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/ppisp_file.hpp"
@@ -12,6 +13,7 @@
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
 #include "core/assert.hpp"
+#include "core/camera_frame_normalizer.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
@@ -112,6 +114,22 @@
 namespace lfs::training {
 
     namespace {
+        [[nodiscard]] float camera_derived_frame_scale(
+            const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+            std::vector<lfs::core::CameraPoseForScale> poses;
+            poses.reserve(cameras.size());
+            for (const auto& camera : cameras) {
+                if (!camera)
+                    continue;
+                auto position = camera->cam_position().cpu().contiguous();
+                auto rotation = camera->R().cpu().contiguous();
+                poses.push_back({.center = {position.ptr<float>()[0], position.ptr<float>()[1],
+                                            position.ptr<float>()[2]},
+                                 .up = lfs::core::camera_up_from_cv_rotation(rotation.ptr<float>())});
+            }
+            return static_cast<float>(lfs::core::camera_frame_scale(poses));
+        }
+
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
         constexpr int INVISIBLE_ITERATION_LIMIT = 1000;
@@ -1005,6 +1023,9 @@ namespace lfs::training {
         loss_accumulator_ = {};
         fused_scale_reg_loss_ = {};
         fused_opacity_reg_loss_ = {};
+        fused_erank_reg_loss_ = {};
+        fused_dc_reg_loss_ = {};
+        fused_sh_rest_reg_loss_ = {};
         cropbox_damping_cached_mask_ = {};
         cropbox_damping_cached_n_ = 0;
         cropbox_damping_geom_fp_ = 0;
@@ -1024,6 +1045,8 @@ namespace lfs::training {
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
+        clear_thin_structure_cache();
+        gradient_residual_workspace_ = {};
         mask_preprocess_workspace_ = {};
     }
 
@@ -1106,6 +1129,7 @@ namespace lfs::training {
         ppisp_exif_exposure_mean_.reset();
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
+        eval_ppisp_nearest_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
 
@@ -1617,12 +1641,31 @@ namespace lfs::training {
         }
     }
 
+    void Trainer::add_gradient_residual(
+        const core::Tensor& corrected, const core::Tensor& target,
+        const core::Tensor& raw, const core::Tensor& pixel_weight,
+        const core::param::OptimizationParameters& params, const int iteration,
+        core::Tensor& loss, core::Tensor& grad_corrected, std::optional<RawGradientResidual>& raw_residual) {
+        if (params.gradient_loss_weight == 0.0f || iteration < kernels::GRADIENT_LOSS_START_STEP)
+            return;
+        if (raw.is_valid() && raw.numel() > 0) {
+            raw_residual = RawGradientResidual{.raw = raw, .target = target, .pixel_weight = pixel_weight};
+            return;
+        }
+        if (!grad_corrected.is_valid())
+            grad_corrected = core::Tensor::zeros_like(corrected);
+        const auto term = kernels::gradient_residual_loss_gradient(
+            corrected, target, pixel_weight, grad_corrected, params.gradient_loss_weight,
+            gradient_residual_workspace_);
+        loss = loss + term;
+    }
+
     // Compute photometric loss AND gradient manually
     std::expected<Trainer::PhotometricLossResult, std::string> Trainer::compute_photometric_loss_with_gradient(
         const lfs::core::Tensor& corrected,
         const lfs::core::Tensor& gt_image,
         const lfs::core::param::OptimizationParameters& opt_params,
-        const lfs::core::Tensor& raw_rendered) {
+        const lfs::core::Tensor& raw_rendered, const int iteration) {
         const bool use_decoupled_appearance_loss =
             raw_rendered.is_valid() &&
             raw_rendered.numel() > 0 &&
@@ -1639,10 +1682,14 @@ namespace lfs::training {
                 grads.grad_corrected = grads.grad_corrected.squeeze(0);
             }
 
+            std::optional<RawGradientResidual> raw_residual;
+            add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
+                                  loss_tensor, grads.grad_corrected, raw_residual);
             return PhotometricLossResult{
                 .loss = loss_tensor,
                 .grad_corrected = grads.grad_corrected,
-                .raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx)};
+                .raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx),
+                .raw_residual = raw_residual};
         }
 
         lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim};
@@ -1651,9 +1698,13 @@ namespace lfs::training {
             return std::unexpected(result.error());
         }
         auto [loss_tensor, ctx] = *result;
+        std::optional<RawGradientResidual> raw_residual;
+        add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
+                              loss_tensor, ctx.grad_image, raw_residual);
         return PhotometricLossResult{
             .loss = loss_tensor,
-            .grad_corrected = ctx.grad_image};
+            .grad_corrected = ctx.grad_image,
+            .raw_residual = raw_residual};
     }
 
     std::expected<void, std::string> Trainer::validate_masks() {
@@ -1709,7 +1760,8 @@ namespace lfs::training {
         const lfs::core::Tensor& roi_weight,
         const lfs::core::Tensor& alpha,
         const lfs::core::param::OptimizationParameters& opt_params,
-        const lfs::core::Tensor& raw_rendered) {
+        const lfs::core::Tensor& raw_rendered,
+        const lfs::core::Tensor& structure_map, const int iteration) {
 
         using namespace lfs::core;
         constexpr float ALPHA_CONSISTENCY_WEIGHT = 10.0f;
@@ -1738,15 +1790,29 @@ namespace lfs::training {
 
         // Fused mask preprocess: SegmentAndIgnore band remap + optional ROI → one kernel.
         // Steady state is allocation-free via mask_preprocess_workspace_ (grow-only).
-        const Tensor photometric_weight = losses::fuse_photometric_mask_weight(
+        const Tensor base_photometric_weight = losses::fuse_photometric_mask_weight(
             mask_preprocess_workspace_,
             user_masks_photometric ? mask_2d : Tensor{},
             roi_weight,
             mode == param::MaskMode::SegmentAndIgnore,
             user_masks_photometric && normal_terms_on);
 
+        Tensor photometric_weight = base_photometric_weight;
+        float base_denominator = 0.0f;
+        if (structure_map.is_valid()) {
+            kernels::structure_photometric_weight(
+                structure_map, base_photometric_weight, thin_structure_weight_buffer_,
+                opt_params.thin_structure_weight,
+                !base_photometric_weight.is_valid() && opt_params.lambda_dssim > 0.0f);
+            photometric_weight = thin_structure_weight_buffer_;
+            base_denominator = kernels::structure_base_denominator(
+                base_photometric_weight, static_cast<int>(gt_image.shape()[1]),
+                static_cast<int>(gt_image.shape()[2]), opt_params.lambda_dssim > 0.0f);
+        }
+
         Tensor loss, grad_corrected, grad_alpha;
         std::optional<lfs::training::kernels::DecoupledRawGradient> raw_gradient;
+        std::optional<RawGradientResidual> raw_residual;
         const bool use_decoupled_appearance_loss =
             raw_rendered.is_valid() &&
             raw_rendered.numel() > 0 &&
@@ -1757,7 +1823,7 @@ namespace lfs::training {
                 auto& masked_decoupled_ws = photometric_loss_.arena().masked_decoupled();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
-                    masked_decoupled_ws);
+                    masked_decoupled_ws, base_denominator);
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
                     ctx, masked_decoupled_ws);
 
@@ -1771,8 +1837,7 @@ namespace lfs::training {
             } else {
                 auto& masked_ws = photometric_loss_.arena().masked_fused();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws);
-
+                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws, base_denominator);
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
                 loss = loss_tensor;
 
@@ -1798,7 +1863,7 @@ namespace lfs::training {
                 loss = loss + penalty.loss;
             }
         } else {
-            auto fallback = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered);
+            auto fallback = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered, iteration);
             if (!fallback) {
                 return std::unexpected(fallback.error());
             }
@@ -1806,11 +1871,13 @@ namespace lfs::training {
                 loss = fallback->loss;
                 grad_corrected = fallback->grad_corrected;
                 raw_gradient = fallback->raw_gradient;
+                raw_residual = fallback->raw_residual;
             } else {
                 return MaskLossResult{
                     .loss = fallback->loss,
                     .grad_corrected = fallback->grad_corrected,
                     .raw_gradient = fallback->raw_gradient,
+                    .raw_residual = fallback->raw_residual,
                     .grad_alpha = {}};
             }
         }
@@ -1828,12 +1895,17 @@ namespace lfs::training {
             grad_alpha = alpha_term.grad_alpha;
         }
 
+        if (photometric_weight.is_valid())
+            add_gradient_residual(corrected, gt_image, raw_rendered, base_photometric_weight,
+                                  opt_params, iteration, loss, grad_corrected, raw_residual);
+
         return MaskLossResult{
             .loss = loss,
             .grad_corrected = grad_corrected,
             .raw_gradient = raw_gradient,
+            .raw_residual = raw_residual,
             .grad_alpha = grad_alpha,
-            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? photometric_weight : Tensor{}};
+            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? base_photometric_weight : Tensor{}};
     }
 
     // Returns GPU tensor for loss - NO SYNC!
@@ -2819,6 +2891,7 @@ namespace lfs::training {
                 return std::unexpected("No camera source available");
             }
 
+            train_frame_scale_ = camera_derived_frame_scale(source_cameras);
             if (auto result = initialize_camera_loss_heatmap(source_cameras); !result) {
                 return std::unexpected(result.error());
             }
@@ -2882,6 +2955,7 @@ namespace lfs::training {
             }
 
             // Re-initialize strategy with new parameters
+            strategy_->set_training_dataset(train_dataset_);
             strategy_->initialize(get_runtime_optimization_params());
             apply_frozen_ranges_to_optimizer(
                 splat,
@@ -3569,6 +3643,8 @@ namespace lfs::training {
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
+        clear_thin_structure_cache();
+        gradient_residual_workspace_ = {};
         strategy_.reset();
         bilateral_grid_.reset();
         ppisp_.reset();
@@ -3576,6 +3652,7 @@ namespace lfs::training {
         ppisp_exif_exposure_mean_.reset();
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
+        eval_ppisp_nearest_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
         progress_.reset();
@@ -5720,6 +5797,31 @@ namespace lfs::training {
         bg_image_cache_clock_ = 0;
     }
 
+    void Trainer::clear_thin_structure_cache() {
+        thin_structure_map_key_.reset();
+        thin_structure_workspace_ = {};
+        thin_structure_map_buffer_ = {};
+        thin_structure_weight_buffer_ = {};
+    }
+
+    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight) {
+        if (weight == 0.0f)
+            return {};
+        using namespace lfs::core;
+        LFS_ASSERT(image.ndim() == 3 && image.shape()[0] == 3);
+        const size_t height = image.shape()[1], width = image.shape()[2];
+        const ThinStructureMapKey key{camera_uid, height, width, edge_weight_preprocessing_generation_};
+        if (thin_structure_map_key_ == key) {
+            thin_structure_map_buffer_.sync_to_stream(image.stream());
+            return thin_structure_map_buffer_;
+        }
+        if (!thin_structure_map_buffer_.is_valid() || thin_structure_map_buffer_.shape() != TensorShape{height, width})
+            thin_structure_map_buffer_ = Tensor::empty({height, width}, Device::CUDA);
+        kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
+        thin_structure_map_key_ = key;
+        return thin_structure_map_buffer_;
+    }
+
     void Trainer::clearEdgeWeightCache() {
         edge_weight_cache_.clear();
         edge_weight_cache_bytes_ = 0;
@@ -6141,11 +6243,13 @@ namespace lfs::training {
 
                 // Per-camera maps cached from the target must not see a per-iteration background.
                 const lfs::core::Tensor source_gt = gt_image;
+                lfs::core::Tensor stable_gt = gt_image;
                 if (composite_target_alpha_ && pipelined_mask_.is_valid() &&
                     params_.optimization.mask_mode == lfs::core::param::MaskMode::None &&
                     params_.optimization.use_alpha_as_mask) {
                     gt_image = kernels::composite_over_background(gt_image, pipelined_mask_,
                                                                   bg_image.is_valid() ? bg_image : bg);
+                    stable_gt = kernels::composite_over_background(source_gt, pipelined_mask_, background_);
                 }
 
                 const bool fastgs_path = !params_.optimization.gut;
@@ -6174,6 +6278,7 @@ namespace lfs::training {
                 RenderOutput r_output;
                 r_output.camera = cam;
                 r_output.target_image = gt_image;
+                r_output.stable_target_image = stable_gt;
                 int tiles_processed = 0;
                 const bool in_sparsification = get_active_sparsify_steps() > 0 &&
                                                iter > get_sparsity_boundary_iteration();
@@ -6345,10 +6450,19 @@ namespace lfs::training {
                 const bool normal_supervision_started = normal_supervision_active(iter);
 
                 FastGSFusedExtraGradients fused_extra_gradients;
+                if (fastgs_path && core::param::is_mrnf_strategy(params_.optimization.strategy) &&
+                    params_.optimization.opacity_decay_rendered_only) {
+                    auto support = strategy_->rendered_support_counts();
+                    assert(support.ndim() == 1 && support.numel() == strategy_->get_model().size());
+                    fused_extra_gradients.rendered_count = support.ptr<float>();
+                }
                 lfs::core::Tensor edge_score_scratch;
                 lfs::core::Tensor edge_weight_map;
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
+                lfs::core::Tensor fused_erank_reg_loss_gpu;
+                lfs::core::Tensor fused_dc_reg_loss_gpu;
+                lfs::core::Tensor fused_sh_rest_reg_loss_gpu;
                 lfs::core::Tensor sparsity_loss_gpu;
                 const bool run_gut_gaussian_backward =
                     params_.optimization.gut && update_gaussians_this_iter;
@@ -6375,7 +6489,15 @@ namespace lfs::training {
                             fused_extra_gradients.edge_weight_map = edge_weight_map.ptr<float>();
                             fused_extra_gradients.edge_score_out = edge_score_scratch.ptr<float>();
                         }
-                        fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
+                        const float scale_weight = params_.optimization.scale_reg_at(iter);
+                        const bool log_scale_reg = core::param::is_mrnf_strategy(params_.optimization.strategy);
+                        fused_extra_gradients.scale_reg_weight = scale_weight;
+                        fused_extra_gradients.scale_reg_log = log_scale_reg;
+                        fused_extra_gradients.scale_reg_normalizer =
+                            log_scale_reg ? train_frame_scale_ : 1.0f;
+                        fused_extra_gradients.erank_reg_weight = params_.optimization.erank_reg;
+                        fused_extra_gradients.dc_reg_weight = params_.optimization.dc_reg;
+                        fused_extra_gradients.sh_rest_reg_weight = params_.optimization.sh_rest_reg;
                         // Fused path shares the configured opacity_reg weight between gradient and loss accumulation.
                         fused_extra_gradients.opacity_reg_weight =
                             params_.optimization.opacity_reg;
@@ -6384,7 +6506,7 @@ namespace lfs::training {
                         }
                         // Fused backward owns regularization accumulation, avoiding
                         // separate full-N kernels and their temporary allocations.
-                        if (params_.optimization.scale_reg > 0.0f) {
+                        if (scale_weight > 0.0f) {
                             if (!fused_scale_reg_loss_.is_valid()) {
                                 fused_scale_reg_loss_ = lfs::core::Tensor::zeros(
                                     {1}, lfs::core::Device::CUDA);
@@ -6393,6 +6515,27 @@ namespace lfs::training {
                             fused_extra_gradients.scale_reg_loss_out =
                                 fused_scale_reg_loss_.ptr<float>();
                             fused_scale_reg_loss_gpu = fused_scale_reg_loss_;
+                        }
+                        if (params_.optimization.erank_reg > 0.0f) {
+                            if (!fused_erank_reg_loss_.is_valid())
+                                fused_erank_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                            fused_erank_reg_loss_.zero_();
+                            fused_erank_reg_loss_gpu = fused_erank_reg_loss_;
+                            fused_extra_gradients.erank_reg_loss_out = fused_erank_reg_loss_gpu.ptr<float>();
+                        }
+                        if (params_.optimization.dc_reg > 0.0f) {
+                            if (!fused_dc_reg_loss_.is_valid())
+                                fused_dc_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                            fused_dc_reg_loss_.zero_();
+                            fused_dc_reg_loss_gpu = fused_dc_reg_loss_;
+                            fused_extra_gradients.dc_reg_loss_out = fused_dc_reg_loss_gpu.ptr<float>();
+                        }
+                        if (params_.optimization.sh_rest_reg > 0.0f && model.get_active_sh_degree() > 0) {
+                            if (!fused_sh_rest_reg_loss_.is_valid())
+                                fused_sh_rest_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                            fused_sh_rest_reg_loss_.zero_();
+                            fused_sh_rest_reg_loss_gpu = fused_sh_rest_reg_loss_;
+                            fused_extra_gradients.sh_rest_reg_loss_out = fused_sh_rest_reg_loss_gpu.ptr<float>();
                         }
                         if (params_.optimization.opacity_reg > 0.0f) {
                             if (!fused_opacity_reg_loss_.is_valid()) {
@@ -6407,11 +6550,11 @@ namespace lfs::training {
                     } else {
                         // Freeze / non-backward FastGS iterations: keep legacy loss-only
                         // path so reported loss stays valid without a fused backward.
-                        if (params_.optimization.scale_reg > 0.0f) {
+                        if (params_.optimization.scale_reg_at(iter) > 0.0f) {
                             auto scale_loss_result =
                                 lfs::training::losses::ScaleRegularization::forward_loss_only(
                                     model.scaling_raw(),
-                                    {.weight = params_.optimization.scale_reg});
+                                    {.weight = params_.optimization.scale_reg_at(iter)});
                             if (!scale_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(scale_loss_result.error()),
@@ -6631,6 +6774,7 @@ namespace lfs::training {
                     r_output = output; // Save last tile for densification
                     r_output.camera = cam;
                     r_output.target_image = gt_image;
+                    r_output.stable_target_image = stable_gt;
                     nvtxRangePop();
 
                     bool tile_context_cleaned = false;
@@ -6743,7 +6887,9 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.photometric_loss");
                             const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                                   (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
-                            if (use_mask || roi_weight.is_valid()) {
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
                                 lfs::core::Tensor mask;
                                 if (use_mask) {
                                     if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
@@ -6763,7 +6909,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input);
+                                    params_.optimization, raw_loss_input, structure_map, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -6782,7 +6928,7 @@ namespace lfs::training {
                                 tile_grad = result->grad_corrected;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, params_.optimization, raw_loss_input);
+                                    corrected_image, gt_tile, params_.optimization, raw_loss_input, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -6906,6 +7052,7 @@ namespace lfs::training {
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
                         std::optional<lfs::training::kernels::DecoupledRawGradient> tile_raw_gradient;
+                        std::optional<RawGradientResidual> tile_raw_residual;
                         lfs::core::Tensor tile_grad_alpha;
                         lfs::core::Tensor tile_grad_depth;
                         lfs::core::Tensor tile_grad_normal;
@@ -6974,7 +7121,7 @@ namespace lfs::training {
                         const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                               (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
                         const bool used_masked_fused =
-                            (roi_weight.is_valid() ||
+                            (params_.optimization.thin_structure_weight > 0.0f || roi_weight.is_valid() ||
                              (use_mask &&
                               (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
                                params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore ||
@@ -6983,7 +7130,9 @@ namespace lfs::training {
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
-                            if (use_mask || roi_weight.is_valid()) {
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.thin_structure_weight);
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
                                 lfs::core::Tensor mask;
                                 if (use_mask) {
                                     if (!composite_target_alpha_ && pipelined_mask_.is_valid() &&
@@ -7003,7 +7152,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input);
+                                    params_.optimization, raw_loss_input, structure_map, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7020,11 +7169,12 @@ namespace lfs::training {
                                 tile_loss = result->loss;
                                 tile_grad = result->grad_corrected;
                                 tile_raw_gradient = result->raw_gradient;
+                                tile_raw_residual = result->raw_residual;
                                 tile_grad_alpha = result->grad_alpha;
                                 normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, params_.optimization, raw_loss_input);
+                                    corrected_image, gt_tile, params_.optimization, raw_loss_input, iter);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7041,6 +7191,7 @@ namespace lfs::training {
                                 tile_loss = result->loss;
                                 tile_grad = result->grad_corrected;
                                 tile_raw_gradient = result->raw_gradient;
+                                tile_raw_residual = result->raw_residual;
                             }
                         }
 
@@ -7564,6 +7715,13 @@ namespace lfs::training {
                             }
                         }
 
+                        if (tile_error_map.is_valid() && params_.optimization.densify_structure_weight > 0.0f) {
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), stable_gt, params_.optimization.densify_structure_weight);
+                            kernels::structure_densification_weight(tile_error_map, structure_map,
+                                                                    params_.optimization.densify_structure_weight);
+                        }
+
                         if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(params_.optimization.strategy)) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map.normalize");
@@ -7665,6 +7823,13 @@ namespace lfs::training {
                         if (tile_raw_gradient) {
                             lfs::training::kernels::accumulate_decoupled_raw_gradient(*tile_raw_gradient, raster_grad);
                         }
+                        if (tile_raw_residual) {
+                            loss_tensor_gpu = loss_tensor_gpu + kernels::gradient_residual_loss_gradient(
+                                                                    tile_raw_residual->raw, tile_raw_residual->target,
+                                                                    tile_raw_residual->pixel_weight, raster_grad,
+                                                                    params_.optimization.gradient_loss_weight,
+                                                                    gradient_residual_workspace_);
+                        }
 
                         current_phase = StepPhase::Backward;
                         nvtxRangePush("rasterize_backward");
@@ -7726,6 +7891,9 @@ namespace lfs::training {
                     }
 
                     nvtxRangePop(); // End rasterize
+                    if (strategy_ && !in_sparsification) {
+                        strategy_->post_render(iter, r_output);
+                    }
                 }
 
                 if (tiles_processed == 0) {
@@ -7760,7 +7928,7 @@ namespace lfs::training {
                     PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     // Normal phase: regularization losses + optimizer steps for all components
 
-                    if (params_.optimization.scale_reg > 0.0f) {
+                    if (params_.optimization.scale_reg_at(iter) > 0.0f) {
                         nvtxRangePush("compute_scale_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.scale_loss");
                         LOG_VRAM_DIFF("train.regularizers.scale_loss");
@@ -7783,6 +7951,12 @@ namespace lfs::training {
                         }
                         nvtxRangePop();
                     }
+                    if (fused_erank_reg_loss_gpu.is_valid())
+                        loss_tensor_gpu = loss_tensor_gpu + fused_erank_reg_loss_gpu;
+                    if (fused_dc_reg_loss_gpu.is_valid())
+                        loss_tensor_gpu = loss_tensor_gpu + fused_dc_reg_loss_gpu;
+                    if (fused_sh_rest_reg_loss_gpu.is_valid())
+                        loss_tensor_gpu = loss_tensor_gpu + fused_sh_rest_reg_loss_gpu;
 
                     if (params_.optimization.opacity_reg > 0.0f) {
                         nvtxRangePush("compute_opacity_reg_loss");
@@ -8152,6 +8326,7 @@ namespace lfs::training {
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
+                        eval_ppisp_nearest_.store(0);
                         const auto evaluation_image_loader = getActiveImageLoader();
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
@@ -8175,12 +8350,7 @@ namespace lfs::training {
                         if (PerfBenchCollector::enabled() && metrics.valid) {
                             PerfBenchCollector::instance().set_psnr(metrics.psnr);
                         }
-                        if (evaluator_->has_appearance()) {
-                            const int n = eval_ppisp_applied_.load();
-                            const int k = eval_ppisp_exif_.load();
-                            LOG_INFO("Eval: PPISP applied to {} held-out frames ({} with EXIF exposure, {} at mean exposure)",
-                                     n, k, n - k);
-                        }
+                        log_eval_appearance();
                         LOG_INFO("{}", metrics.to_string());
                         if (strategy_) {
                             auto& splat = strategy_->get_model();
@@ -8946,6 +9116,7 @@ namespace lfs::training {
                 lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                 eval_ppisp_applied_.store(0);
                 eval_ppisp_exif_.store(0);
+                eval_ppisp_nearest_.store(0);
                 const auto evaluation_image_loader = getActiveImageLoader();
                 auto metrics = evaluator_->evaluate(eval_iteration,
                                                     strategy_->get_model(),
@@ -8969,6 +9140,7 @@ namespace lfs::training {
                 if (PerfBenchCollector::enabled() && metrics.valid) {
                     PerfBenchCollector::instance().set_psnr(metrics.psnr);
                 }
+                log_eval_appearance();
                 LOG_INFO("{}", metrics.to_string());
                 photometric_loss_.arena().shrink_to_required();
             }
@@ -9415,6 +9587,16 @@ namespace lfs::training {
         return path;
     }
 
+    void Trainer::log_eval_appearance() const {
+        if (!evaluator_->has_appearance())
+            return;
+        const int n = eval_ppisp_applied_.load();
+        const int nearest = eval_ppisp_nearest_.load();
+        const int exif = eval_ppisp_exif_.load();
+        LOG_INFO("Eval: PPISP applied to {} frames ({} from the nearest training frames, {} with EXIF exposure)",
+                 n, nearest, exif);
+    }
+
     lfs::core::Tensor Trainer::applyPPISPForEval(const lfs::core::Tensor& rgb,
                                                  const lfs::core::Camera& cam) const {
         eval_ppisp_applied_.fetch_add(1, std::memory_order_relaxed);
@@ -9451,6 +9633,22 @@ namespace lfs::training {
 
         if (ppisp_->is_known_frame(cam.uid())) {
             return ppisp_->apply(rgb_chw, camera_id, cam.uid());
+        }
+
+        if (params.optimization.ppisp_holdout_appearance == core::param::PPISPHoldoutAppearance::Nearest &&
+            train_dataset_) {
+            std::vector<HoldoutAppearanceFrame> capture;
+            for (const auto& frame : train_dataset_->get_cameras())
+                if (ppisp_->is_known_frame(frame->uid()))
+                    capture.push_back({frame.get(), true});
+            if (val_dataset_)
+                for (const auto& frame : val_dataset_->get_cameras())
+                    capture.push_back({frame.get(), false});
+            if (const auto selection = select_holdout_appearance(std::move(capture), cam)) {
+                eval_ppisp_nearest_.fetch_add(1, std::memory_order_relaxed);
+                return ppisp_->apply_interpolated_frames(rgb_chw, selection->camera_id,
+                                                         selection->left_uid, selection->right_uid, selection->fraction);
+            }
         }
 
         float exposure = 0.0f;
