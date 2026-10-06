@@ -1199,6 +1199,10 @@ namespace {
                     return std::unexpected("--init cannot be used together with --resume");
                 }
 
+                if (random) {
+                    return std::unexpected("--init cannot be used together with --random");
+                }
+
                 const auto path_str = ::args::get(init_path);
                 params.init_path = path_str;
 
