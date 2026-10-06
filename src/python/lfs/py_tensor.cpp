@@ -835,6 +835,7 @@ namespace lfs::python {
                 while (source.ndim() > target.ndim() && source.shape()[0] == 1) {
                     source = source.squeeze(0);
                 }
+                source = source.broadcast_to(target.shape());
                 target.copy_from(source);
             }
         };
