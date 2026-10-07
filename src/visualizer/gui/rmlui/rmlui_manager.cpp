@@ -21,8 +21,8 @@
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
-#include "internal/resource_paths.hpp"
 #include "input/sdl_coordinate_utils.hpp"
+#include "internal/resource_paths.hpp"
 #include "python/python_runtime.hpp"
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
