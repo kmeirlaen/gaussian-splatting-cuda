@@ -3,6 +3,7 @@
 
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
+#include "core/cuda_safe_format.hpp"
 #include "core/logger.hpp"
 #include "internal/cub_workspace.hpp"
 #include "internal/gpu_config.hpp"
@@ -21,7 +22,6 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include <format>
 #include <limits>
 #include <stdexcept>
 
@@ -2461,7 +2461,9 @@ namespace lfs::core::tensor_ops {
         case 2: launch_cat_last_dim_typed<uint16_t>(output, tensors, num_rows, row_size, stream); break;
         case 4: launch_cat_last_dim_typed<float>(output, tensors, num_rows, row_size, stream); break;
         case 8: launch_cat_last_dim_typed<uint64_t>(output, tensors, num_rows, row_size, stream); break;
-        default: throw std::invalid_argument(std::format("cat: unsupported element size {}", element_size));
+        default:
+            throw std::invalid_argument(
+                detail::format_cuda_safe("cat: unsupported element size {}", element_size));
         }
     }
 
@@ -2592,7 +2594,9 @@ namespace lfs::core::tensor_ops {
         case 2: launch_cat_middle_dim_typed<uint16_t>(output, tensors, outer_size, inner_size, resolved_dim, stream); break;
         case 4: launch_cat_middle_dim_typed<float>(output, tensors, outer_size, inner_size, resolved_dim, stream); break;
         case 8: launch_cat_middle_dim_typed<uint64_t>(output, tensors, outer_size, inner_size, resolved_dim, stream); break;
-        default: throw std::invalid_argument(std::format("cat: unsupported element size {}", element_size));
+        default:
+            throw std::invalid_argument(
+                detail::format_cuda_safe("cat: unsupported element size {}", element_size));
         }
     }
 
