@@ -109,6 +109,19 @@ namespace lfs::vis::gui {
             return (frame_input.key_mods & SDL_KMOD_CTRL) != 0;
         }
 
+        // Gizmo hover is refreshed only while that gizmo is drawn. A tool change can stop
+        // drawing the hovered gizmo, and its stale hover would keep claiming viewport presses.
+        void resetIdleGizmoHover() {
+            if (!isTranslationGizmoActive())
+                cancelTranslationGizmoDrag();
+            if (!isRotationGizmoActive())
+                cancelRotationGizmoDrag();
+            if (!isScaleGizmoActive())
+                cancelScaleGizmoDrag();
+            if (!isBoundsGizmoActive())
+                cancelBoundsGizmoDrag();
+        }
+
         struct ViewportGizmoMarker {
             int encoded_axis = -1;
             glm::vec2 screen_pos{0.0f};
@@ -994,7 +1007,13 @@ namespace lfs::vis::gui {
             const auto tool = static_cast<ToolType>(e.tool_mode);
 
             auto& registry = UnifiedToolRegistry::instance();
-            if (registry.getActiveTool() == "builtin.cropbox") {
+            // Undo can reselect a crop volume without entering the crop tool.
+            const auto* const sm = viewer_->getSceneManager();
+            const bool selected_crop_volume = sm && sm->hasSelectedNode() &&
+                                              (sm->getSelectedNodeType() == core::NodeType::CROPBOX ||
+                                               sm->getSelectedNodeType() == core::NodeType::ELLIPSOID);
+            if (registry.getActiveTool() == "builtin.cropbox" ||
+                (tool != ToolType::None && selected_crop_volume)) {
                 leaveCropTool(true, true, true);
             } else if (editor.hasActiveOperator() && tool != ToolType::Selection) {
                 python::cancel_active_operator();
@@ -1230,6 +1249,7 @@ namespace lfs::vis::gui {
         if (stamp == last_tool_state_stamp_)
             return;
         last_tool_state_stamp_ = stamp;
+        resetIdleGizmoHover();
 
         if (rendering_manager)
             rendering_manager->setGaussianSelectionVisible(is_selection_mode);
