@@ -3841,6 +3841,15 @@ namespace lfs::vis {
         }
     }
 
+    bool SceneManager::canApplyCropToNode(const core::NodeId id) const {
+        const auto* node = scene_.getNodeById(id);
+        if (node && node->type == core::NodeType::SPLAT && scene_.isNodeEffectivelyLocked(id)) {
+            LOG_WARN("Cannot crop '{}': node is locked", node->name);
+            return false;
+        }
+        return true;
+    }
+
     void SceneManager::handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, const bool inverse, const core::NodeId target_node_id) {
         std::vector<std::string> splat_node_names;
         std::vector<std::string> pointcloud_node_names;
@@ -3886,6 +3895,11 @@ namespace lfs::vis {
                     pointcloud_node_names.push_back(node->name);
                 }
             }
+        }
+
+        for (const auto& name : splat_node_names) {
+            if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
+                return;
         }
 
         const auto crop_box_for_node = [this, &crop_box](const core::NodeId node_id) {
@@ -4076,6 +4090,11 @@ namespace lfs::vis {
                     pointcloud_node_names.push_back(node->name);
                 }
             }
+        }
+
+        for (const auto& name : splat_node_names) {
+            if (!canApplyCropToNode(scene_.getNodeIdByName(name)))
+                return;
         }
 
         const glm::mat4 inv_world = glm::inverse(world_transform);
@@ -5962,7 +5981,7 @@ namespace lfs::vis {
             }
             for (const auto* node : scene_.getNodes()) {
                 if (node && node->type == core::NodeType::SPLAT &&
-                    scene_.isNodeEffectivelyVisible(node->id) && static_cast<bool>(node->locked)) {
+                    scene_.isNodeEffectivelyVisible(node->id) && scene_.isNodeEffectivelyLocked(node->id)) {
                     return std::unexpected(std::format("Cannot delete '{}': node is locked", node->name));
                 }
             }
@@ -5986,6 +6005,9 @@ namespace lfs::vis {
                 if (id == core::NULL_NODE) {
                     continue;
                 }
+                if (scene_.isNodeEffectivelyLocked(id)) {
+                    return std::unexpected(std::format("Cannot delete '{}': node is locked", node_name));
+                }
                 const auto impact = classifyTrainingRemovalImpact(id);
                 if (const auto result = validateNodeRemoval(id, impact); !result) {
                     return result;
@@ -6006,7 +6028,7 @@ namespace lfs::vis {
                 if (!node || !node->model) {
                     return std::unexpected(std::format("Visible node '{}' is missing a mutable model", slice.node_name));
                 }
-                if (static_cast<bool>(node->locked)) {
+                if (scene_.isNodeEffectivelyLocked(node->id)) {
                     return std::unexpected(std::format("Cannot delete '{}': node is locked", node->name));
                 }
 
