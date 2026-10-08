@@ -916,6 +916,7 @@
     "use_default": "기본값 사용",
     "title": "환경설정",
     "language": "언어:",
+    "language_title": "언어",
     "select_language": "언어 선택",
     "interface": "인터페이스",
     "file_associations": "파일 연결",
@@ -959,7 +960,7 @@
     "navigation_trackball": "자유 궤도",
     "navigation_fpv": "비행",
     "navigation_drone": "드론",
-    "interface_layout_description": "도크, 패널, 탭, 창 표시 및 HUD를 초기 레이아웃으로 되돌립니다. .licht 프로젝트가 열려 있으면 다음 저장 시 프로젝트에 저장된 레이아웃이 교체됩니다. 환경 설정은 열린 상태로 유지됩니다.",
+    "interface_layout_description": "아래의 \"이 섹션 재설정\"을 클릭하면 도크, 패널, 탭, 창 표시 및 HUD가 초기 레이아웃으로 돌아갑니다. .licht 프로젝트가 열려 있으면 다음 저장 시 프로젝트에 저장된 레이아웃이 교체됩니다. 환경 설정은 열린 상태로 유지됩니다.",
     "scene_graph": "장면 그래프",
     "scene_graph_selection_markers": "장면 그래프 선택 마커",
     "scene_graph_selection_markers_description": "행과 전체 노드 계층을 선택할 수 있는 간결한 원형 마커를 표시합니다.",
@@ -1521,7 +1522,7 @@
     "status_label": "상태: %s"
   },
   "input_settings": {
-    "active_profile": "활성 프로필:",
+    "active_profile": "활성 프로필",
     "save_current_profile": "현재 프로필 저장",
     "reset_to_default": "기본값으로 재설정",
     "export": "내보내기...",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "연결됨, 꺼짐",
   "portal.preferences.not_connected": "Portal 연결 안 됨",
   "portal.preferences.connected": "Portal 연결됨",
-  "portal.preferences.status": "상태",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Portal 켜기",
   "portal.status.switched_off": "Portal 연결됨, 꺼짐",

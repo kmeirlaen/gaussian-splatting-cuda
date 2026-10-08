@@ -916,6 +916,7 @@
     "use_default": "デフォルトを使用",
     "title": "環境設定",
     "language": "言語:",
+    "language_title": "言語",
     "select_language": "言語を選択",
     "interface": "インターフェース",
     "file_associations": "ファイルの関連付け",
@@ -959,7 +960,7 @@
     "navigation_trackball": "フリーオービット",
     "navigation_fpv": "フライ",
     "navigation_drone": "ドローン",
-    "interface_layout_description": "ドック、パネル、タブ、ウィンドウ表示、HUD を初期レイアウトに戻します。.licht プロジェクトが開いている場合、次回保存時にプロジェクト内のレイアウトが置き換えられます。環境設定は開いたままです。",
+    "interface_layout_description": "下の「このセクションをリセット」をクリックすると、ドック、パネル、タブ、ウィンドウ表示、HUD が初期レイアウトに戻ります。.licht プロジェクトが開いている場合、次回保存時にプロジェクト内のレイアウトが置き換えられます。環境設定は開いたままです。",
     "scene_graph": "シーングラフ",
     "scene_graph_selection_markers": "シーングラフの選択マーカー",
     "scene_graph_selection_markers_description": "行とノード階層全体を選択するためのコンパクトな円形マーカーを表示します。",
@@ -1521,7 +1522,7 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
-    "active_profile": "アクティブプロファイル:",
+    "active_profile": "アクティブプロファイル",
     "save_current_profile": "現在のプロファイルを保存",
     "reset_to_default": "デフォルトにリセット",
     "export": "エクスポート...",
@@ -2861,7 +2862,6 @@
   "portal.preferences.switched_off": "接続済み、オフ",
   "portal.preferences.not_connected": "Portal 未接続",
   "portal.preferences.connected": "Portal 接続済み",
-  "portal.preferences.status": "状態",
   "preferences.portal": "Portal",
   "portal.status.turn_on": "Portal をオンにする",
   "portal.status.switched_off": "Portal に接続済み、オフ",
