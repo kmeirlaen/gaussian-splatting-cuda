@@ -103,7 +103,10 @@ namespace lfs::core {
         if (!means.is_valid() || means.size(0) == 0)
             return glm::vec3(0.0f);
 
-        const auto selected = selection_mask.ne(0).reshape({means.size(0)}).to(means.device()).contiguous();
+        const auto selected = selection_mask.ne(0)
+                                  .reshape(TensorShape{means.size(0)})
+                                  .to(means.device())
+                                  .contiguous();
         if (means.device() == Device::CUDA)
             return detail::selected_centroid_cuda(means.contiguous(), selected);
 
