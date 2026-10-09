@@ -114,11 +114,15 @@ namespace lfs::vis {
         bool setKeyframeFocalLengthById(sequencer::KeyframeId id, float focal_length_mm);
         bool setKeyframeEasing(size_t index, sequencer::EasingType easing);
         bool setKeyframeEasingById(sequencer::KeyframeId id, sequencer::EasingType easing);
+        void setKeyframeEasingChangedCallback(std::function<void(const sequencer::Keyframe&, sequencer::EasingType)> callback) {
+            keyframe_easing_changed_callback_ = std::move(callback);
+        }
         bool removeKeyframeById(sequencer::KeyframeId id);
         bool removeSelectedKeyframe();
         void setKeyframeRemovedCallback(std::function<void(const sequencer::Keyframe&, float)> callback) {
             keyframe_removed_callback_ = std::move(callback);
         }
+        void clearKeyframes();
         void clear();
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);
@@ -154,6 +158,11 @@ namespace lfs::vis {
 
         [[nodiscard]] float clipDuration() const { return timeline_.clipDuration(); }
         void setClipDuration(float duration);
+        void editClipDuration(float duration);
+        using ClipDurationCommitCallback = std::function<void(float, float)>;
+        void setClipDurationCommitCallback(ClipDurationCommitCallback callback) {
+            clip_duration_commit_callback_ = std::move(callback);
+        }
 
         [[nodiscard]] LoopMode loopMode() const { return loop_mode_; }
         void setLoopMode(LoopMode mode);
@@ -175,6 +184,8 @@ namespace lfs::vis {
         void markSelectionChanged();
 
         std::function<void(const sequencer::Keyframe&, float)> keyframe_removed_callback_;
+
+        std::function<void(const sequencer::Keyframe&, sequencer::EasingType)> keyframe_easing_changed_callback_;
         sequencer::Timeline timeline_;
         std::optional<PlySequenceClip> ply_sequence_;
         PlaybackState state_ = PlaybackState::STOPPED;
@@ -195,6 +206,8 @@ namespace lfs::vis {
         };
         std::optional<PendingKeyframeTimeEdit> pending_keyframe_time_edit_;
         KeyframeTimeCommitCallback keyframe_time_commit_callback_;
+
+        ClipDurationCommitCallback clip_duration_commit_callback_;
     };
 
 } // namespace lfs::vis

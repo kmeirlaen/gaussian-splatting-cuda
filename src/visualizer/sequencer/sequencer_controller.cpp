@@ -210,6 +210,13 @@ namespace lfs::vis {
         markTimelineChanged();
     }
 
+    void SequencerController::editClipDuration(const float duration) {
+        const float before = clipDuration();
+        setClipDuration(duration);
+        if (before != clipDuration() && clip_duration_commit_callback_)
+            clip_duration_commit_callback_(before, clipDuration());
+    }
+
     void SequencerController::setLoopMode(const LoopMode mode) {
         if (loop_mode_ == mode)
             return;
@@ -466,9 +473,12 @@ namespace lfs::vis {
         if (!keyframe || keyframe->is_loop_point)
             return false;
 
+        const auto before = keyframe_easing_changed_callback_ ? std::optional(*keyframe) : std::nullopt;
         const bool changed = timeline_.setKeyframeEasingById(id, easing);
         if (changed)
             markTimelineChanged();
+        if (changed && before && before->easing != easing)
+            keyframe_easing_changed_callback_(*before, easing);
         return changed;
     }
 
@@ -495,6 +505,15 @@ namespace lfs::vis {
     bool SequencerController::removeSelectedKeyframe() {
         return selected_keyframe_id_.has_value() &&
                removeKeyframeById(*selected_keyframe_id_);
+    }
+
+    void SequencerController::clearKeyframes() {
+        stop();
+        deselectKeyframe();
+        timeline_.clear();
+        if (const auto* sequence = plySequence())
+            timeline_.setClipDuration(sequence->duration());
+        markTimelineChanged();
     }
 
     void SequencerController::clear() {
