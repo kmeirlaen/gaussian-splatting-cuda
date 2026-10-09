@@ -285,6 +285,7 @@ namespace lfs::core {
             bool use_depth_loss = false;         // Use dataset depth maps when available
             float depth_loss_weight = 2.0f;      // Depth supervision weight (decays over training)
             std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, or ssi-depth
+            bool depth_auto_generate = true;     // Generate missing/mismatched maps from images/ with MoGe-2
 
             // Normal supervision
             bool use_normal_loss = false;             // Use dataset normal maps when available
@@ -384,10 +385,6 @@ namespace lfs::core {
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
-            // The 3DGUT rasterizer renders no depth, so GUT training has no depth supervision.
-            [[nodiscard]] bool depth_supervision_enabled() const {
-                return !gut && use_depth_loss && depth_loss_weight > 0.0f;
-            }
             [[nodiscard]] float scale_reg_at(int iter) const;
             void resolve_mrnf_capacity_defaults();
             // Every test_every-th image is withheld from training for evaluation.
@@ -699,6 +696,7 @@ namespace lfs::core {
             bool no_download = false;
             bool download_only = false;
             std::vector<std::filesystem::path> image_paths; // Empty = scan images_folder
+            std::string depth_folder = "depth";
             std::string normals_folder = "normals";
         };
 
