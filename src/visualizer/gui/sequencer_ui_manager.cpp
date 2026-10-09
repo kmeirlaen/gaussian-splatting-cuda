@@ -874,7 +874,8 @@ namespace lfs::vis::gui {
             return;
 
         auto& state = ply_stream_states_[frame_index];
-        if (state == PlyStreamFrameState::Resident || state == PlyStreamFrameState::Loading)
+        if (state == PlyStreamFrameState::Resident || state == PlyStreamFrameState::Loading ||
+            (export_ply_frame_ && state == PlyStreamFrameState::Failed))
             return;
 
         if (state == PlyStreamFrameState::Queued) {
@@ -1115,6 +1116,7 @@ namespace lfs::vis::gui {
         ply_stream_paths_.clear();
         ply_stream_allocator_ = {};
         ply_stream_states_.clear();
+        ply_stream_failed_frames_.clear();
         ply_stream_requests_.clear();
         ply_stream_completed_.clear();
         ply_stream_inflight_ = false;
@@ -1151,7 +1153,7 @@ namespace lfs::vis::gui {
         auto& scene = scene_manager->getScene();
         const uint64_t active_generation = ply_stream_generation_.load(std::memory_order_acquire);
         bool current_frame_loaded = false;
-        const auto current_frame = controller_.currentPlySequenceFrameIndex();
+        const auto current_frame = requestedPlySequenceFrame();
 
         while (!completed.empty()) {
             auto result = std::move(completed.front());
@@ -1170,6 +1172,7 @@ namespace lfs::vis::gui {
                 std::lock_guard lock(ply_stream_mutex_);
                 if (result.frame_index < ply_stream_states_.size())
                     ply_stream_states_[result.frame_index] = PlyStreamFrameState::Failed;
+                ply_stream_failed_frames_.insert(result.frame_index);
                 ++ply_stream_failed_count_;
                 continue;
             }
@@ -1191,6 +1194,7 @@ namespace lfs::vis::gui {
                 std::lock_guard lock(ply_stream_mutex_);
                 if (result.frame_index < ply_stream_states_.size())
                     ply_stream_states_[result.frame_index] = PlyStreamFrameState::Failed;
+                ply_stream_failed_frames_.insert(result.frame_index);
                 ++ply_stream_failed_count_;
                 ply_stream_last_load_ms_ = result.load_ms;
                 continue;
@@ -1206,6 +1210,7 @@ namespace lfs::vis::gui {
                 std::lock_guard lock(ply_stream_mutex_);
                 if (result.frame_index < ply_stream_states_.size())
                     ply_stream_states_[result.frame_index] = PlyStreamFrameState::Resident;
+                ply_stream_failed_frames_.erase(result.frame_index);
                 std::erase(loaded_ply_sequence_frames_, result.frame_index);
                 loaded_ply_sequence_frames_.push_back(result.frame_index);
                 ply_stream_last_load_ms_ = result.load_ms;
@@ -1349,9 +1354,18 @@ namespace lfs::vis::gui {
 
         const auto state = controller_.currentCameraState();
         auto& vp = viewer_->getViewport();
-        vp.setViewMatrix(glm::mat3_cast(state.rotation), state.position);
-        rm->setFocalLength(state.focal_length_mm);
-        rm->markCameraPoseChanged();
+        const auto rotation = glm::mat3_cast(state.rotation);
+        const bool pose_changed = vp.camera.R != rotation || vp.camera.t != state.position;
+        vp.setViewMatrix(rotation, state.position);
+        const float focal_length = std::clamp(state.focal_length_mm,
+                                              lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                              lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        // The visible panel also follows a paused/stopped playhead. Reapplying
+        // its unchanged camera must not keep the render-on-demand loop awake.
+        if (rm->getFocalLengthMm() != focal_length)
+            rm->setFocalLength(focal_length);
+        if (pose_changed)
+            rm->markCameraPoseChanged();
         return true;
     }
 
@@ -1367,6 +1381,11 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::tickPlaybackBeforeSceneRender() {
+        if (export_ply_frame_) {
+            last_playback_tick_time_ = std::nullopt;
+            applyPlySequenceFrame();
+            return;
+        }
         if (!controller_.isPlaying()) {
             last_playback_tick_time_ = std::nullopt;
             drainPlySequenceStream();
@@ -1383,11 +1402,12 @@ namespace lfs::vis::gui {
         const auto* const sequence = controller_.plySequence();
         if (!sequence)
             return {};
-        const auto current_frame = controller_.currentPlySequenceFrameIndex();
+        const auto current_frame = requestedPlySequenceFrame();
 
         size_t resident = 0;
         size_t queued = 0;
         size_t failed = 0;
+        bool requested_frame_failed = false;
         bool inflight = false;
         double last_load_ms = 0.0;
         size_t misses = 0;
@@ -1412,6 +1432,7 @@ namespace lfs::vis::gui {
             queued = std::max(queued, ply_stream_requests_.size());
             inflight = ply_stream_inflight_;
             failed = std::max(failed, ply_stream_failed_count_);
+            requested_frame_failed = current_frame && ply_stream_failed_frames_.contains(*current_frame);
             last_load_ms = ply_stream_last_load_ms_;
             misses = ply_stream_miss_count_;
             fallbacks = ply_stream_fallback_count_;
@@ -1426,7 +1447,7 @@ namespace lfs::vis::gui {
         return std::format(
             "{{\"frame_count\":{},\"displayed_frame\":{},\"requested_frame\":{},\"on_target\":{},"
             "\"resident\":{},\"slots\":{},\"max_slots\":{},\"decode_queue\":{},"
-            "\"inflight\":{},\"failed\":{},\"last_swap_ms\":{:.3f},"
+            "\"inflight\":{},\"failed\":{},\"requested_frame_failed\":{},\"last_swap_ms\":{:.3f},"
             "\"last_load_ms\":{:.3f},\"misses\":{},\"fallbacks\":{},"
             "\"evictions\":{},\"stale_queue_drops\":{},\"cache_hits\":{},"
             "\"cache_misses\":{},\"cache_writes\":{},\"cache_write_failures\":{},"
@@ -1444,6 +1465,7 @@ namespace lfs::vis::gui {
             queued,
             inflight ? 1 : 0,
             failed,
+            requested_frame_failed ? "true" : "false",
             0.0,
             last_load_ms,
             misses,
@@ -1464,7 +1486,7 @@ namespace lfs::vis::gui {
         const bool already_ticked = playback_ticked_before_scene_;
         const float delta_time = already_ticked ? last_panel_delta_time_ : advancePanelClock();
         playback_ticked_before_scene_ = false;
-        if (!already_ticked) {
+        if (!already_ticked && !export_ply_frame_) {
             if (controller_.isPlaying()) {
                 advancePlayback(advancePlaybackClock());
             } else {
@@ -2372,11 +2394,39 @@ namespace lfs::vis::gui {
         return {};
     }
 
+    lfs::Result<bool> SequencerUIManager::preparePlySequenceExportFrame(const size_t frame) {
+        const auto fail = [](const lfs::ErrorCode code, std::string message) -> lfs::Result<bool> {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Sequencer,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT()});
+        };
+        const auto* sequence = controller_.plySequence();
+        if (!sequence || frame >= sequence->frames.size())
+            return fail(lfs::ErrorCode::FailedPrecondition, "PLY sequence changed during video export");
+        export_ply_frame_ = frame;
+        // Inspect failure before the interactive player can retry the request.
+        {
+            std::lock_guard lock(ply_stream_mutex_);
+            if (frame < ply_stream_states_.size() && ply_stream_states_[frame] == PlyStreamFrameState::Failed)
+                return fail(lfs::ErrorCode::DataLoss, "Failed to load PLY sequence frame for video export");
+        }
+        applyPlySequenceFrame();
+        return last_ply_sequence_frame_ == frame;
+    }
+
+    void SequencerUIManager::finishPlySequenceExport() {
+        export_ply_frame_.reset();
+        last_playback_tick_time_ = std::nullopt;
+        applyPlySequenceFrame();
+    }
+
     void SequencerUIManager::applyPlySequenceFrame() {
         drainPlySequenceStream();
         auto* const scene_manager = viewer_->getSceneManager();
         const auto* const sequence = controller_.plySequence();
-        const auto frame_index = controller_.currentPlySequenceFrameIndex();
+        const auto frame_index = requestedPlySequenceFrame();
         if (!scene_manager || !sequence || !frame_index.has_value()) {
             last_ply_sequence_frame_ = std::nullopt;
             return;
@@ -2646,6 +2696,24 @@ namespace lfs::vis::gui {
         }
     }
 
+    glm::vec2 SequencerUIManager::pipPreviewPosition(const ViewportLayout& viewport,
+                                                     const float scaled_width, const float scaled_height) const {
+        constexpr float MARGIN = 16.0f;
+        constexpr float TITLE_HEIGHT = 18.0f;
+        const float total_height = scaled_height + TITLE_HEIGHT + 8.0f;
+
+        float left = viewport.pos.x + MARGIN;
+        float top = viewport.pos.y + viewport.size.y - total_height - MARGIN;
+        const float min_top = viewport.pos.y + MARGIN;
+        if (top < min_top)
+            top = min_top;
+        const float max_left = viewport.pos.x + viewport.size.x - scaled_width - 8.0f - MARGIN;
+        if (left > max_left)
+            left = std::max(viewport.pos.x + MARGIN, max_left);
+
+        return {left, top};
+    }
+
     void SequencerUIManager::syncPipPreviewWindow(const ViewportLayout& viewport) {
         if (!overlay_)
             return;
@@ -2677,21 +2745,10 @@ namespace lfs::vis::gui {
         }
 
         const float scale = ui_state_.pip_preview_scale;
-        constexpr float MARGIN = 16.0f;
-        constexpr float TITLE_HEIGHT = 18.0f;
         const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
         const float scaled_width = static_cast<float>(preview.width) * scale;
         const float scaled_height = static_cast<float>(preview.height) * scale;
-        const float total_height = scaled_height + TITLE_HEIGHT + 8.0f;
-
-        float left = viewport.pos.x + MARGIN;
-        float top = panel_->cachedPanelY() - total_height - MARGIN;
-        const float min_top = viewport.pos.y + MARGIN;
-        if (top < min_top)
-            top = min_top;
-        const float max_left = viewport.pos.x + viewport.size.x - scaled_width - 8.0f - MARGIN;
-        if (left > max_left)
-            left = std::max(viewport.pos.x + MARGIN, max_left);
+        const auto position = pipPreviewPosition(viewport, scaled_width, scaled_height);
 
         const float playhead = controller_.playhead();
         const std::string title = (is_playing || !selected.has_value())
@@ -2703,7 +2760,7 @@ namespace lfs::vis::gui {
                                                                 std::make_format_args(kf_num));
                                         }();
 
-        overlay_->showPreviewWindow(left, top, scaled_width, scaled_height,
+        overlay_->showPreviewWindow(position.x, position.y, scaled_width, scaled_height,
                                     title, is_playing,
                                     pip_texture_.rmlSrcUrl(pip_render_width_, pip_render_height_));
     }

@@ -6,6 +6,7 @@
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "gui/film_strip_renderer.hpp"
 #include "gui/gui_manager.hpp"
 #include "io/video/video_export_options.hpp"
 #include "licht_test_support.hpp"
@@ -24,6 +25,14 @@
 #include "sequencer/timeline_view_math.hpp"
 #include "visualizer_impl.hpp"
 
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/RenderInterface.h>
+
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/RenderInterface.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -34,7 +43,9 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <limits>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <regex>
 
 namespace {
 
@@ -1353,6 +1364,186 @@ namespace {
         EXPECT_THROW((void)AnimationClip::fromJson(duplicate_target), std::runtime_error);
     }
 
+    TEST(SequencerControllerRegressionTest, ClearResetsPlayheadAfterRemovingContent) {
+        for (const auto mode : {LoopMode::ONCE, LoopMode::LOOP, LoopMode::PING_PONG}) {
+            for (const float first_time : {0.0f, 5.0f, 59.0f}) {
+                for (const bool playing : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << "first=" << first_time << " playing=" << playing
+                                                      << " loop=" << static_cast<int>(mode));
+                    SequencerController controller;
+                    const auto id = controller.addKeyframe(makeKeyframe(first_time));
+                    controller.addKeyframe(makeKeyframe(first_time + 2.0f));
+                    controller.setLoopMode(mode);
+                    controller.setPlaybackSpeed(2.0f);
+                    ASSERT_TRUE(controller.selectKeyframeById(id));
+                    if (playing)
+                        controller.play();
+                    controller.seek(first_time + 1.0f);
+                    const auto revision = controller.timelineRevision();
+
+                    controller.clear();
+
+                    EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+                    EXPECT_FLOAT_EQ(controller.clipDuration(), 30.0f);
+                    EXPECT_TRUE(controller.isStopped());
+                    EXPECT_FALSE(controller.hasPlayableContent());
+                    EXPECT_FALSE(controller.hasSelection());
+                    EXPECT_EQ(controller.timelineRevision(), revision + 1);
+                    EXPECT_EQ(controller.loopMode(), mode);
+                    EXPECT_FLOAT_EQ(controller.playbackSpeed(), 2.0f);
+                    controller.clear();
+                    EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+                }
+            }
+        }
+    }
+
+    TEST(SequencerControllerRegressionTest, ClearAlsoResetsEmptyAndPlyTimelines) {
+        SequencerController controller;
+        controller.seek(25.0f);
+        controller.clear();
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+        controller.setPlySequence({}, "sequence", {"frame.ply"}, {"frame"}, 24.0f);
+        controller.addKeyframe(makeKeyframe(59.0f));
+        controller.play();
+        controller.seek(59.0f);
+        controller.clear();
+        EXPECT_FALSE(controller.hasPlySequence());
+        EXPECT_FALSE(controller.hasPlayableContent());
+        EXPECT_TRUE(controller.isStopped());
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.0f);
+    }
+
+    TEST(SequencerControllerRegressionTest, ClearLatency) {
+        std::vector<double> samples;
+        std::vector<SequencerController> controllers(1000);
+        for (int batch = 0; batch < 11; ++batch) {
+            for (auto& controller : controllers) {
+                controller.addKeyframe(makeKeyframe(59.0f));
+                controller.seek(59.0f);
+            }
+            const auto start = std::chrono::steady_clock::now();
+            for (auto& controller : controllers)
+                controller.clear();
+            samples.push_back(std::chrono::duration<double, std::nano>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count() /
+                              controllers.size());
+        }
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_clear_ns", std::to_string(samples[samples.size() / 2]));
+    }
+
+    TEST(SequencerControllerRegressionTest, StopStillReturnsToFirstKeyframeWithoutClearing) {
+        SequencerController controller;
+        const auto id = controller.addKeyframe(makeKeyframe(59.0f));
+        controller.addKeyframe(makeKeyframe(61.0f));
+        ASSERT_TRUE(controller.selectKeyframeById(id));
+        const auto saved = controller.saveToJson();
+        const auto revision = controller.timelineRevision();
+        controller.play();
+        controller.seek(60.0f);
+
+        controller.stop();
+
+        EXPECT_FLOAT_EQ(controller.playhead(), 59.0f);
+        EXPECT_TRUE(controller.isStopped());
+        EXPECT_EQ(controller.selectedKeyframeId(), id);
+        EXPECT_EQ(controller.timelineRevision(), revision);
+        EXPECT_EQ(controller.saveToJson(), saved);
+    }
+
+    TEST(SequencerControllerRegressionTest, PingPongTraversesBothDirectionsAcrossRepeatedCycles) {
+        for (const float speed : {1.0f, 4.0f}) {
+            for (const bool with_sequence : {false, true}) {
+                SCOPED_TRACE(std::format("speed={} sequence={}", speed, with_sequence));
+                SequencerController controller;
+                controller.addKeyframe(makeKeyframe(0.0f));
+                controller.addKeyframe(makeKeyframe(5.75f, {6.0f, 0.0f, 0.0f}));
+                if (with_sequence) {
+                    controller.setPlySequence("frames", "sequence",
+                                              {"0.ply", "1.ply", "2.ply", "3.ply"}, {}, 1.0f);
+                }
+                controller.setClipDuration(6.0f);
+                controller.setLoopMode(LoopMode::PING_PONG);
+                controller.setPlaybackSpeed(speed);
+                controller.play();
+                for (int step = 1; step <= 240; ++step) {
+                    SCOPED_TRACE(step);
+                    ASSERT_TRUE(controller.update(0.125f));
+                    const float phase = std::fmod(step * 0.125f * speed, 12.0f);
+                    const float expected = phase <= 6.0f ? phase : 12.0f - phase;
+                    ASSERT_FLOAT_EQ(controller.playhead(), expected);
+                    ASSERT_TRUE(controller.isPlaying());
+                    if (with_sequence) {
+                        EXPECT_EQ(controller.currentPlySequenceFrameIndex(),
+                                  controller.plySequenceFrameIndex(expected));
+                    }
+                }
+            }
+        }
+    }
+
+    TEST(SequencerControllerRegressionTest, PingPongReflectsOvershootsAndMultiplePeriods) {
+        SequencerController controller;
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(6.0f));
+        controller.setClipDuration(6.0f);
+        controller.setLoopMode(LoopMode::PING_PONG);
+        controller.play();
+        float elapsed = 0.0f;
+        for (const float delta : {6.25f, 0.25f, 5.75f, 0.25f, 24.5f, 19.25f, 0.25f, 12.0f, 0.25f}) {
+            SCOPED_TRACE(delta);
+            elapsed += delta;
+            ASSERT_TRUE(controller.update(delta));
+            const float phase = std::fmod(elapsed, 12.0f);
+            EXPECT_FLOAT_EQ(controller.playhead(), phase <= 6.0f ? phase : 12.0f - phase);
+        }
+    }
+
+    TEST(SequencerControllerRegressionTest, PingPongPauseResumesReverseAndStopResetsDirection) {
+        SequencerController controller;
+        controller.addKeyframe(makeKeyframe(0.0f));
+        controller.addKeyframe(makeKeyframe(6.0f));
+        controller.setClipDuration(6.0f);
+        controller.setLoopMode(LoopMode::PING_PONG);
+        controller.play();
+        ASSERT_TRUE(controller.update(6.25f));
+        controller.pause();
+        EXPECT_FALSE(controller.update(1.0f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 5.75f);
+        controller.play();
+        ASSERT_TRUE(controller.update(0.25f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 5.5f);
+        ASSERT_TRUE(controller.update(0.25f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 5.25f);
+        controller.stop();
+        controller.play();
+        ASSERT_TRUE(controller.update(0.25f));
+        EXPECT_FLOAT_EQ(controller.playhead(), 0.25f);
+    }
+
+    TEST(SequencerControllerRegressionTest, OnceAndLoopPlaybackRetainEndpointBehavior) {
+        for (const auto mode : {LoopMode::ONCE, LoopMode::LOOP}) {
+            SequencerController controller;
+            controller.addKeyframe(makeKeyframe(0.0f));
+            controller.addKeyframe(makeKeyframe(5.75f));
+            controller.setClipDuration(6.0f);
+            controller.setLoopMode(mode);
+            controller.play();
+            float elapsed = 0.0f;
+            for (const float delta : {0.125f, 1.0f, 4.625f, 0.125f, 0.125f, 0.25f, 24.5f}) {
+                elapsed += delta;
+                const bool was_playing = controller.isPlaying();
+                EXPECT_EQ(controller.update(delta), was_playing);
+                EXPECT_FLOAT_EQ(controller.playhead(), mode == LoopMode::ONCE
+                                                           ? std::min(elapsed, 6.0f)
+                                                           : std::fmod(elapsed, 6.0f));
+                EXPECT_EQ(controller.isPlaying(), mode == LoopMode::LOOP || elapsed < 6.0f);
+            }
+        }
+    }
+
     TEST(SequencerControllerRegressionTest, SelectionTracksKeyframeIdentityAcrossResort) {
         SequencerController controller;
         const auto first_id = controller.addKeyframe(makeKeyframe(1.0f, {1.0f, 0.0f, 0.0f}));
@@ -1684,3 +1875,604 @@ namespace {
     }
 
 } // namespace
+
+namespace lfs::vis {
+
+    class SequencerMarkupRegressionTest : public ::testing::Test {
+    protected:
+        class CountingElement : public Rml::Element {
+        public:
+            explicit CountingElement(const Rml::String& tag) : Rml::Element(tag) {}
+            void SetInnerRML(const Rml::String& markup) override {
+                ++replacements;
+                Rml::Element::SetInnerRML(markup);
+            }
+            size_t replacements = 0;
+        };
+
+        class StubRenderer final : public Rml::RenderInterface {
+        public:
+            Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+            void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+            void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+            Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+                dimensions = {16, 16};
+                return 1;
+            }
+            Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+            void ReleaseTexture(Rml::TextureHandle) override {}
+            void EnableScissorRegion(bool) override {}
+            void SetScissorRegion(Rml::Rectanglei) override {}
+        };
+
+        static void SetUpTestSuite() {
+            ASSERT_TRUE(Rml::Initialise());
+            Rml::Factory::RegisterElementInstancer("counted-sequencer", &instancer_);
+        }
+        static void TearDownTestSuite() { Rml::Shutdown(); }
+
+        void SetUp() override {
+            context_ = Rml::CreateContext("sequencer_markup", {1000, 300}, &renderer_);
+            ASSERT_NE(context_, nullptr);
+            panel_ = std::make_unique<RmlSequencerPanel>(controller_, ui_, &manager_);
+            createDocument();
+            for (int i = 0; i < 500; ++i) {
+                sequencer::Keyframe keyframe;
+                keyframe.time = static_cast<float>(i) * 0.1f;
+                controller_.addKeyframeAtTime(keyframe, keyframe.time);
+            }
+            panel_->setFilmStripAttached(true);
+            rebuild();
+        }
+        void TearDown() override {
+            panel_.reset();
+            ASSERT_TRUE(Rml::RemoveContext("sequencer_markup"));
+        }
+
+        void createDocument() {
+            document_ = context_->LoadDocumentFromMemory("<rml><head/><body/></rml>");
+            ASSERT_NE(document_, nullptr);
+            for (auto& element : elements_) {
+                auto owned = document_->CreateElement("counted-sequencer");
+                element = static_cast<CountingElement*>(owned.get());
+                document_->AppendChild(std::move(owned));
+            }
+            bindElements();
+        }
+        void bindElements() {
+            panel_->document_ = document_;
+            panel_->elements_cached_ = true;
+            panel_->cached_panel_width_ = 1000.0f;
+            panel_->el_film_strip_dividers_ = elements_[0];
+            panel_->el_film_strip_sprockets_top_ = elements_[1];
+            panel_->el_film_strip_sprockets_bottom_ = elements_[2];
+            panel_->el_film_strip_gaps_ = elements_[3];
+            panel_->el_film_strip_markers_ = elements_[4];
+            panel_->el_easing_segments_ = elements_[5];
+            panel_->el_easing_curves_ = elements_[6];
+            panel_->el_easing_indicators_ = elements_[7];
+        }
+        void rebuild() {
+            PanelInputState input;
+            input.mouse_x = input.mouse_y = -1.0f;
+            panel_->rebuildFilmStrip(0.0f, width_, 200.0f, input, nullptr, nullptr, film_strip_);
+            panel_->rebuildEasingStripe(0.0f, width_);
+        }
+        void rebuildFresh() {
+            panel_->clearElementCache();
+            bindElements();
+            rebuild();
+        }
+        auto markup() const {
+            std::array<std::string, 8> result;
+            for (size_t i = 0; i < elements_.size(); ++i)
+                result[i] = elements_[i]->GetInnerRML();
+            return result;
+        }
+        void expectFreshEquivalent() {
+            rebuild();
+            const auto cached = markup();
+            rebuildFresh();
+            EXPECT_EQ(markup(), cached);
+        }
+        size_t replacements() const {
+            size_t result = 0;
+            for (const auto* element : elements_)
+                result += element->replacements;
+            return result;
+        }
+        void resetCounters() {
+            for (auto* element : elements_)
+                element->replacements = 0;
+        }
+        void replaceDocument() {
+            panel_->clearElementCache();
+            context_->UnloadDocument(document_);
+            context_->Update();
+            createDocument();
+        }
+        void destroyGraphics() { panel_->destroyGraphicsResources(); }
+        void hover(std::optional<size_t> index) { panel_->hovered_keyframe_ = index; }
+
+        inline static StubRenderer renderer_;
+        inline static Rml::ElementInstancerGeneric<CountingElement> instancer_;
+        gui::RmlUIManager manager_;
+        SequencerController controller_;
+        gui::panels::SequencerUIState ui_;
+        gui::FilmStripRenderer film_strip_;
+        std::unique_ptr<RmlSequencerPanel> panel_;
+        Rml::Context* context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+        std::array<CountingElement*, 8> elements_{};
+        float width_ = 960.0f;
+    };
+
+    TEST_F(SequencerMarkupRegressionTest, PlaybackRetainsUnchangedSubtrees) {
+        const auto expected = markup();
+        resetCounters();
+        for (int i = 1; i <= 20; ++i) {
+            controller_.seek(static_cast<float>(i) * 0.1f);
+            rebuild();
+        }
+        EXPECT_EQ(replacements(), 0u);
+        EXPECT_EQ(markup(), expected);
+    }
+
+    TEST_F(SequencerMarkupRegressionTest, ChangesAndResourceResetsMatchFreshMarkup) {
+        ASSERT_EQ(elements_[4]->GetNumChildren(), 500);
+        controller_.selectKeyframe(12);
+        expectFreshEquivalent();
+        EXPECT_TRUE(elements_[4]->GetChild(12)->IsClassSet("selected"));
+        hover(18);
+        expectFreshEquivalent();
+        EXPECT_TRUE(elements_[4]->GetChild(18)->IsClassSet("hovered"));
+        hover(std::nullopt);
+        expectFreshEquivalent();
+        controller_.removeSelectedKeyframe();
+        expectFreshEquivalent();
+        EXPECT_EQ(elements_[4]->GetNumChildren(), 499);
+        width_ = 640.0f;
+        panel_->setTimelineView(2.0f, 4.0f);
+        expectFreshEquivalent();
+        controller_.setKeyframeEasing(18, sequencer::EasingType::EASE_IN_OUT);
+        expectFreshEquivalent();
+        controller_.timeline().setClipDuration(75.0f);
+        expectFreshEquivalent();
+        panel_->setFilmStripAttached(false);
+        expectFreshEquivalent();
+        EXPECT_EQ(elements_[4]->GetNumChildren(), 0);
+        panel_->setFilmStripAttached(true);
+        expectFreshEquivalent();
+        const auto expected = markup();
+        destroyGraphics();
+        rebuild();
+        EXPECT_EQ(markup(), expected);
+        replaceDocument();
+        rebuild();
+        EXPECT_EQ(markup(), expected);
+        controller_.clear();
+        expectFreshEquivalent();
+        EXPECT_EQ(elements_[4]->GetNumChildren(), 0);
+        EXPECT_EQ(elements_[5]->GetNumChildren(), 0);
+    }
+
+    TEST_F(SequencerMarkupRegressionTest, RepeatedUpdatesAreCheaperThanRebuildingMarkup) {
+        // Same production formatter and Rml parser, with only cache reuse changed.
+        // Interleave batches and use a generous relative margin, not a wall-time limit.
+        const auto measure = [&](const bool fresh) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 10; ++i) {
+                if (fresh)
+                    rebuildFresh();
+                else
+                    rebuild();
+            }
+            return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+        };
+        std::array<double, 5> cached{}, fresh{};
+        for (size_t i = 0; i < cached.size(); ++i) {
+            if (i % 2 == 0) {
+                cached[i] = measure(false);
+                fresh[i] = measure(true);
+            } else {
+                fresh[i] = measure(true);
+                cached[i] = measure(false);
+            }
+        }
+        std::sort(cached.begin(), cached.end());
+        std::sort(fresh.begin(), fresh.end());
+        RecordProperty("cached_batch_us", std::to_string(cached[2]));
+        RecordProperty("fresh_batch_us", std::to_string(fresh[2]));
+        EXPECT_LT(cached[2], fresh[2] * 0.5);
+    }
+
+} // namespace lfs::vis
+
+namespace {
+    class SequencerToolbarLayoutTest : public ::testing::Test {
+    protected:
+        class Renderer final : public Rml::RenderInterface {
+        public:
+            Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+            void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+            void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+            Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+                dimensions = {16, 16};
+                return 1;
+            }
+            Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+            void ReleaseTexture(Rml::TextureHandle) override {}
+            void EnableScissorRegion(bool) override {}
+            void SetScissorRegion(Rml::Rectanglei) override {}
+        };
+        static void SetUpTestSuite() {
+            ASSERT_TRUE(Rml::Initialise());
+            ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) /
+                                           "src/visualizer/gui/assets/fonts/Inter-Regular.ttf")
+                                              .string()));
+        }
+        static void TearDownTestSuite() {
+            Rml::Shutdown();
+            lfs::event::LocalizationManager::getInstance().reset();
+        }
+        void SetUp() override {
+            context_ = Rml::CreateContext("sequencer_toolbar", {1240, 320}, &renderer_);
+            ASSERT_NE(context_, nullptr);
+        }
+        void TearDown() override { ASSERT_TRUE(Rml::RemoveContext("sequencer_toolbar")); }
+        static std::string read(const std::filesystem::path& path) {
+            std::ifstream file(path);
+            return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        }
+        void load(int width, float scale = 1.0f, const std::string& language = "en", int height = 640) {
+            if (document_)
+                context_->UnloadDocument(document_);
+            context_->SetDimensions({width, height});
+            context_->SetDensityIndependentPixelRatio(scale);
+            const auto root = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
+            const auto resources = root / "rmlui/resources";
+            auto rml = read(resources / "sequencer.rml");
+            auto& locales = lfs::event::LocalizationManager::getInstance();
+            ASSERT_TRUE(locales.initialize((root / "resources/locales").string()));
+            ASSERT_TRUE(locales.setLanguage(language));
+            const std::regex token("@tr:([A-Za-z0-9_.-]+)");
+            std::string localized;
+            size_t offset = 0;
+            for (std::sregex_iterator it(rml.begin(), rml.end(), token), end; it != end; ++it) {
+                localized.append(rml, offset, static_cast<size_t>(it->position()) - offset);
+                localized += Rml::StringUtilities::EncodeRml(locales.get((*it)[1].str()));
+                offset = static_cast<size_t>(it->position() + it->length());
+            }
+            localized.append(rml, offset, std::string::npos);
+            const auto begin = localized.find("<link");
+            const auto end = localized.find("/>", begin) + 2;
+            localized.replace(begin, end - begin, "<style>" + read(resources / "components.rcss") + read(resources / "sequencer.rcss") + "</style>");
+            document_ = context_->LoadDocumentFromMemory(localized);
+            ASSERT_NE(document_, nullptr);
+            document_->GetElementById("floating-header")->SetClass("hidden", false);
+            document_->GetElementById("panel")->SetClass("is-floating", true);
+            document_->Show();
+            context_->Update();
+        }
+        Rml::Element* row() { return document_->GetElementById("transport-row"); }
+        float right(Rml::Element* element) {
+            return element->GetAbsoluteOffset(Rml::BoxArea::Border).x + element->GetBox().GetSize(Rml::BoxArea::Border).x;
+        }
+        void expectReachable(const char* id) {
+            SCOPED_TRACE(id);
+            auto* element = document_->GetElementById(id);
+            ASSERT_NE(element, nullptr);
+            ASSERT_TRUE(element->IsVisible(true));
+            const auto origin = row()->GetAbsoluteOffset();
+            const auto x = element->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+            row()->SetScrollLeft(row()->GetScrollLeft() + x - origin.x);
+            context_->Update();
+            EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).x, origin.x - 1.0f);
+            EXPECT_LE(right(element), origin.x + row()->GetClientWidth() + 1.0f);
+            EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).y, origin.y - 1.0f);
+            EXPECT_LE(element->GetAbsoluteOffset(Rml::BoxArea::Border).y + element->GetBox().GetSize(Rml::BoxArea::Border).y,
+                      origin.y + row()->GetClientHeight() + 1.0f);
+        }
+        inline static Renderer renderer_;
+        Rml::Context* context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+    };
+
+    TEST_F(SequencerToolbarLayoutTest, OverflowControlsRemainReachable) {
+        for (const auto& language : {"en", "de"}) {
+            for (const auto [width, scale] : {std::pair{1240, 1.0f}, {600, 1.0f}, {1240, 2.0f}}) {
+                SCOPED_TRACE(std::format("{} width={} scale={}", language, width, scale));
+                load(width, scale, language);
+                ASSERT_GT(row()->GetScrollWidth(), row()->GetClientWidth());
+                // A scroll range without a visible affordance still leaves these controls unreachable.
+                ASSERT_GT(row()->GetOffsetHeight() - row()->GetClientHeight(), 2.0f * scale);
+                for (const auto* id : {"quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle", "btn-play"})
+                    expectReachable(id);
+            }
+        }
+    }
+
+    TEST_F(SequencerToolbarLayoutTest, CompactPanelAtDoubleScaleKeepsControlsReachable) {
+        load(1040, 2.0f, "en", 286);
+        document_->GetElementById("duration")->SetInnerRML(" / 0:01.00");
+        context_->Update();
+        for (const auto* id : {"btn-play", "btn-speed", "sequence-fps-field", "quality-scrub",
+                               "btn-export", "btn-clear", "btn-dock-toggle"})
+            expectReachable(id);
+        auto* last_transport_button = document_->GetElementById("btn-add");
+        auto* display = document_->GetElementById("time-display");
+        EXPECT_LE(right(last_transport_button), display->GetAbsoluteOffset(Rml::BoxArea::Border).x);
+        EXPECT_LE(right(display), document_->GetElementById("btn-speed")->GetAbsoluteOffset(Rml::BoxArea::Border).x);
+
+        EXPECT_GE(document_->GetElementById("timeline")->GetOffsetHeight(), 112.0f);
+        auto* panel = document_->GetElementById("body");
+        auto* strip = document_->GetElementById("film-strip-panel");
+        ASSERT_GT(panel->GetScrollHeight(), panel->GetClientHeight());
+        ASSERT_GT(panel->GetOffsetWidth() - panel->GetClientWidth(), 2.0f);
+        panel->SetScrollTop(panel->GetScrollHeight());
+        context_->Update();
+        const auto panel_y = panel->GetAbsoluteOffset().y;
+        const auto strip_y = strip->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+        EXPECT_GE(strip_y, panel_y);
+        EXPECT_LE(strip_y + strip->GetOffsetHeight(), panel_y + panel->GetClientHeight());
+        EXPECT_FLOAT_EQ(strip->GetOffsetHeight(), 112.0f);
+    }
+
+    TEST_F(SequencerToolbarLayoutTest, WideToolbarNeedsNoScrollingAndKeepsTimelinePosition) {
+        load(2400);
+        EXPECT_FLOAT_EQ(row()->GetScrollWidth(), row()->GetClientWidth());
+        EXPECT_FLOAT_EQ(row()->GetScrollLeft(), 0.0f);
+        EXPECT_FLOAT_EQ(row()->GetBox().GetSize(Rml::BoxArea::Content).y, 36.0f);
+        const auto timeline_y = document_->GetElementById("timeline")->GetAbsoluteOffset().y;
+        for (const auto* id : {"btn-play", "quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle"})
+            expectReachable(id);
+        load(1240);
+        EXPECT_FLOAT_EQ(document_->GetElementById("timeline")->GetAbsoluteOffset().y, timeline_y);
+    }
+    TEST_F(SequencerToolbarLayoutTest, RecordsLayoutUpdateCost) {
+        load(1240);
+        std::array<double, 7> batches;
+        for (auto& elapsed : batches) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 100; ++i) {
+                context_->SetDimensions({1240 + i % 2, 640});
+                context_->Update();
+            }
+            elapsed = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 100.0;
+        }
+        std::sort(batches.begin(), batches.end());
+        RecordProperty("median_layout_update_us", std::to_string(batches[3]));
+    }
+
+    TEST_F(SequencerToolbarLayoutTest, RecordsSteadyUpdateCostAgainstUnclippedReference) {
+        // At this width the old media rules hide no controls. Overriding overflow
+        // reproduces the previous layout for a same-process steady-update control.
+        const auto measure = [&](const bool reference) {
+            load(1240);
+            if (reference) {
+                row()->SetProperty("overflow-x", "visible");
+                row()->SetProperty("overflow-y", "visible");
+                context_->Update();
+            }
+            const auto origin = row()->GetAbsoluteOffset();
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 2000; ++i) {
+                context_->ProcessMouseMove(static_cast<int>(origin.x) + 30 + i % 2,
+                                           static_cast<int>(origin.y) + 12, 0);
+                context_->Update();
+            }
+            return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 2000.0;
+        };
+        std::array<double, 7> current{}, reference{};
+        for (size_t i = 0; i < current.size(); ++i) {
+            if (i % 2 == 0) {
+                current[i] = measure(false);
+                reference[i] = measure(true);
+            } else {
+                reference[i] = measure(true);
+                current[i] = measure(false);
+            }
+        }
+        std::sort(current.begin(), current.end());
+        std::sort(reference.begin(), reference.end());
+        RecordProperty("steady_update_us", std::to_string(current[3]));
+        RecordProperty("unclipped_reference_us", std::to_string(reference[3]));
+    }
+
+} // namespace
+
+namespace {
+    TEST(SequencerMappingRegressionTest, ScaledRulerLabelsKeepTheirReservedSpansSeparate) {
+        constexpr float duration = 30.0f;
+        for (const float scale : {1.0f, 1.5f, 2.0f}) {
+            for (const float width : {600.0f, 976.0f, 1160.0f, 1920.0f}) {
+                SCOPED_TRACE(std::format("width={} scale={}", width, scale));
+                const float label_width = 30.0f * scale;
+                const float interval = lfs::vis::sequencer_ui::rulerMajorInterval(duration, width, 2.0f * label_width);
+                float previous_right = -std::numeric_limits<float>::infinity();
+                for (float time = 0.0f; time <= duration; time += interval) {
+                    const float x = lfs::vis::sequencer_ui::timeToScreenX(time, 0.0f, width, duration, 0.0f);
+                    const float center = std::clamp(x, label_width * 0.5f, width - label_width);
+                    EXPECT_GE(center - label_width * 0.5f, previous_right - 0.001f);
+                    previous_right = center + label_width * 0.5f;
+                }
+            }
+        }
+    }
+
+    TEST(SequencerMappingRegressionTest, RulerKeepsExistingIntervalsWheneverLabelsFit) {
+        for (const float duration : {0.5f, 1.0f, 2.0f, 10.0f, 30.0f, 60.0f, 120.0f}) {
+            for (const float width : {600.0f, 976.0f, 1160.0f, 1920.0f}) {
+                const float previous = lfs::vis::sequencer_ui::rulerMajorInterval(duration);
+                for (const float scale : {1.0f, 1.5f, 2.0f}) {
+                    const float spacing = 60.0f * scale;
+                    const float current = lfs::vis::sequencer_ui::rulerMajorInterval(duration, width, spacing);
+                    if (previous * width / duration >= spacing)
+                        EXPECT_FLOAT_EQ(current, previous);
+                    EXPECT_GE(current, previous);
+                    EXPECT_FLOAT_EQ(current * 4.0f, std::round(current * 4.0f));
+                }
+            }
+        }
+    }
+} // namespace
+
+namespace lfs::vis {
+    class SequencerRulerRegressionTest : public ::testing::Test {
+    protected:
+        class StubRenderer final : public Rml::RenderInterface {
+        public:
+            Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
+            void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
+            void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
+            Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String&) override {
+                dimensions = {16, 16};
+                return 1;
+            }
+            Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte>, Rml::Vector2i) override { return 1; }
+            void ReleaseTexture(Rml::TextureHandle) override {}
+            void EnableScissorRegion(bool) override {}
+            void SetScissorRegion(Rml::Rectanglei) override {}
+        };
+
+        static void SetUpTestSuite() { ASSERT_TRUE(Rml::Initialise()); }
+        static void TearDownTestSuite() { Rml::Shutdown(); }
+        void SetUp() override {
+            context_ = Rml::CreateContext("sequencer_ruler", {1040, 300}, &renderer_);
+            ASSERT_NE(context_, nullptr);
+            document_ = context_->LoadDocumentFromMemory("<rml><head/><body><div id='ruler'/></body></rml>");
+            ASSERT_NE(document_, nullptr);
+            panel_ = std::make_unique<RmlSequencerPanel>(controller_, ui_, &manager_);
+            panel_->elements_cached_ = true;
+            panel_->el_ruler_ = document_->GetElementById("ruler");
+            panel_->cached_panel_width_ = 1040.0f;
+            panel_->cached_dp_ratio_ = 2.0f;
+            rebuild();
+        }
+        void TearDown() override {
+            panel_.reset();
+            ASSERT_TRUE(Rml::RemoveContext("sequencer_ruler"));
+        }
+        void rebuild() {
+            panel_->last_ruler_width_ = -1.0f;
+            panel_->rebuildRuler();
+        }
+        void setScaleKeepingTimelineWidth(const float dp_ratio) {
+            panel_->cached_dp_ratio_ = dp_ratio;
+            panel_->cached_panel_width_ = 1008.0f + 32.0f * dp_ratio;
+            panel_->rebuildRuler();
+        }
+        size_t childCount() const { return panel_->el_ruler_->GetNumChildren(); }
+        inline static StubRenderer renderer_;
+        gui::RmlUIManager manager_;
+        SequencerController controller_;
+        gui::panels::SequencerUIState ui_;
+        std::unique_ptr<RmlSequencerPanel> panel_;
+        Rml::Context* context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+    };
+
+    TEST_F(SequencerRulerRegressionTest, ScaleChangeInvalidatesRulerAtTheSamePixelWidth) {
+        setScaleKeepingTimelineWidth(1.0f);
+        const auto normal_count = childCount();
+        setScaleKeepingTimelineWidth(2.0f);
+        EXPECT_LT(childCount(), normal_count);
+        setScaleKeepingTimelineWidth(1.0f);
+        EXPECT_EQ(childCount(), normal_count);
+    }
+
+    TEST_F(SequencerRulerRegressionTest, RecordsActualRulerRebuildCost) {
+        std::array<double, 7> batches{};
+        for (auto& elapsed : batches) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 100; ++i)
+                rebuild();
+            elapsed = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / 100.0;
+        }
+        std::sort(batches.begin(), batches.end());
+        RecordProperty("ruler_rebuild_us", std::to_string(batches[3]));
+        RecordProperty("ruler_elements", static_cast<int>(childCount()));
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+
+    using gui::ViewportLayout;
+
+    class SequencerPreviewLayoutTest : public ::SequencerHistoryRegressionTest {
+    protected:
+        static glm::vec2 position(gui::SequencerUIManager& manager, const ViewportLayout& viewport,
+                                  const float width, const float height) {
+            return manager.pipPreviewPosition(viewport, width, height);
+        }
+
+        static void cachePanelY(gui::SequencerUIManager& manager, const float y) {
+            manager.panel_->render(0.0f, y, 0.0f, 0.0f, {}, nullptr, nullptr, manager.film_strip_);
+        }
+    };
+
+    TEST_F(SequencerPreviewLayoutTest, PreviewStaysAboveDockTabsAtEveryScale) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        const ViewportLayout viewport{{320.0f, 30.0f}, {1280.0f, 450.0f}};
+        const float bottom = viewport.pos.y + viewport.size.y;
+        for (const float tab_height : {24.0f, 36.0f}) {
+            cachePanelY(manager, bottom + tab_height);
+            for (const float scale : {0.5f, 1.0f, 1.5f, 2.0f}) {
+                SCOPED_TRACE(scale);
+                const auto pos = position(manager, viewport, 320.0f * scale, 180.0f * scale);
+                EXPECT_FLOAT_EQ(pos.x, viewport.pos.x + 16.0f);
+                EXPECT_FLOAT_EQ(pos.y + 180.0f * scale + 26.0f, bottom - 16.0f);
+                EXPECT_GE(pos.y, viewport.pos.y + 16.0f);
+            }
+        }
+    }
+
+    TEST_F(SequencerPreviewLayoutTest, PreviewFollowsViewportResizeAndIgnoresFloatingPanelPosition) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        for (const float height : {220.0f, 400.0f, 650.0f}) {
+            const ViewportLayout viewport{{110.0f, 60.0f}, {900.0f, height}};
+            for (const float panel_y : {50.0f, 500.0f, 1000.0f}) {
+                cachePanelY(manager, panel_y);
+                const auto pos = position(manager, viewport, 160.0f, 90.0f);
+                EXPECT_FLOAT_EQ(pos.x, 126.0f);
+                EXPECT_FLOAT_EQ(pos.y, 60.0f + height - 90.0f - 26.0f - 16.0f);
+            }
+        }
+    }
+
+    TEST_F(SequencerPreviewLayoutTest, ExistingPlacementAndSmallViewportClampsArePreserved) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        for (const glm::vec2 size : {glm::vec2(900.0f, 450.0f), glm::vec2(100.0f, 60.0f)}) {
+            const ViewportLayout viewport{{110.0f, 60.0f}, size};
+            const float panel_y = viewport.pos.y + viewport.size.y;
+            cachePanelY(manager, panel_y);
+            const float legacy_top = std::max(viewport.pos.y + 16.0f, panel_y - 90.0f - 26.0f - 16.0f);
+            const auto pos = position(manager, viewport, 160.0f, 90.0f);
+            EXPECT_EQ(pos, glm::vec2(viewport.pos.x + 16.0f, legacy_top));
+        }
+    }
+
+    TEST_F(SequencerPreviewLayoutTest, PlacementLatency) {
+        VisualizerImpl viewer(options());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        cachePanelY(manager, 516.0f);
+        ViewportLayout viewport{{320.0f, 30.0f}, {1280.0f, 450.0f}};
+        std::vector<double> samples;
+        float checksum = 0.0f;
+        for (int batch = 0; batch < 9; ++batch) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < 50000; ++i) {
+                viewport.size.y = 450.0f + static_cast<float>(i % 20);
+                const auto pos = position(manager, viewport, 160.0f, 90.0f);
+                checksum += pos.x + pos.y;
+            }
+            samples.push_back(std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / 50000.0);
+        }
+        EXPECT_GT(checksum, 0.0f);
+        std::sort(samples.begin(), samples.end());
+        RecordProperty("median_position_ns", std::to_string(samples[samples.size() / 2]));
+    }
+} // namespace lfs::vis

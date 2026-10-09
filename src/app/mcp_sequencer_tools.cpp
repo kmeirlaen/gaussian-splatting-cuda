@@ -436,6 +436,9 @@ namespace lfs::app {
                     if (!keyframe_index)
                         return json{{"error", keyframe_index.error()}};
 
+                    if (*keyframe_index == 0)
+                        return mcp::invalid_argument_result("The first keyframe cannot be deleted", "keyframe_id");
+
                     if (backend.delete_keyframe)
                         backend.delete_keyframe(*keyframe_index);
                     return sequencer_state_json(backend, **controller);
@@ -644,7 +647,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "sequencer.scrub",
-                .description = "Move the sequencer playhead to a time (seconds) or PLY-sequence frame index, optionally updating the viewport camera",
+                .description = "Move the sequencer playhead to a time (seconds) or PLY-sequence frame index, optionally updating the viewport camera. PLY seeks are asynchronous: success is false and pending is true until the requested frame is displayed. Poll sequencer.get ply_player.on_target and requested_frame_failed for completion",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
@@ -679,6 +682,17 @@ namespace lfs::app {
                     json result = sequencer_state_json(backend, **controller);
                     result["scrubbed_to_time"] = target_time;
                     result["camera_updated"] = camera_updated;
+                    if (const auto player = result.find("ply_player"); player != result.end()) {
+                        const bool displayed = player->value("on_target", false);
+                        const bool failed = !displayed && player->value("requested_frame_failed", false);
+                        result["success"] = displayed;
+                        result["pending"] = !displayed && !failed;
+                        if (failed) {
+                            result["error"] = std::format(
+                                "Failed to load requested PLY sequence frame {} (displayed frame: {})",
+                                player->value("requested_frame", -1ll), player->value("displayed_frame", -1ll));
+                        }
+                    }
                     return result;
                 });
             });
