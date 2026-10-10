@@ -3379,6 +3379,7 @@ namespace lfs::vis {
             // === Phase 3: Load data ===
             // Clear init_path to prevent loading the initial PLY again - we use the checkpoint model instead
             checkpoint_params.init_path = std::nullopt;
+            checkpoint_params.resume_checkpoint = path;
             const auto load_result = lfs::training::loadTrainingDataIntoScene(checkpoint_params, scene_);
             if (!load_result) {
                 throw std::runtime_error("Failed to load training data: " + load_result.error());
@@ -3411,9 +3412,6 @@ namespace lfs::vis {
 
             scene_.setTrainingModel(std::move(splat_data), MODEL_NAME);
             selection_.invalidateNodeMask();
-
-            // Mark as checkpoint restore for sparsity handling
-            checkpoint_params.resume_checkpoint = path;
 
             auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
             trainer->setSplatTensorAllocator(tensor_allocator);
