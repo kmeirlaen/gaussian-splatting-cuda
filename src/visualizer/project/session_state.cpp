@@ -2340,6 +2340,7 @@ namespace lfs::vis::project {
                  {"view_snap",
                   input_controller
                       ->cameraViewSnapEnabled()},
+                 {"up_axis", std::string(navigationUpAxisName(input_controller->navigationUpAxis()))},
              }},
             {"split",
              {
@@ -3373,7 +3374,8 @@ namespace lfs::vis::project {
                     scalar<bool>(
                         *navigation,
                         "view_snap")
-                        .value_or(false));
+                        .value_or(false),
+                    navigationUpAxisFromName(scalar<std::string>(*navigation, "up_axis").value_or("legacy_y")).value_or(NavigationUpAxis::LegacyY));
             }
 
             bookmarks.clear();
