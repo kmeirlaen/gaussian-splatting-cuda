@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/mesh_data.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -10,6 +11,7 @@
 #include "io/video/video_encoder.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
@@ -292,6 +294,100 @@ TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
     }
 }
 
+namespace {
+    class VideoExportBandTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {
+    protected:
+        void SetUp() override {
+            ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_VIDEO)) << SDL_GetError();
+            window_.reset(SDL_CreateWindow("Export regression", 64, 64,
+                                           SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN));
+            ASSERT_TRUE(window_) << SDL_GetError();
+            ASSERT_TRUE(context_.init(window_.get(), 64, 64)) << context_.lastError();
+            lfs::rendering::setExpectedVulkanDeviceUuid(context_.deviceUUID());
+            // Include both poles, the longitude seam, and splats crossing band edges.
+            model_ = make_test_splat({0, -8, -3, 0, -3, -3, 0, 0, -3,
+                                      0, 3, -3, 0, 8, -3, 0.1f, 0, 3});
+            const auto allocator = [this](lfs::core::TensorShape shape, size_t capacity,
+                                          lfs::core::DataType dtype, std::string_view name) {
+                auto tensor = lfs::vis::makeVulkanExternalTensor(
+                    context_, std::move(shape), dtype, capacity, std::string(name).c_str());
+                if (!tensor)
+                    throw std::runtime_error(tensor.error());
+                return std::move(*tensor);
+            };
+            auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model_, allocator);
+            ASSERT_TRUE(migrated) << migrated.error().format();
+        }
+
+        void TearDown() override {
+            renderer_.reset();
+            model_.reset();
+            context_.shutdown();
+            window_.reset();
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
+
+        std::vector<uint8_t> render(int y, int rows, bool banded, bool full_frame) {
+            lfs::rendering::ViewportRenderRequest request;
+            request.frame_view.size = {1024, rows};
+            request.frame_view.subregion_origin = {0, y};
+            if (banded)
+                request.frame_view.subregion_full_size = {1024, 512};
+            request.sh_degree = 0;
+            request.gut = true;
+            request.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+            request.equirectangular = std::get<0>(GetParam());
+            const auto slot = full_frame ? lfs::vis::VksplatViewportRenderer::OutputSlot::Preview
+                                         : lfs::vis::VksplatViewportRenderer::OutputSlot::Main;
+            auto result = renderer_->render(context_, *model_, request, false, slot, false, true);
+            EXPECT_TRUE(result) << (result ? "" : result.error());
+            if (!result)
+                return {};
+            auto image = renderer_->readOutputImageRgb8(context_, slot);
+            EXPECT_TRUE(image) << (image ? "" : image.error());
+            if (!image)
+                return {};
+            const auto* data = (*image)->ptr<uint8_t>();
+            return {data, data + (*image)->numel()};
+        }
+
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window_{nullptr, SDL_DestroyWindow};
+        lfs::vis::VulkanContext context_;
+        std::unique_ptr<lfs::core::SplatData> model_;
+        std::unique_ptr<lfs::vis::VksplatViewportRenderer> renderer_ =
+            std::make_unique<lfs::vis::VksplatViewportRenderer>();
+    };
+
+    TEST_P(VideoExportBandTest, BandedEqualsFullImage) {
+        const bool full_frame = std::get<1>(GetParam());
+        const auto full = render(0, 512, false, full_frame);
+        ASSERT_EQ(full.size(), 1024u * 512u * 3u);
+        for (const int band_rows : {256, 64}) {
+            for (int y = 0; y < 512; y += band_rows) {
+                SCOPED_TRACE(::testing::Message() << "rows=" << band_rows << " y=" << y);
+                const auto band = render(y, band_rows, true, full_frame);
+                ASSERT_EQ(band.size(), 1024u * band_rows * 3u);
+                const auto first = full.begin() + y * 1024 * 3;
+                ASSERT_GT(*std::max_element(first, first + band.size()), 0);
+                int max_diff = 0;
+                size_t changed = 0;
+                for (size_t i = 0; i < band.size(); ++i) {
+                    max_diff = std::max(max_diff, std::abs(int(band[i]) - int(first[i])));
+                    changed += band[i] != first[i];
+                }
+                EXPECT_LE(max_diff, 1) << "changed channels=" << changed;
+            }
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Projection, VideoExportBandTest,
+                             ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+                             [](const auto& info) {
+                                 return std::string(std::get<0>(info.param) ? "Equirectangular" : "Perspective") +
+                                        (std::get<1>(info.param) ? "FullFrame" : "BandRelative");
+                             });
+} // namespace
+
 TEST(VideoExportUtilsTest, CaptureSnapshotPrefersSplatsOverPointCloudAndKeepsMeshes) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();
@@ -532,3 +628,140 @@ TEST(VideoEncoderValidationTest, AcceptsMp4CaseVariantsAndExtensionlessNames) {
         EXPECT_TRUE(std::filesystem::is_regular_file(directory.path / name));
     }
 }
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
+
+namespace {
+    class VideoEncoderColorTest : public ::testing::TestWithParam<bool> {};
+
+    TEST_P(VideoEncoderColorTest, TagsLimitedRangeBt601) {
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA is required by the RGB conversion";
+        // NVENC rejects a 16x16 frame; exercise the actual software fallback.
+        const bool hardware = GetParam();
+        if (hardware && !avcodec_find_encoder_by_name("h264_nvenc"))
+            GTEST_SKIP() << "NVENC is not compiled in";
+        const int width = hardware ? 160 : 16;
+        const int height = hardware ? 96 : 16;
+        VideoOutputDirectory directory;
+        const auto path = directory.path / "color.mp4";
+        lfs::io::video::VideoEncoder encoder;
+        auto opened = encoder.open(path, {.preset = lfs::io::video::VideoPreset::CUSTOM,
+                                          .width = width,
+                                          .height = height,
+                                          .framerate = 4});
+        ASSERT_TRUE(opened) << opened.error();
+        std::vector<float> pixels(width * height * 3, 0.0f);
+        for (size_t i = 0; i < pixels.size(); i += 3)
+            pixels[i] = 1.0f;
+        auto frame = Tensor::from_vector(pixels, {size_t(height), size_t(width), size_t{3}}, Device::CUDA);
+        for (int i = 0; i < 6; ++i) {
+            const auto written = encoder.writeFrameGpu(frame.ptr<float>(), width, height);
+            ASSERT_TRUE(written) << written.error();
+        }
+        const auto closed = encoder.close();
+        ASSERT_TRUE(closed) << closed.error();
+        AVFormatContext* raw_format = nullptr;
+        ASSERT_EQ(avformat_open_input(&raw_format, lfs::core::path_to_utf8(path).c_str(), nullptr, nullptr), 0);
+        const auto close_format = [](AVFormatContext* format) { avformat_close_input(&format); };
+        std::unique_ptr<AVFormatContext, decltype(close_format)> format(raw_format, close_format);
+        ASSERT_GE(avformat_find_stream_info(format.get(), nullptr), 0);
+        const int stream = av_find_best_stream(format.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        ASSERT_GE(stream, 0);
+        const auto* params = format->streams[stream]->codecpar;
+        EXPECT_EQ(params->color_space, AVCOL_SPC_SMPTE170M);
+        EXPECT_EQ(params->color_range, AVCOL_RANGE_MPEG);
+        EXPECT_EQ(params->color_primaries, AVCOL_PRI_UNSPECIFIED);
+        EXPECT_EQ(params->color_trc, AVCOL_TRC_UNSPECIFIED);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backend, VideoEncoderColorTest, ::testing::Bool(),
+                             [](const auto& info) { return info.param ? "Hardware" : "Software"; });
+} // namespace
+
+namespace {
+    // Keep the regression runnable against the old API to prove the image failure.
+    template <typename Manager>
+    std::shared_ptr<Tensor> renderExportPreview(Manager& manager, const lfs::core::SplatData& model,
+                                                int format, int width, int height, bool panorama) {
+        const glm::mat3 rotation(1.0f);
+        const glm::vec3 position(0.0f);
+        if (format == 0) {
+            if constexpr (requires { manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height,
+                                                                std::nullopt, std::nullopt, std::nullopt, panorama); })
+                return manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height,
+                                                  std::nullopt, std::nullopt, std::nullopt, panorama);
+            else
+                return manager.renderPreviewImage(model, {}, rotation, position, 35.0f, width, height);
+        }
+        if (format == 1) {
+            if constexpr (requires { manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height,
+                                                                    std::nullopt, std::nullopt, std::nullopt, panorama); })
+                return manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height,
+                                                      std::nullopt, std::nullopt, std::nullopt, panorama);
+            else
+                return manager.renderPreviewImageRgb8(model, {}, rotation, position, 35.0f, width, height);
+        }
+        if constexpr (requires { manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height,
+                                                                 std::nullopt, std::nullopt, panorama); })
+            return manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height,
+                                                   std::nullopt, std::nullopt, panorama);
+        else
+            return manager.renderPreviewImageRgba8(model, {}, rotation, position, 35.0f, width, height);
+    }
+
+    TEST_P(VideoExportBandTest, PreviewProjectionMatchesRenderer) {
+        const bool panorama = std::get<0>(GetParam());
+        const bool tiled = std::get<1>(GetParam());
+        const int width = tiled ? 6144 : 1024;
+        const int height = width / 2;
+        lfs::vis::RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        settings.gut = true;
+        settings.equirectangular = panorama;
+        settings.sh_degree = 0;
+        settings.mip_filter = false;
+        settings.antialiasing = false;
+        settings.background_color = glm::vec3(0.0f);
+        manager.updateSettings(settings);
+        const Viewport viewport(64, 64);
+        // Establish the same context that the viewer passes to the export manager.
+        manager.renderVulkanFrame({.viewport = viewport, .settings = settings, .vulkan_context = &context_});
+        lfs::rendering::ViewportRenderRequest request;
+        request.frame_view.size = {width, height};
+        request.frame_view.focal_length_mm = 35.0f;
+        request.sh_degree = 0;
+        request.raster_backend = settings.raster_backend;
+        request.gut = true;
+        request.equirectangular = panorama;
+        const auto slot = lfs::vis::VksplatViewportRenderer::OutputSlot::Preview;
+        for (int format = 0; format < 3; ++format) {
+            SCOPED_TRACE(::testing::Message() << "format=" << format << " tiled=" << tiled);
+            request.transparent_background = format == 2;
+            auto rendered = renderer_->render(context_, *model_, request, false, slot, false, true);
+            ASSERT_TRUE(rendered) << rendered.error();
+            auto reference = format == 2 ? renderer_->readOutputImageRgba8(context_, slot)
+                                         : renderer_->readOutputImageRgb8(context_, slot);
+            ASSERT_TRUE(reference) << reference.error();
+            auto actual = renderExportPreview(manager, *model_, format, width, height, panorama);
+            ASSERT_TRUE(actual);
+            ASSERT_EQ(actual->numel(), (*reference)->numel());
+            int max_diff = 0;
+            size_t changed = 0;
+            const auto* expected = (*reference)->ptr<uint8_t>();
+            for (size_t i = 0; i < actual->numel(); ++i) {
+                const int value = format == 0 ? int(std::clamp(actual->ptr<float>()[i], 0.0f, 1.0f) * 255.0f + 0.5f)
+                                              : actual->ptr<uint8_t>()[i];
+                const int diff = std::abs(value - int(expected[i]));
+                max_diff = std::max(max_diff, diff);
+                changed += diff > 1;
+            }
+            EXPECT_LE(max_diff, 1) << "channels differing by more than one=" << changed;
+        }
+    }
+} // namespace
