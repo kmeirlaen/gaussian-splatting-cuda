@@ -5,6 +5,7 @@
 #include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/mask_normalization.hpp"
 #include "core/environment.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
@@ -12,6 +13,7 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "cuda/masked_image_fill.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <algorithm>
@@ -1159,7 +1161,7 @@ namespace lfs::io {
         int max_width,
         void* cuda_stream,
         DecodeFormat format,
-        bool output_uint8) {
+        bool output_uint8, const MaskedImageFill* masked_fill) {
 
         LOG_DEBUG("NvCodecImageLoader: Loading {}", lfs::core::path_to_utf8(path));
 
@@ -1179,7 +1181,7 @@ namespace lfs::io {
             throw std::runtime_error("WebP not supported by nvImageCodec");
         }
 
-        return load_image_from_memory_gpu(file_data, resize_factor, max_width, cuda_stream, format, output_uint8);
+        return load_image_from_memory_gpu(file_data, resize_factor, max_width, cuda_stream, format, output_uint8, masked_fill);
     }
 
     lfs::core::Tensor NvCodecImageLoader::load_image_from_memory_gpu(
@@ -1188,9 +1190,9 @@ namespace lfs::io {
         [[maybe_unused]] int max_width,
         void* cuda_stream,
         DecodeFormat format,
-        bool output_uint8) {
+        bool output_uint8, const MaskedImageFill* masked_fill) {
 
-        const bool is_grayscale = (format == DecodeFormat::Grayscale);
+        const bool is_grayscale = (format != DecodeFormat::RGB);
         const int num_channels = is_grayscale ? 1 : 3;
 
         const size_t decoder_idx = impl_->acquire_decoder();
@@ -1363,6 +1365,9 @@ namespace lfs::io {
             throw std::runtime_error(std::string("Decode failed: ") + status_str);
         }
 
+        if (masked_fill)
+            fill_masked_image(image_tensor_aux, *masked_fill, static_cast<cudaStream_t>(cuda_stream));
+
         // Lanczos reads uint8 or float32; widen uint16 to normalized float first.
         std::optional<Tensor> u16_as_float;
         if (decode_u16 && needs_resize) {
@@ -1384,7 +1389,7 @@ namespace lfs::io {
         if (needs_resize) {
             if (is_grayscale) {
                 output_tensor = lanczos_resize_grayscale(resize_input_image, target_height, target_width,
-                                                         LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
+                                                         LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream), format == DecodeFormat::Mask);
             } else {
                 output_tensor = lanczos_resize(resize_input_image, target_height, target_width,
                                                LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
@@ -1404,11 +1409,15 @@ namespace lfs::io {
             if (is_grayscale) {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1];
-                output_tensor = Tensor::empty(TensorShape({H, W}), Device::CUDA, DataType::Float32);
-                cuda::launch_uint8_hw_to_float32_hw(
-                    reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
-                    reinterpret_cast<float*>(output_tensor.data_ptr()),
-                    H, W, static_cast<cudaStream_t>(cuda_stream));
+                if (format == DecodeFormat::Mask) {
+                    output_tensor = lfs::core::cuda::normalize_mask_bytes(image_tensor_aux).reshape({H, W});
+                } else {
+                    output_tensor = Tensor::empty(TensorShape({H, W}), Device::CUDA, DataType::Float32);
+                    cuda::launch_uint8_hw_to_float32_hw(
+                        reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
+                        reinterpret_cast<float*>(output_tensor.data_ptr()),
+                        H, W, static_cast<cudaStream_t>(cuda_stream));
+                }
             } else {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1], C = shape[2];
@@ -2068,7 +2077,7 @@ namespace lfs::io {
         // whose execution stream is not the caller-supplied codec stream.
         // Current mask-cache callers deliberately use the legacy stream.
         LFS_ASSERT_MSG(
-            !eight_bit || cuda_stream == nullptr,
+            !eight_bit || image.dtype() == DataType::UInt8 || cuda_stream == nullptr,
             "eight-bit JPEG2000 staging currently requires the legacy CUDA stream");
 
         if (!impl_->encoder) {
@@ -2081,8 +2090,8 @@ namespace lfs::io {
         if (shape.rank() != 2) {
             throw std::runtime_error("Expected 2D tensor, got " + std::to_string(shape.rank()) + "D");
         }
-        if (image.dtype() != DataType::Float32 || image.device() != Device::CUDA) {
-            throw std::runtime_error("encode_grayscale_to_jpeg2k expects a Float32 CUDA tensor");
+        if ((image.dtype() != DataType::Float32 && !(eight_bit && image.dtype() == DataType::UInt8)) || image.device() != Device::CUDA) {
+            throw std::runtime_error("encode_grayscale_to_jpeg2k expects Float32 CUDA, or UInt8 for an eight-bit mask");
         }
 
         const uint32_t height = static_cast<uint32_t>(shape[0]);
@@ -2091,7 +2100,7 @@ namespace lfs::io {
 
         const Tensor hw_float = image.contiguous();
         Tensor encoded = eight_bit
-                             ? (hw_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8)
+                             ? (hw_float.dtype() == DataType::UInt8 ? hw_float : (hw_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8))
                              : Tensor::empty(TensorShape({height, width}), Device::CUDA, DataType::Float16);
         if (!eight_bit) {
             cuda::launch_float32_hwc_to_uint16_hwc(
@@ -2207,7 +2216,8 @@ namespace lfs::io {
         const std::vector<uint8_t>& jpeg2k_data,
         void* cuda_stream,
         const bool synchronize,
-        const bool allow_uint8) {
+        const bool allow_uint8,
+        const bool exact_mask) {
 
         using namespace lfs::core;
 
@@ -2376,10 +2386,16 @@ namespace lfs::io {
         if (cuda_stream) {
             output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
         }
-        cuda::launch_uint16_hwc_to_float32_hwc(
-            reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()),
-            output_tensor.ptr<float>(),
-            height, width, num_components, static_cast<cudaStream_t>(cuda_stream));
+        if (exact_mask) {
+            lfs::core::cuda::normalize_mask_u16(
+                reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()), output_tensor.ptr<float>(),
+                height * width * num_components, static_cast<cudaStream_t>(cuda_stream));
+        } else {
+            cuda::launch_uint16_hwc_to_float32_hwc(
+                reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()),
+                output_tensor.ptr<float>(),
+                height, width, num_components, static_cast<cudaStream_t>(cuda_stream));
+        }
 
         if (synchronize && cuda_stream) {
             if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));

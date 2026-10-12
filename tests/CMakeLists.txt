@@ -570,6 +570,7 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_mask_preprocess_fusion.cpp
     test_mask_memory_alignment.cpp
+    test_mask_tiff_consistency.cpp
     test_roi_weight_map.cpp
     test_mesh_mask_kernels.cpp
     test_flip.cpp
@@ -740,6 +741,11 @@ set(TEST_FILES
     test_export_env_composite.cpp
     test_image_io.cpp
     test_project_thumbnail_image.cpp
+    test_mask_resized_cache.cpp
+    test_mask_rgb_cache.cpp
+    test_mask_cache_endpoints.cpp
+    test_mask_color_consistency.cpp
+    test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     gut_camera_model_cuda.cu
