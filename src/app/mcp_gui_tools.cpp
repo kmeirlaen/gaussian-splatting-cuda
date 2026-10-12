@@ -1826,6 +1826,12 @@ namespace lfs::app {
             splat.set_sh_degree(target_degree);
         }
 
+        std::optional<int> requested_export_sh_degree(const json& args) {
+            if (!args.contains("sh_degree"))
+                return std::nullopt;
+            return args.at("sh_degree").get<int>();
+        }
+
         struct BorrowExportPlan {
             core::Scene::MergeStorageMode storage_mode = core::Scene::MergeStorageMode::Clone;
             std::optional<std::shared_lock<std::shared_mutex>> model_lock;
@@ -1883,21 +1889,28 @@ namespace lfs::app {
         }
 
         json with_scene_export_warning(json result, const core::ExportFormat format,
-                                       const std::filesystem::path& path) {
+                                       const std::filesystem::path& path,
+                                       const std::optional<std::string>& sh_degree_warning = std::nullopt) {
             if (core::scene_export_path_status(format, path) == core::SceneExportPathStatus::Warn) {
                 result["warning"] = LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_WARNING,
                                          core::scene_export_format_name(format));
             }
+            if (sh_degree_warning) {
+                if (result.contains("warning"))
+                    result["warning"] = result["warning"].get<std::string>() + " " + *sh_degree_warning;
+                else
+                    result["warning"] = *sh_degree_warning;
+            }
             return result;
         }
 
-        std::expected<void, std::string> export_scene_nodes(const vis::SceneManager& scene_manager,
-                                                            const std::vector<std::string>& node_names,
-                                                            const core::ExportFormat format,
-                                                            const std::filesystem::path& path,
-                                                            const int sh_degree,
-                                                            const bool include_provenance = true,
-                                                            io::SsogSaveOptions ssog_options = {}) {
+        std::expected<std::optional<std::string>, std::string> export_scene_nodes(const vis::SceneManager& scene_manager,
+                                                                                  const std::vector<std::string>& node_names,
+                                                                                  const core::ExportFormat format,
+                                                                                  const std::filesystem::path& path,
+                                                                                  const std::optional<int> sh_degree,
+                                                                                  const bool include_provenance = true,
+                                                                                  io::SsogSaveOptions ssog_options = {}) {
             if (core::scene_export_path_status(format, path) == core::SceneExportPathStatus::Conflict)
                 return std::unexpected(LOCF(lichtfeld::Strings::Runtime::EXPORT_EXTENSION_REQUIRED,
                                             core::required_scene_export_extension(format)));
@@ -1920,6 +1933,15 @@ namespace lfs::app {
             if (splats.empty())
                 return std::unexpected("The requested node set does not contain any splat nodes");
 
+            int max_sh_degree = 3;
+            if (!splats.empty()) {
+                max_sh_degree = std::min_element(splats.begin(), splats.end(), [](const auto& left, const auto& right) {
+                                    return left.first->get_max_sh_degree() < right.first->get_max_sh_degree();
+                                })->first->get_max_sh_degree();
+            }
+            const int effective_sh_degree = std::clamp(sh_degree.value_or(max_sh_degree), 0, max_sh_degree);
+            const bool sh_degree_was_clamped = sh_degree && effective_sh_degree != *sh_degree;
+
             auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             auto merged = core::Scene::mergeSplatsWithTransforms(splats, borrow_plan.storage_mode);
             if (!merged)
@@ -1933,7 +1955,7 @@ namespace lfs::app {
                 }
             } cleanup{merged};
 
-            truncate_sh_degree(*merged, sh_degree);
+            truncate_sh_degree(*merged, effective_sh_degree);
             borrow_plan.model_lock.reset();
 
             const auto stamp = include_provenance ? make_gui_export_stamp(scene_manager)
@@ -1993,7 +2015,10 @@ namespace lfs::app {
                 return std::unexpected("Use prepare_gallery_scene() to prepare a gallery upload.");
             }
 
-            return {};
+            if (sh_degree_was_clamped)
+                return std::optional<std::string>{LOCF(lichtfeld::Strings::Runtime::EXPORT_SH_DEGREE_CLAMPED,
+                                                       effective_sh_degree)};
+            return std::optional<std::string>{};
         }
 
         io::ColmapWriteFormat parse_colmap_write_format(const std::string& value) {
@@ -3728,7 +3753,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3740,8 +3765,9 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree, include_provenance); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree, include_provenance);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
                     return with_scene_export_warning(json{
                                                          {"success", true},
@@ -3751,7 +3777,7 @@ namespace lfs::app {
                                                          {"path", core::path_to_utf8(path)},
                                                          {"nodes", *node_names},
                                                      },
-                                                     core::ExportFormat::PLY, path);
+                                                     core::ExportFormat::PLY, path, *export_result);
                 });
             });
 
@@ -3772,7 +3798,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3784,8 +3810,9 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree, include_provenance); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree, include_provenance);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
                     return with_scene_export_warning(json{
                                                          {"success", true},
@@ -3795,7 +3822,7 @@ namespace lfs::app {
                                                          {"path", core::path_to_utf8(path)},
                                                          {"nodes", *node_names},
                                                      },
-                                                     core::ExportFormat::SOG, path);
+                                                     core::ExportFormat::SOG, path, *export_result);
                 });
             });
 
@@ -3823,7 +3850,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3845,17 +3872,19 @@ namespace lfs::app {
                     if (!options.validate())
                         return json{{"error", "Invalid SSOG export options"}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SSOG, path, sh_degree, include_provenance, options); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SSOG, path, sh_degree, include_provenance, options);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "ssog"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "ssog"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::SSOG, path, *export_result);
                 });
             });
 
@@ -3876,7 +3905,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3888,8 +3917,9 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree, include_provenance); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree, include_provenance);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
                     return with_scene_export_warning(json{
                                                          {"success", true},
@@ -3899,7 +3929,7 @@ namespace lfs::app {
                                                          {"path", core::path_to_utf8(path)},
                                                          {"nodes", *node_names},
                                                      },
-                                                     core::ExportFormat::SPZ, path);
+                                                     core::ExportFormat::SPZ, path, *export_result);
                 });
             });
 
@@ -3920,7 +3950,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3932,17 +3962,19 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::USD, path, sh_degree, include_provenance); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::USD, path, sh_degree, include_provenance);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "usd"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "usd"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::USD, path, *export_result);
                 });
             });
 
@@ -3963,7 +3995,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -3975,17 +4007,19 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::NUREC_USDZ, path, sh_degree, include_provenance); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::NUREC_USDZ, path, sh_degree, include_provenance);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "usdz_nurec"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "usdz_nurec"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::NUREC_USDZ, path, *export_result);
                 });
             });
 
@@ -4006,7 +4040,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -4018,17 +4052,19 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::HTML_VIEWER, path, sh_degree, include_provenance); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::HTML_VIEWER, path, sh_degree, include_provenance);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "html"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "html"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::HTML_VIEWER, path, *export_result);
                 });
             });
 
@@ -4049,7 +4085,7 @@ namespace lfs::app {
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
                 const std::filesystem::path path = args["path"].get<std::string>();
-                const int sh_degree = args.value("sh_degree", 3);
+                const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
                 return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
@@ -4061,17 +4097,19 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree, include_provenance); !result)
-                        return json{{"error", result.error()}};
+                    auto export_result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree, include_provenance);
+                    if (!export_result)
+                        return json{{"error", export_result.error()}};
 
-                    return json{
-                        {"success", true},
-                        {"started", false},
-                        {"completed", true},
-                        {"format", "rad"},
-                        {"path", core::path_to_utf8(path)},
-                        {"nodes", *node_names},
-                    };
+                    return with_scene_export_warning(json{
+                                                         {"success", true},
+                                                         {"started", false},
+                                                         {"completed", true},
+                                                         {"format", "rad"},
+                                                         {"path", core::path_to_utf8(path)},
+                                                         {"nodes", *node_names},
+                                                     },
+                                                     core::ExportFormat::RAD, path, *export_result);
                 });
             });
 
