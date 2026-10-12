@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Callable
 
 from . import rml_widgets as w
-from .rml_keys import KI_ESCAPE
+from .rml_keys import KI_ESCAPE, KI_TAB
 
 
 DRAG_THRESHOLD_PX = 4.0
@@ -222,6 +223,14 @@ class ScrubFieldController:
 
     def _on_keydown(self, event) -> None:
         key = int(event.get_parameter("key_identifier", "0"))
+        if key == KI_TAB:
+            for state in self._fields.values():
+                if state.editing:
+                    state.commit_on_blur = True
+                    self._commit_edit_value(state)
+                    return
+            return
+
         if key != KI_ESCAPE:
             return
 
@@ -268,6 +277,7 @@ class ScrubFieldController:
             self._exit_edit(state)
             return
 
+        self._commit_edit_value(state)
         self._exit_edit(state)
 
     def _cancel_other_edits(self, current_prop: str) -> None:
@@ -326,12 +336,25 @@ class ScrubFieldController:
         if not text:
             return
 
+        if text.count(",") == 1 and "." not in text:
+            try:
+                import lichtfeld as lf
+                language = lf.ui.get_current_language()
+            except (ImportError, AttributeError):
+                language = "en"
+            if language in {"de", "es", "fr", "it", "nl", "pl"}:
+                text = text.replace(",", ".")
+
         try:
+            parsed = float(text)
             if state.spec.data_type is int:
-                value = int(float(text))
+                if math.isnan(parsed):
+                    return
+                bounded = max(state.spec.min_value, min(state.spec.max_value, parsed))
+                value = int(bounded)
             else:
-                value = float(text)
-        except (TypeError, ValueError):
+                value = parsed
+        except (TypeError, ValueError, OverflowError):
             return
 
         self._apply_value(state, value)
