@@ -3611,7 +3611,7 @@ namespace lfs::vis {
                                 }
 
                                 const SplitCompositeContentRect rect =
-                                    resolveSplitCompositeContentRect(render_size, true, gt_size);
+                                    resolveSplitCompositeContentRect(gt_comparison_size, true, gt_size);
                                 pending_split_view.enabled = true;
                                 pending_split_view.split_position = frame_settings.split_position;
                                 pending_split_view.background = frame_settings.background_color;
@@ -3826,7 +3826,10 @@ namespace lfs::vis {
                 spatial_runtime_ready && !rendered_image_contains_ground_truth;
             pending_split_view.left.spatial_filter = filter_reconstructed_panels;
             pending_split_view.right.spatial_filter = filter_reconstructed_panels;
-            pending_split_view.coordinate_extent = render_size;
+            // Keep reference sampling stable: rounding the letterbox at the
+            // reduced scene resolution changes its size after presentation scaling.
+            pending_split_view.coordinate_extent =
+                rendered_image_contains_ground_truth ? gt_comparison_size : render_size;
             if (environmentBackgroundUsesTransparentViewerCompositing(frame_settings)) {
                 const bool independent = splitViewUsesIndependentPanels(frame_settings.split_view_mode);
                 const auto panel_environment = [&](const Viewport& viewport, const VulkanSplitViewPanel& panel) {
@@ -4786,7 +4789,7 @@ namespace lfs::vis {
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
                         }
-                        // content_rect is authored in coordinate_extent (render_size)
+                        // content_rect is authored in coordinate_extent
                         // space; the capture tensor is current_size. Match
                         // recordScenePass: per-edge rounding into output pixels.
                         // Capture has no on-screen viewport offset.
