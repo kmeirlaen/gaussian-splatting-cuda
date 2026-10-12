@@ -2964,15 +2964,9 @@ NB_MODULE(lichtfeld, m) {
                 lfs::vis::InputController::cameraNavigationModeName(*parsed));
         },
         nb::arg("mode"), "Set the active camera navigation mode");
-    m.def("get_new_project_navigation_up_axis", [] {
-        return lfs::vis::UserPreferences::instance().newProjectNavigationUpAxis();
-    }, "Get the navigation vertical used only for new projects");
-    m.def("get_new_project_align_grid", [] {
-        return lfs::vis::UserPreferences::instance().alignNewProjectGrid();
-    }, "Get whether new projects start with a grid perpendicular to their navigation vertical");
-    m.def("set_new_project_navigation_defaults", [](const std::string& axis, bool align_grid) {
-        lfs::vis::UserPreferences::instance().setNewProjectNavigation(axis, align_grid);
-    }, nb::arg("axis"), nb::arg("align_grid"), "Set new-project defaults without modifying the current project");
+    m.def("get_new_project_navigation_up_axis", [] { return lfs::vis::UserPreferences::instance().newProjectNavigationUpAxis(); }, "Get the navigation vertical used only for new projects");
+    m.def("get_new_project_align_grid", [] { return lfs::vis::UserPreferences::instance().alignNewProjectGrid(); }, "Get whether new projects start with a grid perpendicular to their navigation vertical");
+    m.def("set_new_project_navigation_defaults", [](const std::string& axis, bool align_grid) { lfs::vis::UserPreferences::instance().setNewProjectNavigation(axis, align_grid); }, nb::arg("axis"), nb::arg("align_grid"), "Set new-project defaults without modifying the current project");
     m.def(
         "get_navigation_up_axis", []() -> std::string {
             const auto* controller = lfs::vis::InputController::instance();
@@ -2988,8 +2982,7 @@ NB_MODULE(lichtfeld, m) {
             if (auto* controller = lfs::vis::InputController::instance())
                 controller->setNavigationUpAxis(*parsed, align_grid);
         },
-        nb::arg("axis"), nb::arg("align_grid") = false,
-        "Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids");
+        nb::arg("axis"), nb::arg("align_grid") = false, "Set the project navigation vertical without transforming scene data or camera poses; optionally align both panel grids");
     m.def(
         "get_camera_view_snap_enabled", []() -> bool {
             const auto* controller = lfs::vis::InputController::instance();
