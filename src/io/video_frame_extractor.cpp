@@ -1580,7 +1580,8 @@ namespace lfs::io {
                         throw std::runtime_error("Output frame number exceeds supported limits");
                     std::string ext = params.format == ImageFormat::PNG ? ".png" : ".jpg";
                     return params.output_dir / (formatFrameFilenameStem(
-                                                   params.filename_pattern, static_cast<int>(output_frame)) + ext);
+                                                    params.filename_pattern, static_cast<int>(output_frame)) +
+                                                ext);
                 };
 
                 const auto source_frame_for_time = [&](const double frame_time) {
