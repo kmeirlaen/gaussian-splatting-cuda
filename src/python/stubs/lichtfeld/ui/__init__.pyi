@@ -208,13 +208,13 @@ class Theme:
 def theme() -> Theme:
     """Get the current theme"""
 
-def set_theme_vignette_enabled(arg: bool, /) -> None:
+def set_theme_vignette_enabled(enabled: bool, persist: bool = True) -> None:
     """Set theme vignette enabled"""
 
-def set_theme_vignette_intensity(arg: float, /) -> None:
+def set_theme_vignette_intensity(intensity: float, persist: bool = True) -> None:
     """Set theme vignette intensity"""
 
-def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:
+def set_theme_vignette_style(intensity: float, radius: float, softness: float, persist: bool = True) -> None:
     """Set vignette intensity, radius, and softness"""
 
 def remember_camera_navigation() -> bool:
@@ -2738,6 +2738,26 @@ def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
+def get_rendering_defaults_json() -> str:
+    """
+    Get user defaults for new projects; project VIEW values are independent overrides.
+    """
+
+def set_rendering_defaults_json(serialized: str) -> None:
+    """
+    Validate and persist rendering defaults without changing the current project.
+    """
+
+def capture_rendering_defaults() -> None:
+    """
+    Save current project overlay style and LOD cache limits as defaults for new projects.
+    """
+
+def apply_rendering_defaults() -> None:
+    """
+    Explicitly apply user defaults to the current project; other rendering fields are preserved.
+    """
+
 def get_project_manager_preferences() -> dict:
     """
     Get Project Manager preferences from the canonical user preferences store
@@ -2976,20 +2996,3 @@ def unregister_property_group(group_id: str) -> None:
 
 def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
-
-
-def get_rendering_defaults_json() -> str:
-    """Validated overlay style and LOD cache defaults for new projects."""
-    ...
-
-def set_rendering_defaults_json(serialized: str) -> None:
-    """Persist a validated patch without modifying the current project."""
-    ...
-
-def capture_rendering_defaults() -> None:
-    """Save the current project's overlay style and LOD cache limits as defaults."""
-    ...
-
-def apply_rendering_defaults() -> None:
-    """Explicitly apply user defaults to the current project's style and cache limits."""
-    ...
