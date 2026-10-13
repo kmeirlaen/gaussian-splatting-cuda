@@ -1531,7 +1531,8 @@ namespace lfs::gui {
                         if (overwrite_overlay_el_)
                             overwrite_overlay_el_->SetClass("hidden", true);
                         setExtractionError(std::format("Failed to remove {}: {}",
-                                                       lfs::core::path_to_utf8(path), ec.message()), false);
+                                                       lfs::core::path_to_utf8(path), ec.message()),
+                                           false);
                         controls_dirty_ = true;
                         markContentDirty();
                         return;
