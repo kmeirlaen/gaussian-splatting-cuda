@@ -209,7 +209,21 @@
     "help.about": "LichtFeld Studioについて",
     "view.performance_hud": "パフォーマンス HUD",
     "edit.preferences": "環境設定...",
-    "view.debug_info": "デバッグ情報..."
+    "view.debug_info": "デバッグ情報...",
+    "file.browse_projects": "プロジェクトを参照…",
+    "file.export_menu": "エクスポート",
+    "file.export_scene": "シーン…",
+    "file.open_gallery": "ギャラリーを開く",
+    "file.project_maintenance": "プロジェクトのメンテナンス",
+    "view.split_view": "分割表示",
+    "file.splat_file": "スプラットファイル…",
+    "file.ssog_folder": "SSOGフォルダー…",
+    "file.configuration": "設定…",
+    "file.dataset": "データセット…",
+    "file.mesh": "メッシュ…",
+    "file.checkpoint": "チェックポイント…",
+    "tools.developer": "開発者",
+    "tools.system_console": "システムコンソール"
   },
   "window": {
     "export": "エクスポート",

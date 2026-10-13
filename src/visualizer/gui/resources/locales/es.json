@@ -209,7 +209,21 @@
     "help.about": "Acerca de LichtFeld Studio",
     "view.performance_hud": "HUD de rendimiento",
     "edit.preferences": "Preferencias...",
-    "view.debug_info": "Información de Depuración..."
+    "view.debug_info": "Información de Depuración...",
+    "file.browse_projects": "Explorar proyectos…",
+    "file.export_menu": "Exportar",
+    "file.export_scene": "Escena…",
+    "file.open_gallery": "Abrir galería",
+    "file.project_maintenance": "Mantenimiento del proyecto",
+    "view.split_view": "Vista dividida",
+    "file.splat_file": "Archivo splat…",
+    "file.ssog_folder": "Carpeta SSOG…",
+    "file.configuration": "Configuración…",
+    "file.dataset": "Conjunto de datos…",
+    "file.mesh": "Malla…",
+    "file.checkpoint": "Punto de control…",
+    "tools.developer": "Desarrollador",
+    "tools.system_console": "Consola del sistema"
   },
   "window": {
     "export": "Exportar",
