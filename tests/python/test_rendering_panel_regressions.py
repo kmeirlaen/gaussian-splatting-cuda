@@ -127,11 +127,17 @@ def test_rendering_panel_section_headers_use_literals_without_missing_keys(rende
 
     panel.on_bind_model(_BindingContextStub(model))
 
-    assert model.func_bindings["label_hdr_viewport"]() == "Viewport"
+    assert model.func_bindings["label_hdr_viewport"]() == "Viewport & Guides"
     assert model.func_bindings["label_hdr_camera"]() == "Camera & Projection"
-    assert model.func_bindings["label_hdr_simplify"]() == "Simplify Localized"
     assert model.func_bindings["label_hdr_selection"]() == "Selection & Overlays"
-    assert model.func_bindings["label_hdr_post_process"]() == "Post Processing"
+    assert model.func_bindings["label_hdr_post_process"]() == "Color & Appearance"
+    assert "simplify_target" not in model.bindings
+    sys.modules.pop("lfs_plugins.splat_simplify_panel", None)
+    tool_module = import_module("lfs_plugins.splat_simplify_panel")
+    tool = tool_module.SplatSimplifyPanel()
+    model = _BindingModelStub()
+    tool.on_bind_model(_BindingContextStub(model))
+    assert model.func_bindings["panel_label"]() == "Simplify Localized"
     assert model.func_bindings["label_simplify_source"]() == "Input Source:"
     assert model.func_bindings["label_simplify_select_source"]() == "Pick a splat"
     assert model.func_bindings["label_simplify_target"]() == "Goal:"
@@ -155,12 +161,12 @@ def test_rendering_panel_binds_theme_vignette_controls(rendering_panel_module):
     set_calls = {"enabled": [], "intensity": []}
     module.lf.ui.theme = lambda: theme_state
     module.lf.ui.set_theme_vignette_enabled = lambda value: set_calls["enabled"].append(value)
-    module.lf.ui.set_theme_vignette_intensity = lambda value: set_calls["intensity"].append(value)
+    module.lf.ui.set_theme_vignette_style = lambda intensity, radius, softness: set_calls["intensity"].append(intensity)
 
     model = _BindingModelStub()
-    panel = module.RenderingPanel()
-
-    panel.on_bind_model(_BindingContextStub(model))
+    sys.modules.pop("lfs_plugins.rendering_defaults", None)
+    defaults = import_module("lfs_plugins.rendering_defaults")
+    defaults.RenderingDefaultsSection().bind(model)
 
     enabled_getter, enabled_setter = model.bindings["theme_vignette_enabled"]
     intensity_getter, intensity_setter = model.bindings["theme_vignette_intensity"]
@@ -421,7 +427,7 @@ def test_rendering_panel_custom_environment_map_appears_in_dropdown(rendering_pa
 
 def test_rendering_rml_exposes_simplify_tooltips_and_locale_labels():
     project_root = Path(__file__).parent.parent.parent
-    rendering_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "rendering.rml"
+    rendering_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "splat_simplify.rml"
     content = rendering_rml.read_text()
 
     assert 'data-tooltip="tooltip.simplify_source"' in content
@@ -430,13 +436,14 @@ def test_rendering_rml_exposes_simplify_tooltips_and_locale_labels():
     assert 'data-tooltip="tooltip.simplify_opacity_prune"' in content
     assert 'data-tooltip="tooltip.simplify_output"' in content
     assert 'data-tooltip="tooltip.simplify_apply"' in content
-    assert 'data-tooltip="tooltip.simplify_cancel"' in content
-    custom_option_start = content.find('<option value="__custom__"')
+    assert 'data-attr-data-tooltip="simplify_cancel_tooltip"' in content
+    rendering_content = rendering_rml.with_name("rendering.rml").read_text(encoding="utf-8")
+    custom_option_start = rendering_content.find('<option value="__custom__"')
     assert custom_option_start >= 0
-    custom_option_end = content.find("</option>", custom_option_start)
-    custom_option = content[custom_option_start:custom_option_end]
+    custom_option_end = rendering_content.find("</option>", custom_option_start)
+    custom_option = rendering_content[custom_option_start:custom_option_end]
     assert 'data-if="environment_map_has_custom_option"' in custom_option
-    assert "{{environment_map_last_custom_display_name}}" in content
+    assert "{{environment_map_last_custom_display_name}}" in rendering_content
     assert "{{label_simplify_source}}" in content
     assert "{{label_simplify_select_source}}" in content
     assert "{{label_simplify_target}}" in content
@@ -524,7 +531,19 @@ def test_project_navigation_vertical_does_not_change_global_defaults(rendering_p
     assert calls[-1] == ("data_z", True)
 
 
-def test_render_scale_marks_session_only_when_scrub_commits(rendering_panel_module):
+@pytest.mark.parametrize("prop,value", [
+    ("render_scale", 0.7),
+    ("environment_exposure", 1.5),
+    ("environment_rotation_degrees", 45.0),
+    ("color_exposure", 1.2),
+    ("grid_opacity", 0.3),
+    ("axes_size", 3.0),
+    ("camera_frustum_scale", 0.5),
+    ("lod_render_scale", 0.8),
+    ("lod_pool_vram_fraction", 0.3),
+    ("ppisp_vignette_strength", 0.4),
+])
+def test_moved_rendering_controls_mark_session_only_when_scrub_commits(rendering_panel_module, prop, value):
     module = rendering_panel_module
     commits = []
     writes = []
@@ -534,11 +553,11 @@ def test_render_scale_marks_session_only_when_scrub_commits(rendering_panel_modu
     )
     panel = module.RenderingPanel()
 
-    panel._set_scrub_value("render_scale", 0.7)
-    assert writes == [("render_scale", 0.7)]
+    panel._set_scrub_value(prop, value)
+    assert writes == [(prop, value)]
     assert commits == []
 
-    panel._commit_render_setting("render_scale", 0.7)
+    panel._scrub_fields._commit_value(prop, value)
     assert commits == ["VIEW"]
 
 
