@@ -1568,7 +1568,7 @@ namespace lfs::gui {
                         if (overwrite_overlay_el_)
                             overwrite_overlay_el_->SetClass("hidden", true);
                         setExtractionError(LOCF(VideoExtractor::OVERWRITE_DELETE_ERROR,
-                                                 lfs::core::path_to_utf8(path), ec.message()),
+                                                lfs::core::path_to_utf8(path), ec.message()),
                                            false);
                         pending_has_frame_conflicts_ = false;
                         pending_metadata_will_be_replaced_ = false;
@@ -1926,9 +1926,9 @@ namespace lfs::gui {
                     return lfs::core::path_to_utf8(path.filename()) != "extraction_metadata.json";
                 });
             pending_metadata_will_be_replaced_ = params.generate_metadata && std::any_of(
-                existing_files.begin(), existing_files.end(), [](const std::filesystem::path& path) {
-                    return lfs::core::path_to_utf8(path.filename()) == "extraction_metadata.json";
-                });
+                                                                                 existing_files.begin(), existing_files.end(), [](const std::filesystem::path& path) {
+                                                                                     return lfs::core::path_to_utf8(path.filename()) == "extraction_metadata.json";
+                                                                                 });
             syncOverwritePrompt();
             if (overwrite_overlay_el_)
                 overwrite_overlay_el_->SetClass("hidden", false);
