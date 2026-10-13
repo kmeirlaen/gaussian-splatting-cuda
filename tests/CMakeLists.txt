@@ -685,6 +685,10 @@ set(TEST_FILES
     test_navigation_up_axis.cpp
     test_input_controller_focus.cpp
     test_input_layout_chords.cpp
+    test_keymap_layout_contract.cpp
+    test_keymap_profile_io.cpp
+    test_keymap_upgrade.cpp
+    test_keymap_default_contract.cpp
     test_ordered_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
@@ -983,6 +987,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     vterm
     GTest::gtest
     nanobind-static
+    ZLIB::ZLIB
     ${TORCH_LIBRARIES}
     OpenMeshCore
     assimp::assimp
