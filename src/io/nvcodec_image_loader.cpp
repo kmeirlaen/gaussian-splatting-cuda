@@ -1410,7 +1410,7 @@ namespace lfs::io {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1];
                 if (format == DecodeFormat::Mask) {
-                    output_tensor = lfs::core::cuda::normalize_mask_bytes(image_tensor_aux).reshape({H, W});
+                    output_tensor = lfs::core::cuda::normalize_mask_bytes(image_tensor_aux).reshape(TensorShape({H, W}));
                 } else {
                     output_tensor = Tensor::empty(TensorShape({H, W}), Device::CUDA, DataType::Float32);
                     cuda::launch_uint8_hw_to_float32_hw(
