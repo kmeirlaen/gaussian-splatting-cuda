@@ -689,6 +689,8 @@ namespace lfs::vis {
             mods |= input::KEYMOD_SHIFT;
         if (m & SDL_KMOD_ALT)
             mods |= input::KEYMOD_ALT;
+        if (m & SDL_KMOD_MODE)
+            mods |= input::KEYMOD_ALTGR;
         return mods;
     }
 
@@ -1379,10 +1381,19 @@ namespace lfs::vis {
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
+        const auto park_camera_drag_anchor = [&]() {
+            if (drag_mode_ != DragMode::Pan && drag_mode_ != DragMode::Orbit &&
+                drag_mode_ != DragMode::Rotate)
+                return;
+            auto* const target = drag_viewport_ ? drag_viewport_ : &viewport_;
+            const float now = static_cast<float>(SDL_GetTicks() / 1000.0f);
+            target->camera.followDragPointer(glm::vec2(static_cast<float>(x), static_cast<float>(y)), now);
+        };
 
         if (gui && gui->isCapturingInput()) {
             gui->captureMouseMove(x, y);
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1390,6 +1401,7 @@ namespace lfs::vis {
         if (gui && gui->gizmo().isPieMenuOpen()) {
             gui->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1419,6 +1431,7 @@ namespace lfs::vis {
         if (!selection_pointer_blocked &&
             dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1452,6 +1465,7 @@ namespace lfs::vis {
 
             ui::SplitPositionChanged{.position = new_pos}.emit();
             last_mouse_pos_ = {x, y};
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1562,6 +1576,7 @@ namespace lfs::vis {
 
         // Block camera dragging if a transform gizmo is being used
         if (isTransformGizmoUsing()) {
+            park_camera_drag_anchor();
             return;
         }
 
@@ -1731,10 +1746,16 @@ namespace lfs::vis {
             physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
             physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
             physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
+        // The same press is movement, so its printed character must not arm a
+        // scroll chord. Release drops nothing that this press did not insert.
+        const bool movement_owns_logical_key =
+            physicalMovementConsumesLogicalKey(physical_key, logical_key, mods);
+        const bool altgr_held = (mods & input::KEYMOD_ALTGR) != 0;
         if (wants_text_input && !bindings_.isCapturing()) {
             // Text keys must not become viewport mouse/scroll chords either.
             held_keys_.clear();
-        } else if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+        } else if (!altgr_held && !movement_owns_logical_key && !is_modifier_key &&
+                   logical_key != input::KEY_UNKNOWN) {
             if (action == input::ACTION_RELEASE) {
                 std::erase(held_keys_, logical_key);
             } else if (!std::ranges::contains(held_keys_, logical_key)) {
@@ -1749,6 +1770,12 @@ namespace lfs::vis {
             bindings_.captureKey(physical_key, logical_key, mods);
             return;
         }
+
+        // AltGr produces layout characters for text input, but this build cannot
+        // represent that modifier in saved shortcuts. Never dispatch the bare
+        // logical key or arm a physical movement binding for the same event.
+        if (altgr_held)
+            return;
 
         const auto tool_mode = getCurrentToolMode();
         auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
@@ -1785,6 +1812,14 @@ namespace lfs::vis {
 
         if (gui_consumed && !is_mcp_runtime_action && !owned_release)
             return;
+
+        // Physical movement wins over a different logical shortcut. The printed
+        // character is not dispatched. Press and repeat arm the key; release
+        // clears it. Ctrl/Alt/Super chords stay on the shortcut path.
+        if (physicalMovementConsumesLogicalKey(physical_key, logical_key, mods)) {
+            armPhysicalMovementKey(physical_key, action != input::ACTION_RELEASE);
+            return;
+        }
 
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
@@ -2208,21 +2243,37 @@ namespace lfs::vis {
         if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
             return;
 
+        armPhysicalMovementKey(physical_key, action != input::ACTION_RELEASE);
+    }
+
+    bool InputController::physicalMovementConsumesLogicalKey(
+        const int physical_key, const int logical_key, const int mods) const {
+        if (physical_key < 0 || physical_key == logical_key)
+            return false;
+        if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
+            return false;
+        if (!shouldCameraHandleInput() || drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
+            return false;
         const auto& mk = currentMovementKeys();
-        const bool pressed = (action != input::ACTION_RELEASE);
-        if (physical_key == mk.forward) {
+        return physical_key == mk.forward || physical_key == mk.backward ||
+               physical_key == mk.left || physical_key == mk.right ||
+               physical_key == mk.up || physical_key == mk.down;
+    }
+
+    void InputController::armPhysicalMovementKey(const int physical_key, const bool pressed) {
+        const auto& mk = currentMovementKeys();
+        if (physical_key == mk.forward)
             keys_movement_[0] = pressed;
-        } else if (physical_key == mk.left) {
+        else if (physical_key == mk.left)
             keys_movement_[1] = pressed;
-        } else if (physical_key == mk.backward) {
+        else if (physical_key == mk.backward)
             keys_movement_[2] = pressed;
-        } else if (physical_key == mk.right) {
+        else if (physical_key == mk.right)
             keys_movement_[3] = pressed;
-        } else if (physical_key == mk.down) {
+        else if (physical_key == mk.down)
             keys_movement_[5] = pressed;
-        } else if (physical_key == mk.up) {
+        else if (physical_key == mk.up)
             keys_movement_[4] = pressed;
-        }
     }
 
     void InputController::decayHeldDragMomentum() {
