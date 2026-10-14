@@ -2880,7 +2880,8 @@ contract["check_selection_submode_follows_native_mode"](lf)
             }));
             auto saved = ProjectDocument::open(path);
             ASSERT_TRUE(saved);
-            EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), nlohmann::json("legacy_y"));
+            // An unknown up axis the user did not edit is written back unchanged.
+            EXPECT_EQ(saved->view().dom().get_json("navigation.up_axis"), unknown);
             EXPECT_EQ(saved->view().dom().get_json("navigation.future_option"), nlohmann::json("preserved"));
         }
     }
@@ -9019,7 +9020,9 @@ contract["check_selection_submode_follows_native_mode"](lf)
             params.no_download = true;
             const auto rejected = manager->loadDataset(dataset, params);
             ASSERT_FALSE(rejected);
-            EXPECT_NE(rejected.error().find("Transforms"), std::string::npos);
+            // A bad focal length skips every camera; a bad field of view rejects the file.
+            const auto* const reason = invalid.contains("fl_y") ? "valid focal lengths" : "Transforms";
+            EXPECT_NE(rejected.error().find(reason), std::string::npos);
             EXPECT_EQ(viewer.getScene().getNode("First"), first);
             EXPECT_EQ(viewer.getScene().getNode("Second"), second);
             EXPECT_EQ(manager->getSelectedNodeName(), "First");
