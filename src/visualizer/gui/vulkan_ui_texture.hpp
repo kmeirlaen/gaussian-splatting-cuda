@@ -27,11 +27,16 @@ namespace lfs::vis::gui {
     public:
         explicit ScopedVulkanUiTextureContext(VulkanContext* target)
             : previous_(getVulkanUiTextureContext()), changed_(target && target != previous_) {
-            if (changed_) setVulkanUiTextureContext(target);
+            if (changed_)
+                setVulkanUiTextureContext(target);
         }
-        ~ScopedVulkanUiTextureContext() { if (changed_) setVulkanUiTextureContext(previous_); }
+        ~ScopedVulkanUiTextureContext() {
+            if (changed_)
+                setVulkanUiTextureContext(previous_);
+        }
         ScopedVulkanUiTextureContext(const ScopedVulkanUiTextureContext&) = delete;
         ScopedVulkanUiTextureContext& operator=(const ScopedVulkanUiTextureContext&) = delete;
+
     private:
         VulkanContext* previous_;
         bool changed_;

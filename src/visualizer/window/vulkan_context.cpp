@@ -3043,7 +3043,7 @@ namespace lfs::vis {
         geometry_shader_enabled_ = features2.features.geometryShader == VK_TRUE;
         if (owns_scene_runtimes_)
             lfs::rendering::set_graphics_queue_external_sync(
-            &graphics_queue_mutex_, graphics_queue_, present_queue_, &device_queue_access_mutex_);
+                &graphics_queue_mutex_, graphics_queue_, present_queue_, &device_queue_access_mutex_);
 
         VkPhysicalDeviceMaintenance3Properties maint3{};
         maint3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
@@ -4694,7 +4694,8 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateSwapchainKHR failed: {} (extent={}x{}, transparent={}, present_scaling={}, old_swapchain={:#x})",
                                             vkResultToString(result), extent.width, extent.height,
-                                            transparent_surface_, use_present_scaling, vkHandleValue(old_swapchain)), result);
+                                            transparent_surface_, use_present_scaling, vkHandleValue(old_swapchain)),
+                                result);
         }
         setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "swapchain.main");
 
