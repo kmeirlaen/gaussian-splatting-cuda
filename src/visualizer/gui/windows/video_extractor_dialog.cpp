@@ -1148,9 +1148,9 @@ namespace lfs::gui {
         const int total = static_cast<int>(batch_items_.size());
         const std::string summary = probing_count > 0
                                         ? LOCF("video_extractor.batch_reading", probing_count)
-                                        : total == 0
-                                              ? std::string{}
-                                              : LOCF("video_extractor.batch_summary", total, completed, failed);
+                                    : total == 0
+                                        ? std::string{}
+                                        : LOCF("video_extractor.batch_summary", total, completed, failed);
         if (setCachedText(batch_summary_el_, summary) || changed)
             markContentDirty();
     }
@@ -1869,7 +1869,7 @@ namespace lfs::gui {
         changed |= setCachedDisabled(browse_video_el_, extracting || pending_params_set_);
         changed |= setCachedDisabled(remove_video_el_, extracting || pending_params_set_ || !selected_batch_item_);
         changed |= setCachedDisabled(clear_videos_el_, extracting || pending_params_set_ || probing_batch ||
-                                                          batch_items_.empty());
+                                                           batch_items_.empty());
         changed |= setCachedDisabled(browse_output_el_, extracting || pending_params_set_);
 
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
