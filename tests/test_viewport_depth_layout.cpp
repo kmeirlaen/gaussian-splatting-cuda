@@ -52,6 +52,11 @@ namespace lfs::vis::gui {
 } // namespace lfs::vis::gui
 
 namespace {
+    // RmlUi parses a document source as a URL, so a Windows drive colon takes its '|' form.
+    std::string rmlSourceUrl(const std::filesystem::path& path) {
+        return Rml::StringUtilities::Replace(path.generic_string(), ':', '|');
+    }
+
     class DepthLayoutRenderer final : public Rml::RenderInterface {
     public:
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
@@ -113,6 +118,8 @@ namespace {
             if (Rml::GetContext("viewport_empty_state"))
                 Rml::RemoveContext("viewport_empty_state");
             Rml::RemoveContext("viewport_depth_layout");
+            // renderer_ dies with the fixture, so RmlUi must drop its render manager first.
+            Rml::ReleaseRenderManagers();
         }
 
         void layout(bool split, float scale = 1.0f, float divider = 0.5f, int width = 920, int height = 840) {
@@ -266,7 +273,7 @@ namespace {
         real_context_ = Rml::CreateContext("viewport_depth_layout_real", {1280, 720}, &renderer_);
         ASSERT_NE(real_context_, nullptr);
         auto* const real_document = real_context_->LoadDocumentFromMemory(
-            markup, path.string());
+            markup, rmlSourceUrl(path));
         ASSERT_NE(real_document, nullptr);
         real_document->Show();
         for (const char* inactive : {"selection_depth_mode_active", "transform_show_rotate", "transform_show_scale"})
@@ -438,7 +445,7 @@ namespace {
         const auto body = markup.find(opener);
         ASSERT_NE(body, std::string::npos);
         markup.replace(body, opener.size(), "<body id=\"overlay-body\" data-model=\"test_empty\">");
-        auto* const bound = empty_context->LoadDocumentFromMemory(markup, path.string());
+        auto* const bound = empty_context->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
         ASSERT_NE(bound, nullptr);
         bound->Show();
         empty_context->Update();
