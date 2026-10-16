@@ -4,8 +4,8 @@
 
 #include "core/parameters.hpp"
 #include "core/file_extensions.hpp"
-#include "core/native_fs.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"

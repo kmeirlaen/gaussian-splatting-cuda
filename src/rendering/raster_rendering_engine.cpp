@@ -4,10 +4,10 @@
 
 #include "core/camera.hpp"
 #include "core/executable_path.hpp"
-#include "core/native_fs.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"

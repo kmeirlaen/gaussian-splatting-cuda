@@ -4,8 +4,8 @@
 
 #include "gui/layout_state.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/native_fs.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/persisted_settings.hpp"
 #include "core/user_paths.hpp"

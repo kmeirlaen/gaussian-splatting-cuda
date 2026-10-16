@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/native_fs.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_exr.hpp"
+#include "core/native_fs.hpp"
 #include <Imath/half.h>
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfDeepScanLineOutputFile.h>

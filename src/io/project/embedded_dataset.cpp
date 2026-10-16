@@ -272,7 +272,7 @@ namespace lfs::io::project {
                 "The caller requested cancellation");
         }
         std::ofstream complete_marker(lfs::core::native_fs::native_path(marker),
-                                                std::ios::binary | std::ios::trunc);
+                                      std::ios::binary | std::ios::trunc);
         if (!complete_marker) {
             return embed_error(
                 lfs::ErrorCode::PermissionDenied,

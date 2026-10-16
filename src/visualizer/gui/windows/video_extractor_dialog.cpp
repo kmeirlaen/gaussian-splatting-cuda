@@ -4,8 +4,8 @@
 
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/native_fs.hpp"
 #include "core/include/core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/number_format.hpp"
 #include "core/path_utils.hpp"
 #include "gui/panel_height_mode.hpp"

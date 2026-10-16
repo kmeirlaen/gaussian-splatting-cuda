@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/native_fs.hpp"
 #include "core/image_codecs.hpp"
+#include "core/native_fs.hpp"
 #include "long_path_test_support.hpp"
 #include <chrono>
 #include <cstring>

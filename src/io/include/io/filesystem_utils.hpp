@@ -155,7 +155,7 @@ namespace lfs::io {
 
     // Find file in multiple locations (case-insensitive)
     inline std::filesystem::path find_file_in_paths(const std::vector<std::filesystem::path>& search_paths,
-                                       const std::string& filename) {
+                                                    const std::string& filename) {
         for (const auto& dir : search_paths) {
             if (auto found = find_file_ci(dir, filename); !found.empty()) {
                 return found;
@@ -199,8 +199,8 @@ namespace lfs::io {
             size_t scanned_entries = 0;
             const auto traversal_root = lfs::core::native_fs::traversal_path(root_path);
             for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(traversal_root),
-                     std::filesystem::directory_options::skip_permission_denied,
-                     ec),
+                                                                  std::filesystem::directory_options::skip_permission_denied,
+                                                                  ec),
                  end;
                  !ec && it != end;
                  it.increment(ec)) {
@@ -622,8 +622,8 @@ namespace lfs::io {
 
         if (recursive) {
             for (std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(root_path),
-                     std::filesystem::directory_options::skip_permission_denied,
-                     ec),
+                                                                  std::filesystem::directory_options::skip_permission_denied,
+                                                                  ec),
                  end;
                  !ec && it != end;
                  it.increment(ec)) {

@@ -94,8 +94,8 @@ namespace lfs::io::project {
         std::optional<std::filesystem::path> first;
         std::string first_key;
         std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(images_dir),
-            std::filesystem::directory_options::skip_permission_denied,
-            ec);
+                                               std::filesystem::directory_options::skip_permission_denied,
+                                               ec);
         if (ec) {
             return std::nullopt;
         }

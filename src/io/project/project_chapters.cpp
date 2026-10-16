@@ -1046,7 +1046,7 @@ namespace lfs::io::project {
         }
         const FingerprintKind observed_kind =
             lfs::core::native_fs::is_regular_file(status) ? FingerprintKind::File
-                                                   : FingerprintKind::Directory;
+                                                          : FingerprintKind::Directory;
         if ((!lfs::core::native_fs::is_regular_file(status) &&
              !lfs::core::native_fs::is_directory(status)) ||
             observed_kind != expected.kind) {

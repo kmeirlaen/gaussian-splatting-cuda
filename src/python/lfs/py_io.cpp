@@ -16,9 +16,9 @@
 #include <nanobind/stl/vector.h>
 
 #include "core/camera.hpp"
-#include "core/native_fs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
@@ -56,7 +56,7 @@ namespace lfs::python {
 #endif
         }
     };
-}
+} // namespace lfs::python
 
 namespace nanobind::detail {
     template <>
@@ -82,7 +82,7 @@ namespace nanobind::detail {
             return Base::from_cpp(path, policy, cleanup);
         }
     };
-}
+} // namespace nanobind::detail
 
 namespace lfs::python {
 
@@ -365,7 +365,7 @@ namespace lfs::python {
     void register_io(nb::module_& m) {
         namespace project = io::project;
         m.def("native_path", [](const std::filesystem::path& path, const bool force_extended) { return core::path_to_utf8(core::native_fs::native_path(path, force_extended)); }, nb::arg("path"), nb::arg("force_extended") = false, "Return a filename for filesystem I/O, including extended Windows paths. "
-                                                                                                                                                                                                                               "Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.");
+                                                                                                                                                                                                                                      "Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.");
 
         nb::class_<project::Hash128>(m, "Hash128")
             .def(nb::init<>())

@@ -955,7 +955,8 @@ namespace lfs::io::project {
     lfs::Result<std::filesystem::path>
     quarantine_project_artifact(const std::filesystem::path& source) {
         const auto unix_seconds = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
+                                      std::chrono::system_clock::now().time_since_epoch())
+                                      .count();
         return detail::quarantine_project_artifact_with_suffix(
             source, std::format(".corrupt-{}", unix_seconds));
     }

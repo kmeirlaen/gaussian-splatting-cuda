@@ -2925,7 +2925,7 @@ namespace lfs::io::project {
             lfs::core::native_fs::remove(destination, ignored);
             lfs::core::native_fs::rename(temporary, destination);
             lfs::core::native_fs::permissions(destination, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                                       std::filesystem::perm_options::replace);
+                                              std::filesystem::perm_options::replace);
             return destination;
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): return the failure as a typed embedded-asset error after cleanup.

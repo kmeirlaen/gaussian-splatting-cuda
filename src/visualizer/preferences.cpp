@@ -248,8 +248,8 @@ namespace lfs::vis {
 
             constexpr int max_depth = 4;
             std::filesystem::recursive_directory_iterator iterator(lfs::core::native_fs::traversal_path(directory),
-                std::filesystem::directory_options::skip_permission_denied,
-                error);
+                                                                   std::filesystem::directory_options::skip_permission_denied,
+                                                                   error);
             const std::filesystem::recursive_directory_iterator end;
             while (iterator != end) {
                 if (error) {
