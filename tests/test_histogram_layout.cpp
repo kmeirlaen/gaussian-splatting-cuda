@@ -150,8 +150,8 @@ namespace {
                                                std::pair{"y-bin-input", "scrub-compare-y-bin-count"}}) {
                 auto* host = document_->GetElementById(id)->GetParentNode();
                 host->SetInnerRML("<div id=\"" + std::string(scrub_id) + "\" class=\"scrub-field\"><div class=\"scrub-field-fill\"></div>"
-                                  "<span class=\"scrub-field-display\">56</span>"
-                                  "<input class=\"scrub-field-input\" type=\"text\" value=\"56\"/></div>");
+                                                                         "<span class=\"scrub-field-display\">56</span>"
+                                                                         "<input class=\"scrub-field-input\" type=\"text\" value=\"56\"/></div>");
             }
             document_->Show();
         }
@@ -303,7 +303,7 @@ namespace {
                 context_->Update();
             };
             const std::vector<const char*> ids = compare ? std::vector<const char*>{"scrub-compare-x-bin-count", "scrub-compare-y-bin-count"}
-                                                        : std::vector<const char*>{"scrub-histogram-bin-count"};
+                                                         : std::vector<const char*>{"scrub-histogram-bin-count"};
             for (const auto* id : ids) {
                 auto* field = document_->GetElementById(id);
                 ASSERT_NE(field, nullptr);
