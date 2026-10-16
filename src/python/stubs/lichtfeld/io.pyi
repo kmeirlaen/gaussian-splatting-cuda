@@ -9,6 +9,11 @@ import lichtfeld
 import lichtfeld.scene
 
 
+def native_path(path: str | os.PathLike, force_extended: bool = False) -> str:
+    """
+    Return a filename for filesystem I/O, including extended Windows paths. Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.
+    """
+
 class Hash128:
     def __init__(self) -> None: ...
 
