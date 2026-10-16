@@ -2968,7 +2968,7 @@ namespace lfs::vis {
         features2.features.geometryShader = supported_features2.features.geometryShader;
         const char* const disable_sparse_env = std::getenv("LFS_DISABLE_SPARSE_BINDING");
         const bool sparse_disabled = disable_sparse_env &&
-            (std::strcmp(disable_sparse_env, "1") == 0 || std::strcmp(disable_sparse_env, "true") == 0);
+                                     (std::strcmp(disable_sparse_env, "1") == 0 || std::strcmp(disable_sparse_env, "true") == 0);
         features2.features.sparseBinding =
             (sparse_binding_supported && graphics_queue_sparse && !sparse_disabled) ? VK_TRUE : VK_FALSE;
 
