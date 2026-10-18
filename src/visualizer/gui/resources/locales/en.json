@@ -1,4 +1,16 @@
 {
+  "preferences.drag_sh_hint": "Limits view-dependent color detail. Export uses the lower of this limit and the available SH degree.",
+  "preferences.drag_format_hint": "File format used when dragging splats out of LichtFeld.",
+  "preferences.drag_sh_limit": "Maximum SH degree",
+  "preferences.drag_blender_axes": "Blender axes",
+  "preferences.drag_axes_hint": "Converts scene coordinates to Blender’s Z-up axes. Disable to keep the original axes.",
+  "preferences.drag_default": "Drag format",
+  "preferences.drag_ply": "PLY",
+  "preferences.drag_spz": "SPZ",
+  "preferences.drag_item": "Exporting {}/{}: {}",
+  "preferences.drag_failed_item": "Could not export {}/{}: {}. No files were transferred. See the log for details.",
+  "preferences.drag_rejected_node": "Cannot export: {}. No files were transferred. See the log for details.",
+  "preferences.drag_title": "Splat transfer",
   "io.mask_decode_failed": "Failed to decode mask",
   "io.dataset_image_unreadable_one": "Dataset image '{}' cannot be read. Its camera remains in the scene, but training may fail when it is used.",
   "io.dataset_image_unreadable_many": "{} dataset images cannot be read (examples: {}). Their cameras remain in the scene, but training may fail when they are used.",
@@ -3249,5 +3261,7 @@
     "discarded": "{discarded} discarded"
   },
   "project.session.newer_settings.title": "Project settings from a newer version",
-  "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}"
+  "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}",
+  "preferences.drag_pause": "Pause training before dragging splats.",
+  "preferences.drag_failed": "Splat export failed. See the application log for details."
 }

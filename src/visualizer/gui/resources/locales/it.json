@@ -1,4 +1,16 @@
 {
+  "preferences.drag_sh_hint": "Limita il dettaglio dei colori dipendenti dalla vista. Il grado esportato è il minore tra il limite e quello disponibile.",
+  "preferences.drag_format_hint": "Formato dei file creati trascinando gli splat fuori da LichtFeld.",
+  "preferences.drag_sh_limit": "SH massimo",
+  "preferences.drag_blender_axes": "Assi Blender",
+  "preferences.drag_axes_hint": "Converte le coordinate negli assi con Z verticale di Blender. Disattiva per mantenere gli assi originali.",
+  "preferences.drag_default": "Formato drag",
+  "preferences.drag_ply": "PLY",
+  "preferences.drag_spz": "SPZ",
+  "preferences.drag_item": "Esportazione {}/{}: {}",
+  "preferences.drag_failed_item": "Impossibile esportare {}/{}: {}. Nessun file è stato trasferito. Consulta il log per i dettagli.",
+  "preferences.drag_rejected_node": "Impossibile esportare: {}. Nessun file è stato trasferito. Consulta il log per i dettagli.",
+  "preferences.drag_title": "Trasferimento splat",
   "io.mask_decode_failed": "Impossibile decodificare la maschera",
   "io.dataset_image_unreadable_one": "Impossibile leggere l’immagine '{}' del set di dati. La sua fotocamera resta nella scena, ma il suo utilizzo può interrompere l’addestramento.",
   "io.dataset_image_unreadable_many": "Impossibile leggere {} immagini del set di dati (esempi: {}). Le loro fotocamere restano nella scena, ma il loro utilizzo può interrompere l’addestramento.",
@@ -3249,5 +3261,7 @@
     "discarded": "{discarded} scartati"
   },
   "project.session.newer_settings.title": "Impostazioni del progetto da una versione più recente",
-  "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}"
+  "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}",
+  "preferences.drag_pause": "Metti in pausa l’addestramento prima di trascinare gli splat.",
+  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli."
 }

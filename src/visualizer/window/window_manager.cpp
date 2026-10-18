@@ -8,6 +8,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
+#include "gui/utils/native_file_drag.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -544,7 +546,36 @@ namespace lfs::vis {
           monitor_size_(monitor_width, monitor_height) {
     }
 
+    gui::NativeDragContext& WindowManager::nativeFileDragContext() {
+        if (!native_file_drag_)
+            native_file_drag_ = std::make_unique<gui::NativeDragContext>();
+        return *native_file_drag_;
+    }
+
+    gui::NativeDragScheduler& WindowManager::nativeDragScheduler() {
+        if (!native_drag_scheduler_)
+            native_drag_scheduler_ = std::make_unique<gui::NativeDragScheduler>();
+        return *native_drag_scheduler_;
+    }
+
+    void WindowManager::dispatchNativeDrags(std::function<bool()> frame) {
+        native_transfer_frame_ = std::move(frame);
+        if (native_drag_scheduler_)
+            native_drag_scheduler_->dispatch();
+    }
+
+    bool WindowManager::advanceNativeTransferFrame() {
+        if (!native_transfer_frame_)
+            return false;
+        auto frame = native_transfer_frame_;
+        wakeEventLoop();
+        return frame();
+    }
+
     WindowManager::~WindowManager() {
+        // Release our Wayland proxies/queue while SDL's borrowed display is
+        // still alive. One context also avoids rebinding globals on panel reload.
+        native_file_drag_.reset();
         SDL_RemoveEventWatch(watchEvent, this);
 #if defined(__linux__)
         if (g_x11_error_owner == this) {
@@ -694,6 +725,8 @@ namespace lfs::vis {
 
     bool WindowManager::init() {
         configureValidationLayerSearchPath();
+        // Preserve the initiating press when this same gesture activates us.
+        SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
         if (shouldPreferX11OnGnome()) {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
@@ -966,6 +999,10 @@ namespace lfs::vis {
     }
 
     void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
+        // A native receiver is waiting for our export. Minimized windows and
+        // renderer recovery must not turn the modal frame into an infinite wait.
+        if (native_drag_scheduler_ && native_drag_scheduler_->busy())
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 0.025) : std::optional<double>{0.025};
         frame_input_.beginFrame();
         SDL_Event event;
         if (vulkan_context_ &&
@@ -1265,6 +1302,10 @@ namespace lfs::vis {
         }
 
         case SDL_EVENT_DROP_FILE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop file: window={} data={}", event.drop.windowID,
                       event.drop.data ? event.drop.data : "(null)");
             if (!eventTargetsWindow(event, main_window_id))
@@ -1286,6 +1327,10 @@ namespace lfs::vis {
             break;
 
         case SDL_EVENT_DROP_COMPLETE:
+            if (gui::NativeDragScheduler::outgoingDragActive()) {
+                pending_drop_files_.clear();
+                break;
+            }
             LOG_DEBUG("SDL drop complete: window={} pending_files={}", event.drop.windowID,
                       pending_drop_files_.size());
             if (!eventTargetsWindow(event, main_window_id))
@@ -1445,6 +1490,8 @@ namespace lfs::vis {
     }
 
     void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {
+        if (gui::NativeDragScheduler::ownsNativeCursor())
+            return;
         if constexpr (!kUseManualBorderlessResize)
             return;
 

@@ -1,4 +1,7 @@
 {
+  "preferences.drag_sh_hint": "Beperkt kleurdetails die afhangen van de kijkrichting. De export gebruikt de laagste waarde van deze limiet en de beschikbare SH-graad.",
+  "preferences.drag_format_hint": "Bestandsformaat bij het slepen van splats uit LichtFeld.",
+  "preferences.drag_sh_limit": "Maximale SH-graad",
   "io.mask_decode_failed": "Masker kon niet worden gedecodeerd",
   "io.dataset_image_unreadable_one": "Datasetafbeelding '{}' kan niet worden gelezen. De camera blijft in de scène, maar de training kan mislukken wanneer deze afbeelding wordt gebruikt.",
   "io.dataset_image_unreadable_many": "{} datasetafbeeldingen kunnen niet worden gelezen (voorbeelden: {}). Hun camera's blijven in de scène, maar de training kan mislukken wanneer ze worden gebruikt.",
@@ -3249,5 +3252,16 @@
     "discarded": "{discarded} verwijderd"
   },
   "project.session.newer_settings.title": "Projectinstellingen van een nieuwere versie",
-  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}"
+  "project.session.newer_settings.message": "Dit project bevat instellingen die deze versie niet herkent. Standaardwaarden gebruikt voor: {}",
+  "preferences.drag_blender_axes": "Blender-assen",
+  "preferences.drag_axes_hint": "Zet coördinaten om naar Blender-assen met Z omhoog. Schakel uit om de oorspronkelijke assen te behouden.",
+  "preferences.drag_default": "Sleepformaat",
+  "preferences.drag_ply": "PLY",
+  "preferences.drag_spz": "SPZ",
+  "preferences.drag_item": "Exporteren {}/{}: {}",
+  "preferences.drag_failed_item": "Exporteren van {}/{} mislukt: {}. Er zijn geen bestanden overgedragen. Raadpleeg het logboek voor details.",
+  "preferences.drag_rejected_node": "Exporteren niet mogelijk: {}. Er zijn geen bestanden overgedragen. Raadpleeg het logboek voor details.",
+  "preferences.drag_title": "Splats overdragen",
+  "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
+  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details."
 }

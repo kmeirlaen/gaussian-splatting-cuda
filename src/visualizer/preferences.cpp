@@ -966,6 +966,33 @@ namespace lfs::vis {
         impl_->loadLocked();
         return lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false);
     }
+    void UserPreferences::setSplatDrag(const SplatDragPreferenceState& state) {
+        if (state.format != "ply" && state.format != "spz")
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["splat_drag"] = {{"format", state.format}, {"sh_degree", std::clamp(state.sh_degree, 0, 3)}, {"blender_axes", state.blender_axes}};
+        impl_->saveLocked();
+    }
+    SplatDragPreferenceState UserPreferences::splatDrag() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        SplatDragPreferenceState state;
+        const auto it = impl_->values.find("splat_drag");
+        if (it == impl_->values.end() || !it->is_object())
+            return state;
+        using lfs::core::persisted_settings::field;
+        state.format = field<std::string>(*it, "format", "ply");
+        if (state.format != "ply" && state.format != "spz")
+            state.format = "ply";
+        std::optional<int> limit;
+        if (it->contains("sh_degree"))
+            limit = field<int>(*it, "sh_degree", 3);
+        state.sh_degree = resolveSplatDragShLimit(limit, field<bool>(*it, "maximum_quality", true),
+                                                  field<int>(*it, state.format == "spz" ? "spz_sh" : "ply_sh", -1));
+        state.blender_axes = field<bool>(*it, "blender_axes", true);
+        return state;
+    }
     void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

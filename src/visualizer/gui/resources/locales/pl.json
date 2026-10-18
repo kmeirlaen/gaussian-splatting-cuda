@@ -1,4 +1,7 @@
 {
+  "preferences.drag_sh_hint": "Ogranicza szczegóły koloru zależne od kierunku patrzenia. Eksport używa mniejszej wartości z tego limitu i dostępnego stopnia SH.",
+  "preferences.drag_format_hint": "Format plików tworzonych przy przeciąganiu splatów poza LichtFeld.",
+  "preferences.drag_sh_limit": "Maksymalny stopień SH",
   "io.mask_decode_failed": "Nie udało się zdekodować maski",
   "io.dataset_image_unreadable_one": "Nie można odczytać obrazu zestawu danych '{}'. Jego kamera pozostaje w scenie, ale użycie obrazu może spowodować niepowodzenie treningu.",
   "io.dataset_image_unreadable_many": "Nie można odczytać {} obrazów zestawu danych (przykłady: {}). Ich kamery pozostają w scenie, ale użycie tych obrazów może spowodować niepowodzenie treningu.",
@@ -3249,5 +3252,16 @@
     "discarded": "Odrzucono {discarded}"
   },
   "project.session.newer_settings.title": "Ustawienia projektu z nowszej wersji",
-  "project.session.newer_settings.message": "Ten projekt zawiera ustawienia nierozpoznawane przez tę wersję. Użyto wartości domyślnych dla: {}"
+  "project.session.newer_settings.message": "Ten projekt zawiera ustawienia nierozpoznawane przez tę wersję. Użyto wartości domyślnych dla: {}",
+  "preferences.drag_blender_axes": "Osie Blendera",
+  "preferences.drag_axes_hint": "Przekształca współrzędne na osie Blendera z Z skierowaną w górę. Wyłącz, aby zachować oryginalne osie.",
+  "preferences.drag_default": "Format przeciągania",
+  "preferences.drag_ply": "PLY",
+  "preferences.drag_spz": "SPZ",
+  "preferences.drag_item": "Eksportowanie {}/{}: {}",
+  "preferences.drag_failed_item": "Nie można wyeksportować {}/{}: {}. Nie przesłano żadnych plików. Szczegóły znajdują się w dzienniku.",
+  "preferences.drag_rejected_node": "Nie można wyeksportować: {}. Nie przesłano żadnych plików. Szczegóły znajdują się w dzienniku.",
+  "preferences.drag_title": "Przesyłanie splatów",
+  "preferences.drag_pause": "Wstrzymaj trening przed przeciągnięciem splatów.",
+  "preferences.drag_failed": "Eksport splatów nie powiódł się. Szczegóły znajdują się w dzienniku aplikacji."
 }
