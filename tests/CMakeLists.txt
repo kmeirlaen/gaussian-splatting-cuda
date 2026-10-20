@@ -331,6 +331,7 @@ endif()
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_property_defaults.cpp
     test_atomic_output.cpp
     test_project_save_as_paths.cpp
     test_native_fs.cpp
@@ -632,6 +633,7 @@ set(TEST_FILES
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
     test_training_parameters.cpp
+    test_property_defaults.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
