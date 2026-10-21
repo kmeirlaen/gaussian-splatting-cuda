@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "두 번 클릭하여 기본값으로 복원: {value}",
   "main_panel.selection_outline_color": "윤곽선 색상",
   "main_panel.selection_outline_opacity": "불투명도",
   "main_panel.selection_outline_width": "두께",

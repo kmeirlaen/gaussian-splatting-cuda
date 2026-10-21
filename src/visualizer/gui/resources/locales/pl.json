@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "Kliknij dwukrotnie, aby przywrócić wartość domyślną: {value}",
   "main_panel.selection_outline_color": "Kolor obrysu",
   "main_panel.selection_outline_opacity": "Krycie",
   "main_panel.selection_outline_width": "Grubość",

@@ -1,4 +1,5 @@
 {
+  "common.reset_default_hint": "双击恢复默认值：{value}",
   "main_panel.selection_outline_color": "轮廓颜色",
   "main_panel.selection_outline_opacity": "不透明度",
   "main_panel.selection_outline_width": "粗细",
