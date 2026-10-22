@@ -9,6 +9,7 @@
 #include <RmlUi/Core/RenderInterface.h>
 
 #include "core/assert.hpp"
+#include "core/export.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
