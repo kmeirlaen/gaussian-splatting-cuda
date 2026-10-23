@@ -1025,6 +1025,7 @@ namespace lfs::training {
         fused_erank_reg_loss_ = {};
         fused_dc_reg_loss_ = {};
         fused_sh_rest_reg_loss_ = {};
+        color_variance_loss_ = {};
         cropbox_view_reject_ = {};
         cropbox_score_reject_ = {};
         cropbox_roi_rows_ = {};
@@ -6506,6 +6507,13 @@ namespace lfs::training {
                 const bool normal_supervision_started = !in_popspa && normal_supervision_active(iter);
 
                 FastGSFusedExtraGradients fused_extra_gradients;
+                FastGSColorVarianceLoss color_variance;
+                if (run_fastgs_gaussian_backward && step_params.color_variance_weight_at(iter) > 0.0f) {
+                    if (!color_variance_loss_.is_valid())
+                        color_variance_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                    color_variance_loss_.zero_();
+                    color_variance = {gt_image, color_variance_loss_, step_params.color_variance_weight_at(iter)};
+                }
                 if (fastgs_path && core::param::is_mrnf_strategy(params_.optimization.strategy) &&
                     params_.optimization.opacity_decay_rendered_only) {
                     auto support = strategy_->rendered_support_counts();
@@ -6963,6 +6971,9 @@ namespace lfs::training {
                             roi_stream);
                         roi_weight = roi_weight_map_;
                         roi_weight.sync_to_stream(lfs::core::getCurrentCUDAStream());
+                        // Color variance weights its pixels like the photometric loss.
+                        if (color_variance.weight > 0.0f)
+                            color_variance.pixel_weight = roi_weight;
                     }
 
                     current_phase = StepPhase::Loss;
@@ -8014,7 +8025,7 @@ namespace lfs::training {
                                                             iter,
                                                             fused_extra_gradients,
                                                             tile_grad_depth,
-                                                            tile_grad_normal, in_popspa);
+                                                            tile_grad_normal, in_popspa, color_variance);
                                     if (fused_extra_gradients.edge_score_out != nullptr) {
                                         strategy_->on_edge_score_accumulated(iter);
                                     }
@@ -8071,6 +8082,9 @@ namespace lfs::training {
                     // same OptBegin boundary at the start of the optimizer region.
                     PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     // Normal phase: regularization losses + optimizer steps for all components
+
+                    if (color_variance.loss.is_valid())
+                        loss_tensor_gpu = loss_tensor_gpu + color_variance.loss;
 
                     if (step_params.scale_reg_at(iter) > 0.0f) {
                         nvtxRangePush("compute_scale_reg_loss");
