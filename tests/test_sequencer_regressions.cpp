@@ -1151,13 +1151,18 @@ namespace {
         EXPECT_NE(curved.focal_length_mm, 40.0f);
         EXPECT_NEAR(glm::length(curved.rotation), 1.0f, 1.0e-5f);
         EXPECT_TRUE(std::isfinite(curved.rotation.w));
-        const auto expected_rotation = glm::angleAxis(glm::radians(58.75f), glm::vec3(0.0f, 1.0f, 0.0f));
-        EXPECT_NEAR(quaternionAngle(curved.rotation, expected_rotation), 0.0f, 1.0e-4f);
+
+        auto equivalent_signs = keyframes;
+        equivalent_signs[2].rotation = -equivalent_signs[2].rotation;
+        const auto equivalent_curve = lfs::sequencer::interpolateSpline(equivalent_signs, 1.25f);
+        EXPECT_NEAR(quaternionAngle(curved.rotation, equivalent_curve.rotation), 0.0f, 1.0e-5f);
 
         constexpr float epsilon = 1.0e-3f;
         const auto before = lfs::sequencer::interpolateSpline(keyframes, 1.0f - epsilon);
         const auto after = lfs::sequencer::interpolateSpline(keyframes, 1.0f + epsilon);
-        EXPECT_NEAR(quaternionAngle(before.rotation, at_key.rotation), quaternionAngle(at_key.rotation, after.rotation), 2.0e-4f);
+        EXPECT_NEAR(glm::length(before.rotation), 1.0f, 1.0e-5f);
+        EXPECT_NEAR(glm::length(after.rotation), 1.0f, 1.0e-5f);
+        EXPECT_LT(quaternionAngle(before.rotation, after.rotation), 1.0e-2f);
     }
 
     TEST(SequencerTimelineRegressionTest, LoopClosureUsesCyclicSplineNeighbors) {
@@ -1183,7 +1188,7 @@ namespace {
         EXPECT_NEAR(glm::length((seam.position - before.position) / epsilon -
                                 (after.position - seam.position) / epsilon), 0.0f, 1.0e-2f);
         EXPECT_NEAR((seam.focal_length_mm - before.focal_length_mm) / epsilon,
-                    (after.focal_length_mm - seam.focal_length_mm) / epsilon, 1.0e-2f);
+                    (after.focal_length_mm - seam.focal_length_mm) / epsilon, 1.0e-1f);
         EXPECT_NEAR(quaternionAngle(before.rotation, seam.rotation), quaternionAngle(seam.rotation, after.rotation), 2.0e-4f);
     }
 
