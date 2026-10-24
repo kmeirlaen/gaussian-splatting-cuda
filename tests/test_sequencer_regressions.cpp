@@ -1135,8 +1135,10 @@ namespace {
             makeKeyframe(1.0f, {1.0f, 0.0f, 0.0f}, 20.0f),
             makeKeyframe(2.0f, {3.0f, 0.0f, 0.0f}, 100.0f),
             makeKeyframe(3.0f, {4.0f, 0.0f, 0.0f}, 110.0f)};
-        for (size_t index = 0; index < keyframes.size(); ++index)
+        for (size_t index = 0; index < keyframes.size(); ++index) {
             keyframes[index].rotation = glm::angleAxis(glm::radians(15.0f + 35.0f * static_cast<float>(index)), glm::vec3(0.0f, 1.0f, 0.0f));
+            keyframes[index].easing = EasingType::LINEAR;
+        }
         keyframes[2].rotation = -keyframes[2].rotation;
 
         const auto at_key = lfs::sequencer::interpolateSpline(keyframes, 1.0f);
@@ -1163,8 +1165,10 @@ namespace {
             makeKeyframe(0.0f, {0.0f, 0.0f, 0.0f}, 30.0f),
             makeKeyframe(1.0f, {2.0f, 0.0f, 0.0f}, 40.0f),
             makeKeyframe(2.0f, {0.0f, 2.0f, 0.0f}, 60.0f)};
-        for (size_t index = 0; index < keyframes.size(); ++index)
+        for (size_t index = 0; index < keyframes.size(); ++index) {
             keyframes[index].rotation = glm::angleAxis(glm::radians(45.0f * static_cast<float>(index)), glm::vec3(0.0f, 1.0f, 0.0f));
+            keyframes[index].easing = EasingType::LINEAR;
+        }
         auto loop_point = keyframes.front();
         loop_point.time = 3.0f;
         loop_point.is_loop_point = true;

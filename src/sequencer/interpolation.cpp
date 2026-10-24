@@ -26,6 +26,16 @@ namespace lfs::sequencer {
             return 1.0f - 0.5f * u * u * u;
         }
 
+        [[nodiscard]] float catmullRomScalar(
+            const float p0, const float p1, const float p2, const float p3, const float t) {
+            const float t2 = t * t;
+            const float t3 = t2 * t;
+            return 0.5f * ((2.0f * p1) +
+                           (-p0 + p2) * t +
+                           (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
+                           (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+        }
+
         struct SegmentKeyframes {
             const Keyframe& previous;
             const Keyframe& start;
@@ -145,8 +155,8 @@ namespace lfs::sequencer {
         return {
             catmullRom(k0.position, spline_start.position, spline_end.position, k3.position, eased_t),
             squadShortestPath(k0.rotation, spline_start.rotation, spline_end.rotation, k3.rotation, eased_t),
-            catmullRom(glm::vec3(k0.focal_length_mm), glm::vec3(spline_start.focal_length_mm),
-                       glm::vec3(spline_end.focal_length_mm), glm::vec3(k3.focal_length_mm), eased_t).x};
+            catmullRomScalar(k0.focal_length_mm, spline_start.focal_length_mm,
+                             spline_end.focal_length_mm, k3.focal_length_mm, eased_t)};
     }
 
     std::vector<glm::vec3> generatePathPoints(
