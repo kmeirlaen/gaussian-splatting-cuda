@@ -1248,7 +1248,8 @@ namespace {
         expectVec3Eq(seam.position, keyframes.front().position);
         EXPECT_FLOAT_EQ(seam.focal_length_mm, keyframes.front().focal_length_mm);
         EXPECT_NEAR(glm::length((seam.position - before.position) / epsilon -
-                                (after.position - seam.position) / epsilon), 0.0f, 1.0e-2f);
+                                (after.position - seam.position) / epsilon),
+                    0.0f, 1.0e-2f);
         constexpr float lens_step = 1.0e-2f;
         const float lens_before = lfs::sequencer::interpolateSpline(keyframes, 3.0f - lens_step).focal_length_mm;
         const float lens_before2 = lfs::sequencer::interpolateSpline(keyframes, 3.0f - 2.0f * lens_step).focal_length_mm;
