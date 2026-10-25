@@ -5,8 +5,8 @@
 #include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
 #include <cstring>
-#include <utility>
 #include <glm/gtc/type_ptr.hpp>
+#include <utility>
 
 namespace lfs::vis {
     namespace {
