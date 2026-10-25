@@ -1129,6 +1129,68 @@ namespace {
         }
     }
 
+    TEST(SequencerTimelineRegressionTest, ConstantOrientationDollyRemainsFixed) {
+        Timeline timeline;
+        const auto orientation = glm::angleAxis(glm::radians(60.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        for (int i = 0; i < 3; ++i) {
+            auto keyframe = makeKeyframe(static_cast<float>(i), {0.0f, 0.0f, -static_cast<float>(i)});
+            keyframe.rotation = i == 1 ? -orientation : orientation;
+            keyframe.easing = EasingType::LINEAR;
+            timeline.addKeyframe(keyframe);
+        }
+        for (const float time : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f}) {
+            SCOPED_TRACE(time);
+            const auto state = timeline.evaluate(time);
+            EXPECT_TRUE(std::isfinite(state.rotation.w));
+            EXPECT_NEAR(glm::length(state.rotation), 1.0f, 1.0e-5f);
+            EXPECT_NEAR(quaternionAngle(state.rotation, orientation), 0.0f, 2.0e-3f);
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, HoldThenTurnAndEvenYawStaySmooth) {
+        Timeline hold;
+        Timeline yaw;
+        for (int i = 0; i < 4; ++i) {
+            auto keyframe = makeKeyframe(static_cast<float>(i));
+            keyframe.easing = EasingType::LINEAR;
+            keyframe.rotation = glm::angleAxis(glm::radians(i < 2 ? 45.0f : 85.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            hold.addKeyframe(keyframe);
+            keyframe.rotation = glm::angleAxis(glm::radians(15.0f + 20.0f * i), glm::vec3(0.0f, 1.0f, 0.0f));
+            yaw.addKeyframe(keyframe);
+        }
+        const auto held = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        for (const float time : {0.25f, 0.5f, 0.75f}) {
+            SCOPED_TRACE(time);
+            EXPECT_LT(quaternionAngle(hold.evaluate(time).rotation, held), glm::radians(4.0f));
+        }
+        for (const float time : {1.25f, 1.5f, 1.75f}) {
+            SCOPED_TRACE(time);
+            const auto expected = glm::angleAxis(glm::radians(15.0f + 20.0f * time), glm::vec3(0.0f, 1.0f, 0.0f));
+            EXPECT_NEAR(quaternionAngle(yaw.evaluate(time).rotation, expected), 0.0f, 2.0e-3f);
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, FocalLengthStaysWithinEachKeyedSegment) {
+        Timeline timeline;
+        const std::array focal_lengths{200.0f, 15.0f, 15.0f, 200.0f};
+        for (size_t i = 0; i < focal_lengths.size(); ++i) {
+            auto keyframe = makeKeyframe(static_cast<float>(i), {}, focal_lengths[i]);
+            keyframe.easing = EasingType::LINEAR;
+            timeline.addKeyframe(keyframe);
+        }
+        for (size_t segment = 0; segment + 1 < focal_lengths.size(); ++segment) {
+            for (const float fraction : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+                SCOPED_TRACE(std::format("segment {} fraction {}", segment, fraction));
+                const float focal = timeline.evaluate(static_cast<float>(segment) + fraction).focal_length_mm;
+                EXPECT_GE(focal, std::min(focal_lengths[segment], focal_lengths[segment + 1]));
+                EXPECT_LE(focal, std::max(focal_lengths[segment], focal_lengths[segment + 1]));
+                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths({1920, 1080}, focal);
+                EXPECT_TRUE(std::isfinite(fx) && fx > 0.0f);
+                EXPECT_TRUE(std::isfinite(fy) && fy > 0.0f);
+            }
+        }
+    }
+
     TEST(SequencerTimelineRegressionTest, CameraPoseUsesCubicCurves) {
         std::vector<Keyframe> keyframes{
             makeKeyframe(0.0f, {0.0f, 0.0f, 0.0f}, 10.0f),
@@ -1147,7 +1209,7 @@ namespace {
         EXPECT_NEAR(quaternionAngle(at_key.rotation, keyframes[1].rotation), 0.0f, 1.0e-5f);
 
         const auto curved = lfs::sequencer::interpolateSpline(keyframes, 1.25f);
-        EXPECT_NEAR(curved.focal_length_mm, 36.71875f, 1.0e-4f);
+        EXPECT_NEAR(curved.focal_length_mm, 34.166667f, 1.0e-4f);
         EXPECT_NE(curved.focal_length_mm, 40.0f);
         EXPECT_NEAR(glm::length(curved.rotation), 1.0f, 1.0e-5f);
         EXPECT_TRUE(std::isfinite(curved.rotation.w));
@@ -1187,8 +1249,14 @@ namespace {
         EXPECT_FLOAT_EQ(seam.focal_length_mm, keyframes.front().focal_length_mm);
         EXPECT_NEAR(glm::length((seam.position - before.position) / epsilon -
                                 (after.position - seam.position) / epsilon), 0.0f, 1.0e-2f);
-        EXPECT_NEAR((seam.focal_length_mm - before.focal_length_mm) / epsilon,
-                    (after.focal_length_mm - seam.focal_length_mm) / epsilon, 1.0e-1f);
+        constexpr float lens_step = 1.0e-2f;
+        const float lens_before = lfs::sequencer::interpolateSpline(keyframes, 3.0f - lens_step).focal_length_mm;
+        const float lens_before2 = lfs::sequencer::interpolateSpline(keyframes, 3.0f - 2.0f * lens_step).focal_length_mm;
+        const float lens_after = lfs::sequencer::interpolateSpline(keyframes, lens_step).focal_length_mm;
+        const float lens_after2 = lfs::sequencer::interpolateSpline(keyframes, 2.0f * lens_step).focal_length_mm;
+        const float left_tangent = (3.0f * seam.focal_length_mm - 4.0f * lens_before + lens_before2) / (2.0f * lens_step);
+        const float right_tangent = (-3.0f * seam.focal_length_mm + 4.0f * lens_after - lens_after2) / (2.0f * lens_step);
+        EXPECT_NEAR(left_tangent, right_tangent, 3.0e-2f);
         EXPECT_NEAR(quaternionAngle(before.rotation, seam.rotation), quaternionAngle(seam.rotation, after.rotation), 2.0e-4f);
     }
 

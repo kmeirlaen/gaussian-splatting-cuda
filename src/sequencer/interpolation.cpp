@@ -3,7 +3,9 @@
 
 #include "interpolation.hpp"
 #include <algorithm>
+#include <cmath>
 #include <glm/ext/quaternion_exponential.hpp>
+#include <limits>
 #include <stdexcept>
 
 namespace lfs::sequencer {
@@ -26,14 +28,25 @@ namespace lfs::sequencer {
             return 1.0f - 0.5f * u * u * u;
         }
 
-        [[nodiscard]] float catmullRomScalar(
+        [[nodiscard]] float monotoneTangent(const float left, const float right) {
+            if ((left <= 0.0f && right >= 0.0f) || (left >= 0.0f && right <= 0.0f))
+                return 0.0f;
+            const float small = std::min(std::abs(left), std::abs(right));
+            const float large = std::max(std::abs(left), std::abs(right));
+            return std::copysign(small / (0.5f + 0.5f * small / large), left);
+        }
+
+        [[nodiscard]] float monotoneCubic(
             const float p0, const float p1, const float p2, const float p3, const float t) {
             const float t2 = t * t;
             const float t3 = t2 * t;
-            return 0.5f * ((2.0f * p1) +
-                           (-p0 + p2) * t +
-                           (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
-                           (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+            const float start_tangent = monotoneTangent(p1 - p0, p2 - p1);
+            const float end_tangent = monotoneTangent(p2 - p1, p3 - p2);
+            const float value = (2.0f * t3 - 3.0f * t2 + 1.0f) * p1 +
+                                (t3 - 2.0f * t2 + t) * start_tangent +
+                                (-2.0f * t3 + 3.0f * t2) * p2 +
+                                (t3 - t2) * end_tangent;
+            return std::clamp(value, std::min(p1, p2), std::max(p1, p2));
         }
 
         struct SegmentKeyframes {
@@ -77,7 +90,12 @@ namespace lfs::sequencer {
             const glm::quat next_aligned = alignHemisphere(current, next);
             const glm::quat tangent = glm::log(glm::inverse(current) * previous_aligned) +
                                       glm::log(glm::inverse(current) * next_aligned);
-            return glm::normalize(current * glm::exp(-0.25f * tangent));
+            const glm::quat offset = -0.25f * tangent;
+            const glm::vec3 vector(offset.x, offset.y, offset.z);
+            constexpr float epsilon = std::numeric_limits<float>::epsilon();
+            if (glm::dot(vector, vector) < epsilon * epsilon)
+                return current;
+            return glm::normalize(current * glm::exp(offset));
         }
 
         [[nodiscard]] glm::quat squadShortestPath(
@@ -155,8 +173,8 @@ namespace lfs::sequencer {
         return {
             catmullRom(k0.position, spline_start.position, spline_end.position, k3.position, eased_t),
             squadShortestPath(k0.rotation, spline_start.rotation, spline_end.rotation, k3.rotation, eased_t),
-            catmullRomScalar(k0.focal_length_mm, spline_start.focal_length_mm,
-                             spline_end.focal_length_mm, k3.focal_length_mm, eased_t)};
+            monotoneCubic(k0.focal_length_mm, spline_start.focal_length_mm,
+                          spline_end.focal_length_mm, k3.focal_length_mm, eased_t)};
     }
 
     std::vector<glm::vec3> generatePathPoints(
