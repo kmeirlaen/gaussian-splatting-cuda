@@ -1,4 +1,11 @@
 {
+  "rendering_panel.steady_splats": "SteadySplats",
+  "main_panel.transparency_mode": "Transparence",
+  "main_panel.stochastic_max_frames": "Images d'affinage",
+  "rendering_panel.alpha_blend": "Mélange alpha",
+  "rendering_panel.stochastic": "Stochastique",
+  "tooltip.transparency_mode": "Mélange alpha, accumulation stochastique simple ou SteadySplats avec rééchantillonnage spatial et temporel. Les modes stochastiques s'appliquent au 3DGS sans LOD. Les contours, anneaux, marqueurs de centre, vues de profondeur, outils à profondeur exacte, l'occlusion par frustum de caméra et les exports utilisent le mélange alpha.",
+  "tooltip.stochastic_max_frames": "Nouvelles images rendues après un changement de caméra ou de scène. Chaque image est affichée immédiatement. Le rendu s'arrête à cette limite ; une action sur la caméra démarre une nouvelle fenêtre d'affinage.",
   "common.reset_default_hint": "Double-cliquez pour rétablir la valeur par défaut : {value}",
   "main_panel.selection_outline_color": "Couleur du contour",
   "main_panel.selection_outline_opacity": "Opacité",
