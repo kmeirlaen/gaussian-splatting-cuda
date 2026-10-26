@@ -10,6 +10,7 @@
 #include "core/services.hpp"
 #include "input/camera_browse_repeat.hpp"
 #include "input/input_bindings.hpp"
+#include "input/space_mouse_device.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
@@ -140,6 +141,7 @@ namespace lfs::vis {
             depth_range_initialized_ = true;
         }
         [[nodiscard]] static InputController* instance() { return instance_; }
+        [[nodiscard]] std::optional<input::SpaceMouseConnection> spaceMouseConnection() const;
 
         // Update function for continuous input (WASD movement and inertia)
         void update(float delta_time);
@@ -170,7 +172,7 @@ namespace lfs::vis {
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
+            return space_mouse_active_ || camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -207,6 +209,10 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        void updateSpaceMouse(float delta_time);
+        std::unique_ptr<input::SpaceMouseDevice> space_mouse_;
+        bool space_mouse_active_ = false;
+        glm::vec3 space_mouse_walk_velocity_{0.0f};
         core::WalkState walk_state_;
         core::CapsuleQuery walkQuery() const;
         struct PanelInteractionState {

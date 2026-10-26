@@ -44,6 +44,7 @@
 #include "visualizer/preferences.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
+#include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keyboard.h>
 #include <algorithm>
@@ -540,6 +541,7 @@ namespace lfs::vis {
     }
 
     InputController::~InputController() {
+        space_mouse_.reset();
         auto unsubscribe = [](const auto event_tag, std::size_t& handler_id) {
             if (handler_id == 0)
                 return;
@@ -579,6 +581,12 @@ namespace lfs::vis {
 
     void InputController::initialize() {
         instance_ = this;
+        if (window_) {
+            space_mouse_ = std::make_unique<input::SpaceMouseDevice>(window_, [window_manager = services().windowOrNull()] {
+                if (window_manager)
+                    window_manager->wakeEventLoop();
+            });
+        }
         applyNewProjectNavigationDefaults();
 
         // The GUI is initialized before this controller exists.
@@ -793,6 +801,10 @@ namespace lfs::vis {
     }
 
     void InputController::onWindowFocusLost() {
+        space_mouse_active_ = false;
+        space_mouse_walk_velocity_ = glm::vec3(0.0f);
+        if (space_mouse_)
+            space_mouse_->setInputEnabled(false);
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
@@ -2599,7 +2611,74 @@ namespace lfs::vis {
         }
     }
 
+    std::optional<input::SpaceMouseConnection> InputController::spaceMouseConnection() const {
+        return space_mouse_ ? space_mouse_->connection() : std::nullopt;
+    }
+
+    void InputController::updateSpaceMouse(const float delta_time) {
+        space_mouse_active_ = false;
+        space_mouse_walk_velocity_ = glm::vec3(0.0f);
+        if (!space_mouse_)
+            return;
+        const auto preferences = UserPreferences::instance().spaceMouse();
+        if (!preferences.enabled || !window_ || !(SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS) ||
+            (input_router_ && (input_router_->isModalOpen() || input_router_->isTextInputActive())) ||
+            op::operators().hasModalOperator() ||
+            drag_mode_ != DragMode::None || isValueDragActive() || SDL_GetMouseState(nullptr, nullptr) != 0) {
+            space_mouse_->setInputEnabled(false);
+            return;
+        }
+        space_mouse_->setInputEnabled(true);
+        const auto frame = space_mouse_->takeFrame();
+        if ((frame.pressed & 3) && camera_navigation_mode_ == CameraNavigationMode::Walk)
+            setCameraNavigationMode(CameraNavigationMode::Orbit);
+        if ((frame.pressed & 1) && focusSelection()) {
+            if (auto* const viewer = lfs::python::get_visualizer())
+                viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
+        if (frame.pressed & 2)
+            goHome();
+
+        const bool object_mode = camera_navigation_mode_ == CameraNavigationMode::Orbit ||
+                                 camera_navigation_mode_ == CameraNavigationMode::Trackball;
+        auto step = input::spaceMouseStep(frame.motion, preferences.translation_speed,
+                                          preferences.rotation_speed * 1.5f,
+                                          std::clamp(delta_time, 0.0f, 0.1f), object_mode,
+                                          preferences.keep_horizon);
+        if (step.translation == glm::vec3(0.0f) && step.rotation == glm::vec3(0.0f))
+            return;
+        auto& target = activeKeyboardViewport();
+        auto& camera = target.camera;
+        if (object_mode && step.translation.z != 0.0f) {
+            if (auto* rendering = services().renderingOrNull()) {
+                const auto projection = rendering->getCameraProjectionSettings();
+                if (projection.orthographic) {
+                    const float current = target.ortho_scale_override.value_or(projection.ortho_scale);
+                    const float scale = std::clamp(current * std::exp(-step.translation.z), 1.0f, 10000.0f);
+                    if (&target != &viewport_ || target.ortho_scale_override)
+                        target.ortho_scale_override = scale;
+                    if (&target == &viewport_)
+                        rendering->setOrthographicScale(scale);
+                    step.translation.z = 0.0f;
+                }
+            }
+        }
+        if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
+            const auto velocity = input::spaceMouseStep(frame.motion, preferences.translation_speed, 0.0f,
+                                                        1.0f, false, true)
+                                      .translation;
+            space_mouse_walk_velocity_ = camera.R * velocity * camera.getWasdSpeed() * 0.1f;
+            step.translation = glm::vec3(0.0f);
+        }
+        camera.setSceneExtent(sceneExtent());
+        camera.applySpaceMouseStep(step.translation, step.rotation, object_mode, preferences.keep_horizon);
+        space_mouse_active_ = true;
+        onCameraMovementStart();
+        publishCameraMove(&target);
+    }
+
     void InputController::update(float delta_time) {
+        updateSpaceMouse(delta_time);
         updateCameraBrowseRepeat();
         decayHeldDragMomentum();
         // Refresh once per input frame; mouse-move events can then query the
@@ -2815,6 +2894,7 @@ namespace lfs::vis {
                                             : glm::vec3(0);
                 if (glm::length(velocity) > 0)
                     velocity = glm::normalize(velocity) * walk_settings.speed;
+                velocity += space_mouse_walk_velocity_;
                 core::advanceWalk(walk_state_, walk_settings, up, velocity, delta_time, walkQuery());
                 const auto delta = walk_state_.presentation - camera.t;
                 camera.t += delta;

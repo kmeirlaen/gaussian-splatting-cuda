@@ -27,6 +27,13 @@ namespace lfs::vis {
         bool request_logging = false;
     };
 
+    struct SpaceMousePreferenceState {
+        bool enabled = true;
+        float translation_speed = 1.0f;
+        float rotation_speed = 1.0f;
+        bool keep_horizon = true;
+    };
+
     /** Process-local, atomically persisted user preferences. */
     class LFS_VIS_API UserPreferences {
     public:
@@ -56,6 +63,9 @@ namespace lfs::vis {
         [[nodiscard]] float zoomSpeed();
         void setNavigationSpeed(float value, bool persist = true);
         [[nodiscard]] float navigationSpeed();
+
+        void setSpaceMouse(const SpaceMousePreferenceState& state, bool persist = true);
+        [[nodiscard]] SpaceMousePreferenceState spaceMouse();
 
         void setCameraBrowseRepeat(bool enabled);
         [[nodiscard]] bool cameraBrowseRepeat();
