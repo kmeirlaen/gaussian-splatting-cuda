@@ -2660,6 +2660,7 @@ namespace lfs::vis {
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
+        scene_state.reveal = sequencer_reveal_;
         FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,

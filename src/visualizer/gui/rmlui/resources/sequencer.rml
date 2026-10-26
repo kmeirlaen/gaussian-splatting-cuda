@@ -94,6 +94,7 @@
                 <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
                     <span class="transport-label">@tr:ui.load_sequence</span>
                 </div>
+                <div id="btn-add-reveal" class="transport-btn text"><span id="reveal-button-label" class="transport-label">Add reveal effect</span></div>
                 <div class="transport-sep"></div>
                 <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
                     <span id="format-label" class="transport-label">@tr:ui.youtube_1080p</span>
@@ -159,6 +160,11 @@
                 <div id="film-strip-sprockets-top"></div>
                 <div id="film-strip-sprockets-bottom"></div>
             </div>
+        </div>
+        <div id="reveal-settings" class="hidden">
+            <span>Start</span><input id="reveal-start" type="text" />
+            <span>End</span><input id="reveal-end" type="text" />
+            <div id="btn-remove-reveal" class="transport-btn text"><span class="transport-label">Remove</span></div>
         </div>
     </div>
     <div id="panel-guides">

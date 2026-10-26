@@ -28,8 +28,10 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fmt/format.h>
+#include <stdexcept>
 
 namespace lfs::vis {
 
@@ -162,6 +164,7 @@ namespace lfs::vis {
         transport_listener_.panel = this;
         quality_scrub_listener_.panel = this;
         duration_listener_.panel = this;
+        reveal_listener_.panel = this;
         sequence_fps_listener_.panel = this;
         resolution_listener_.panel = this;
     }
@@ -234,6 +237,18 @@ namespace lfs::vis {
             panel->load_path_requested_ = true;
         else if (id == "btn-load-sequence")
             panel->load_sequence_requested_ = true;
+        else if (id == "btn-add-reveal") {
+            const auto offset = el->GetAbsoluteOffset(Rml::BoxArea::Border);
+            panel->transport_ctx_request_ = {TransportContextMenuRequest::Target::REVEAL,
+                panel->cached_panel_x_ + offset.x,
+                panel->cached_panel_y_ + offset.y + el->GetBox().GetSize().y};
+        } else if (id == "btn-remove-reveal") {
+            ctrl.setRevealClip(std::nullopt);
+            panel->selectReveal(false);
+        } else if (id == "reveal-clip") {
+            panel->selectReveal(true);
+            event.StopPropagation();
+        }
         else if (id == "btn-export")
             panel->export_requested_ = true;
         else if (id == "btn-dock-toggle")
@@ -256,7 +271,9 @@ namespace lfs::vis {
             state.open = true;
             state.time = context_menu_time_;
             state.keyframe = context_menu_keyframe_;
+            state.reveal = context_menu_reveal_;
             context_menu_open_ = false;
+            context_menu_reveal_ = false;
         }
         return state;
     }
@@ -669,12 +686,19 @@ namespace lfs::vis {
                                    "btn-loop", "btn-add",
                                    "btn-camera-path", "btn-snap", "btn-follow",
                                    "btn-film-strip", "btn-preview", "btn-equirect", "btn-speed",
-                                   "btn-format", "btn-save-path", "btn-load-path", "btn-load-sequence",
+                                   "btn-format", "btn-save-path", "btn-load-path", "btn-load-sequence", "btn-add-reveal", "btn-remove-reveal",
                                    "btn-export", "btn-clear", "btn-dock-toggle",
                                    "btn-close-panel"}) {
             auto* el = document_->GetElementById(btn_id);
             if (el)
                 el->AddEventListener(Rml::EventId::Click, &transport_listener_);
+        }
+
+        for (const char* id : {"reveal-start", "reveal-end", "reveal-softness"}) {
+            if (auto* el = document_->GetElementById(id)) {
+                el->AddEventListener(Rml::EventId::Change, &reveal_listener_);
+                el->AddEventListener(Rml::EventId::Blur, &reveal_listener_);
+            }
         }
 
         if (el_quality_scrub_) {
@@ -839,7 +863,7 @@ namespace lfs::vis {
                 keyframe_elements_.pop_back();
             }
             if (el_hint_) {
-                if (controller_.hasPlySequence()) {
+                if (controller_.hasPlySequence() || controller_.timeline().revealClip()) {
                     el_hint_->SetInnerRML("");
                 } else {
                     el_hint_->SetInnerRML(LOC(lichtfeld::Strings::Sequencer::EMPTY_HINT));
@@ -890,14 +914,28 @@ namespace lfs::vis {
 
         const auto* const sequence = controller_.plySequence();
         const float timeline_width = timelineWidth();
+        if (const auto& reveal = controller_.timeline().revealClip(); reveal && timeline_width > 0.0f) {
+            const float start_x = timeToX(reveal->start, 0.0f, timeline_width);
+            const float end_x = timeToX(reveal->end, 0.0f, timeline_width);
+            const auto html = fmt::format(
+                "<div id=\"reveal-clip\" class=\"sequence-clip reveal-clip\" style=\"left: {:.1f}px; width: {:.1f}px;\"><span class=\"sequence-clip-label\">{} reveal</span></div>",
+                start_x, std::max(2.0f * cached_dp_ratio_, end_x - start_x),
+                std::array{"Magic", "Spread", "Unroll", "Twister", "Rain", "Krpano Unveil", "Krpano Light Edge", "Krpano Rainbow", "Krpano Dark to Light", "Krpano Distortion", "Krpano Camera Light"}[static_cast<int>(reveal->effect) - 1]);
+            setTimelineMarkup(el_sequence_strip_, html);
+            if (auto* el = document_->GetElementById("reveal-clip")) {
+                el->RemoveEventListener(Rml::EventId::Click, &transport_listener_);
+                el->AddEventListener(Rml::EventId::Click, &transport_listener_);
+            }
+            return;
+        }
         if (!sequence || sequence->frames.empty() || timeline_width <= 0.0f) {
-            el_sequence_strip_->SetInnerRML("");
+            setTimelineMarkup(el_sequence_strip_, "");
             return;
         }
 
         const float duration = sequence->duration();
         if (duration <= 0.0f) {
-            el_sequence_strip_->SetInnerRML("");
+            setTimelineMarkup(el_sequence_strip_, "");
             return;
         }
 
@@ -928,7 +966,7 @@ namespace lfs::vis {
         }
 
         html += "</div>";
-        el_sequence_strip_->SetInnerRML(html);
+        setTimelineMarkup(el_sequence_strip_, html);
     }
 
     void RmlSequencerPanel::rebuildRuler() {
@@ -1048,7 +1086,15 @@ namespace lfs::vis {
 
         const bool has_camera_keyframes = controller_.timeline().realKeyframeCount() > 0;
         const bool has_sequence = controller_.hasPlySequence();
-        const bool has_any_state = has_camera_keyframes || controller_.timeline().hasAnimationClip() || has_sequence;
+        const bool has_reveal = controller_.timeline().revealClip().has_value();
+        if (auto* label = document_->GetElementById("reveal-button-label")) {
+            const char* text = has_reveal ? "Change reveal effect" : "Add reveal effect";
+            if (label->GetInnerRML() != text)
+                label->SetInnerRML(text);
+        }
+        if ((!has_reveal || controller_.hasSelection()) && reveal_selected_)
+            selectReveal(false);
+        const bool has_any_state = has_camera_keyframes || controller_.timeline().hasAnimationClip() || has_sequence || has_reveal;
 
         if (el_btn_camera_path_)
             el_btn_camera_path_->SetClass("active", ui_state_.show_camera_path);
@@ -1076,11 +1122,11 @@ namespace lfs::vis {
             syncQualityScrub();
 
         if (el_btn_save_)
-            el_btn_save_->SetClass("disabled", !has_camera_keyframes);
+            el_btn_save_->SetClass("disabled", !has_camera_keyframes && !has_reveal);
         if (el_btn_load_sequence_)
             el_btn_load_sequence_->SetClass("active", has_sequence);
         if (el_btn_export_)
-            el_btn_export_->SetClass("disabled", !has_camera_keyframes);
+            el_btn_export_->SetClass("disabled", !has_camera_keyframes && !has_reveal);
         if (el_btn_clear_)
             el_btn_clear_->SetClass("disabled", !has_any_state);
         if (el_panel_) {
@@ -1333,6 +1379,45 @@ namespace lfs::vis {
         if (el_quality_scrub_)
             el_quality_scrub_->SetClass("is-editing", false);
         syncQualityScrub();
+    }
+
+    void RmlSequencerPanel::selectReveal(const bool selected) {
+        reveal_selected_ = selected && controller_.timeline().revealClip().has_value();
+        if (!document_)
+            return;
+        if (auto* settings = document_->GetElementById("reveal-settings"))
+            settings->SetClass("hidden", !reveal_selected_);
+        if (!reveal_selected_)
+            return;
+        controller_.deselectKeyframe();
+        const auto& clip = *controller_.timeline().revealClip();
+        for (const auto& [id, value] : {std::pair{"reveal-start", clip.start},
+                                       std::pair{"reveal-end", clip.end},
+                                       std::pair{"reveal-softness", clip.softness}}) {
+            if (auto* input = document_->GetElementById(id))
+                input->SetAttribute("value", fmt::format("{:.2f}", value));
+        }
+    }
+
+    void RmlSequencerPanel::RevealEditListener::ProcessEvent(Rml::Event& event) {
+        if (!panel || !panel->reveal_selected_ || !panel->controller_.timeline().revealClip())
+            return;
+        if (event.GetId() == Rml::EventId::Change && !event.GetParameter<bool>("linebreak", false))
+            return;
+        auto* el = event.GetCurrentElement();
+        if (!el)
+            return;
+        const auto text = el->GetAttribute<Rml::String>("value", "");
+        char* end = nullptr;
+        const float value = std::strtof(text.c_str(), &end);
+        auto clip = *panel->controller_.timeline().revealClip();
+        if (end != text.c_str() && std::isfinite(value)) {
+            if (el->GetId() == "reveal-start") clip.start = value;
+            else if (el->GetId() == "reveal-end") clip.end = value;
+            else if (el->GetId() == "reveal-softness") clip.softness = value;
+            try { panel->controller_.setRevealClip(clip); } catch (const std::invalid_argument&) {}
+        }
+        panel->selectReveal(true);
     }
 
     // ── Clip Duration Field ─────────────────────────────────

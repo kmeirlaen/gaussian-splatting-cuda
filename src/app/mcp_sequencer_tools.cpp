@@ -153,7 +153,7 @@ namespace lfs::app {
             const auto& timeline = controller.timeline();
             const bool has_ply_sequence = controller.hasPlySequence();
             const bool has_any_timeline_state =
-                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip() || has_ply_sequence;
+                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip() || timeline.revealClip().has_value() || has_ply_sequence;
             json keyframe_list = json::array();
             int64_t visible_index = 0;
             for (const auto& keyframe : timeline.keyframes()) {

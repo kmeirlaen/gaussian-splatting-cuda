@@ -257,24 +257,37 @@ Splat_3D_GUT_AlphaBlend load_transformed_splat_gut_alphablend(
         load_splat_gut_alphablend(physical_idx, slot, xyz_ws, rotations, scaling_raw,
                                   opacity_raw, rgb, uniforms.lod_enabled, uniforms.lod_page_splats > 0u,
                                   (uniforms.lod_enabled & 4u) == 0u ? uniforms.splat_render_profile : 0u);
+    float3 source_scales = 1.0f / max(float3(length(g.iscl_rot[0]), length(g.iscl_rot[1]), length(g.iscl_rot[2])), 1e-8f);
     if (lod_active && (uniforms.lod_enabled & 16u) != 0u)
         g.opacity *= clamp(lod_weights[slot], 0.0f, 1.0f);
 
-    if (uniforms.step == 0u)
-        return g;
-
-    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
-    bool transform_indices_enabled = overlay_enabled(emphasis_flags.y);
-    int transform_idx = transform_indices_enabled ? read_int32(transform_indices, logical_idx) : 0;
-    transform_idx = clamp(transform_idx, 0, int(uniforms.step) - 1);
-    uint transform_base = uint(transform_idx) * 4u;
-
-    g.xyz_ws = transform_point_rows(model_transforms, transform_base, g.xyz_ws);
-    float3x3 linear = linear_transform_rows(model_transforms, transform_base);
     float3x3 inv_linear;
-    if (inverse_3x3(linear, inv_linear)) {
-        g.iscl_rot = mul(g.iscl_rot, inv_linear);
+    bool has_inverse = false;
+    if (uniforms.step != 0u) {
+        float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
+        bool transform_indices_enabled = overlay_enabled(emphasis_flags.y);
+        int transform_idx = transform_indices_enabled ? read_int32(transform_indices, logical_idx) : 0;
+        transform_idx = clamp(transform_idx, 0, int(uniforms.step) - 1);
+        uint transform_base = uint(transform_idx) * 4u;
+        g.xyz_ws = transform_point_rows(model_transforms, transform_base, g.xyz_ws);
+        float3x3 linear = linear_transform_rows(model_transforms, transform_base);
+        has_inverse = inverse_3x3(linear, inv_linear);
     }
+    float4 reveal = overlay_params[OVERLAY_PARAM_REVEAL];
+    if (overlay_enabled(reveal.x)) {
+        float4 bounds = overlay_params[OVERLAY_PARAM_REVEAL_SOFTNESS];
+        LfsRevealEffect effect = lfs_reveal_effect(g.xyz_ws, source_scales, reveal, bounds);
+        g.xyz_ws = effect.position;
+        float3 ratio = source_scales / max(source_scales * effect.scale_mix + effect.seed_scale, 1e-8f);
+        g.iscl_rot[0] *= ratio.x;
+        g.iscl_rot[1] *= ratio.y;
+        g.iscl_rot[2] *= ratio.z;
+        float c = cos(effect.spin), s = sin(effect.spin);
+        g.iscl_rot = mul(g.iscl_rot, float3x3(c,0,-s, 0,1,0, s,0,c));
+        g.opacity = lerp(0.3f, g.opacity, effect.color_mix) * effect.opacity_multiplier + effect.color_add;
+    }
+    if (has_inverse)
+        g.iscl_rot = mul(g.iscl_rot, inv_linear);
     return g;
 }
 

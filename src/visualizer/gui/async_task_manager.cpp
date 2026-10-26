@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
+#include "sequencer/reveal_render_state.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -602,6 +603,7 @@ namespace lfs::vis::gui {
         VulkanContext* vulkan_context,
         const VideoExportSceneSnapshot& snapshot,
         const RenderSettings& render_settings,
+        const std::optional<rendering::GaussianRevealState>& reveal,
         const lfs::sequencer::CameraState& cam_state,
         const int width,
         const int height) {
@@ -646,6 +648,7 @@ namespace lfs::vis::gui {
                 primary_frame = std::move(*render_result);
             } else {
                 auto scene_state = makeVideoExportGaussianSceneState(snapshot);
+                scene_state.reveal = reveal;
                 const auto camera_rotation = glm::mat3_cast(cam_state.rotation);
                 auto preview_image = render_environment
                                          ? rendering_manager.renderPreviewImageRgba8(
@@ -3229,10 +3232,13 @@ namespace lfs::vis::gui {
             return;
         }
         const auto& timeline = gui_manager->sequencer().timeline();
+        const auto reveal_clip = timeline.revealClip();
+        const auto reveal_bounds = reveal_clip ? makeRevealRenderState(scene_manager->getScene(), *reveal_clip, 0.0f)
+                                               : std::nullopt;
         const auto* sequence = gui_manager->sequencer().plySequence();
         const auto sequence_uuid = sequence ? std::optional(sequence->node_uuid) : std::nullopt;
         std::vector<size_t> sequence_frames;
-        if (timeline.empty()) {
+        if (timeline.empty() && !reveal_clip) {
             fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_NO_KEYFRAMES));
             return;
         }
@@ -3270,9 +3276,12 @@ namespace lfs::vis::gui {
 
         std::vector<lfs::sequencer::CameraState> frame_states;
         frame_states.reserve(total_frames);
+        const auto& viewport = viewer_->getViewport();
+        const lfs::sequencer::CameraState current_view{
+            viewport.getTranslation(), glm::quat_cast(viewport.getRotationMatrix()), rendering_manager->getFocalLengthMm()};
         for (int i = 0; i < total_frames; ++i) {
             const float time = lfs::io::video::videoExportSampleTime(i, export_options.framerate);
-            frame_states.push_back(timeline.evaluate(time));
+            frame_states.push_back(timeline.empty() ? current_view : timeline.evaluate(time));
             if (sequence)
                 sequence_frames.push_back(*gui_manager->sequencer().plySequenceFrameIndex(time));
         }
@@ -3304,7 +3313,7 @@ namespace lfs::vis::gui {
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings,
-             sequence_uuid, sequence_frames = std::move(sequence_frames),
+             sequence_uuid, sequence_frames = std::move(sequence_frames), reveal_clip, reveal_bounds,
              encoder = std::move(encoder),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
@@ -3372,7 +3381,7 @@ namespace lfs::vis::gui {
                             viewer,
                             [viewer, engine, scene_manager, rendering_manager, environment_state,
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
-                             cam_state = frame_states[frame],
+                             cam_state = frame_states[frame], reveal_clip, reveal_bounds,
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
                             -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
@@ -3404,6 +3413,9 @@ namespace lfs::vis::gui {
                                 auto* const window_manager = viewer->getWindowManager();
                                 auto* const vulkan_context =
                                     window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
+                                auto reveal = reveal_bounds;
+                                if (reveal && reveal_clip)
+                                    reveal->progress = reveal_clip->progress(clip_time);
                                 return renderVideoExportFrame(
                                     *rendering_manager,
                                     *engine,
@@ -3412,6 +3424,7 @@ namespace lfs::vis::gui {
                                     vulkan_context,
                                     *snapshot_ptr,
                                     render_settings,
+                                    reveal,
                                     cam_state,
                                     width,
                                     height);

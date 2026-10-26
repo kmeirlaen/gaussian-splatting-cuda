@@ -124,6 +124,7 @@ namespace lfs::vis {
         }
         void clearKeyframes();
         void clear();
+        void setRevealClip(std::optional<sequencer::RevealClip> clip);
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);
         [[nodiscard]] nlohmann::json saveToJson() const;

@@ -57,11 +57,16 @@ namespace lfs::vis {
     } // namespace
 
     bool SequencerController::hasPlayableContent() const {
-        return hasTimelineCameraContent(timeline_) || hasPlySequence();
+        return hasTimelineCameraContent(timeline_) || timeline_.revealClip().has_value() || hasPlySequence();
     }
 
     float SequencerController::playbackStartTime() const {
-        return (hasPlySequence() || timeline_.hasAnimationClip()) ? 0.0f : timeline_.startTime();
+        return (hasPlySequence() || timeline_.hasAnimationClip() || timeline_.revealClip()) ? 0.0f : timeline_.startTime();
+    }
+
+    void SequencerController::setRevealClip(std::optional<sequencer::RevealClip> clip) {
+        timeline_.setRevealClip(clip);
+        markTimelineChanged();
     }
 
     void SequencerController::play() {

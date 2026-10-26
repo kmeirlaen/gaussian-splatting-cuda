@@ -548,6 +548,11 @@ body {
     pointer-events: none;
 }
 
+#reveal-settings { position: absolute; left: 20dp; top: 102dp; display: flex; align-items: center; gap: 4dp; }
+#reveal-settings.hidden { display: none; }
+#reveal-settings input { width: 42dp; height: 20dp; font-size: 11dp; }
+.reveal-clip { pointer-events: auto; background-color: rgba(150, 90, 190, 180); border-color: rgba(210, 160, 255, 220); }
+
 .sequence-clip {
     display: block;
     position: absolute;

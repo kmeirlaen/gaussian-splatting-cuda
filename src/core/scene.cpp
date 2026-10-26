@@ -5905,6 +5905,59 @@ namespace lfs::core {
         node.transform_dirty = false;
     }
 
+    bool Scene::getNodeRevealBounds(const NodeId id, glm::vec3& out_min, glm::vec3& out_max) const {
+        const auto* node = getNodeById(id);
+        if (!node || !node->model || node->model->size() == 0)
+            return false;
+        const auto generation = bounds_generation_.load(std::memory_order_acquire);
+        const auto* means = node->model->means_raw().data_ptr();
+        const auto count = node->model->size();
+        const auto deleted_version = node->model->deleted_mask_version();
+        std::lock_guard lock(node->model_bounds_mutex_);
+        auto& cached = node->reveal_bounds_cache_;
+        if (!cached.valid || cached.model != node->model.get() || cached.means != means ||
+            cached.count != count || cached.content_generation != generation || cached.deleted_version != deleted_version) {
+            cached.valid = false;
+            cached.has_bounds = false;
+            constexpr size_t max_samples = 8192;
+            const size_t step = std::max<size_t>(1, (count + max_samples - 1) / max_samples);
+            auto sampled = node->model->means_raw().slice(0, 0, count, step).contiguous().cpu();
+            auto values = sampled.accessor<float, 2>();
+            const auto deleted = node->model->has_deleted_mask()
+                ? node->model->deleted().slice(0, 0, count, step).contiguous().cpu()
+                : Tensor{};
+            const auto* deleted_values = deleted.is_valid() ? deleted.ptr<uint8_t>() : nullptr;
+            std::array<std::vector<float>, 3> columns;
+            for (size_t i = 0; i < sampled.size(0); ++i) {
+                if ((!deleted_values || !deleted_values[i]) &&
+                    std::isfinite(values(i, 0)) && std::isfinite(values(i, 1)) && std::isfinite(values(i, 2)))
+                    for (int axis = 0; axis < 3; ++axis)
+                        columns[axis].push_back(values(i, axis));
+            }
+            if (!columns[0].empty()) {
+                const size_t trim = columns[0].size() >= 100 ? columns[0].size() / 20 : 0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    auto& column = columns[axis];
+                    std::sort(column.begin(), column.end());
+                    cached.min[axis] = column[trim];
+                    cached.max[axis] = column[column.size() - 1 - trim];
+                }
+                cached.has_bounds = true;
+            }
+            cached.model = node->model.get();
+            cached.means = means;
+            cached.count = count;
+            cached.content_generation = generation;
+            cached.deleted_version = deleted_version;
+            cached.valid = true;
+        }
+        if (cached.has_bounds) {
+            out_min = cached.min;
+            out_max = cached.max;
+        }
+        return cached.has_bounds;
+    }
+
     bool Scene::getNodeBounds(const NodeId id, glm::vec3& out_min, glm::vec3& out_max) const {
         const auto* node = getNodeById(id);
         if (!node)
