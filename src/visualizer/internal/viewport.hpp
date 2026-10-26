@@ -22,7 +22,7 @@
 class Viewport {
     class CameraMotion {
     public:
-        glm::vec2 prePos;
+        glm::vec2 prePos{0.0f};
         float zoomSpeed = 11.0f;
         float maxZoomSpeed = 100.0f;
         float rotateSpeed = 0.001f;
@@ -187,6 +187,35 @@ class Viewport {
         }
 
         void translate(const glm::vec2& pos) { applyPanDrag(pos); }
+
+        void applySpaceMouseStep(const glm::vec3& translation, const glm::vec3& rotation,
+                                 const bool object_mode, const bool keep_horizon) {
+            clearTransientMotion();
+            const auto saved_pos = prePos;
+            prePos = glm::vec2(0.0f);
+            const float distance = std::max(glm::length(pivot - t), 0.1f);
+            if (object_mode && keep_horizon) {
+                applyRotationAroundCenter(rotation.y, rotation.x);
+            } else {
+                const auto previous_rotation = R;
+                rotate(prePos - glm::vec2(rotation.y, rotation.x) / rotateSpeed, keep_horizon);
+                if (!keep_horizon)
+                    rotate_roll(rotation.z / rotateRollSpeed);
+                if (object_mode)
+                    t = pivot + R * glm::transpose(previous_rotation) * (t - pivot);
+                else
+                    updatePivotFromCamera(distance);
+            }
+            if (object_mode) {
+                translate(prePos + glm::vec2(-translation.x, translation.y) / translateSpeed);
+                zoom(-translation.z * 10.0f);
+            } else {
+                const auto movement = R * translation * wasdSpeed * kWasdUnitsPerSecondPerLevel;
+                t += movement;
+                pivot += movement;
+            }
+            prePos = saved_pos;
+        }
 
         void zoom(float delta, bool carry_pivot = false) {
             const glm::vec3 forward = lfs::rendering::cameraForward(R);
