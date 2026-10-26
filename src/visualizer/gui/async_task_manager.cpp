@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
+#include "core/collision.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -927,7 +928,7 @@ namespace lfs::vis::gui {
                 } else if (!snapshot->error.empty()) {
                     jobs_.failed(
                         handle, snapshot->error,
-                        snapshot->stage);
+                        handle.type == JobType::Collision ? "Failed" : snapshot->stage);
                 } else {
                     jobs_.completed(handle);
                 }
@@ -939,6 +940,8 @@ namespace lfs::vis::gui {
         if (settle(video_export_state_.job)) {
             publishVideoExportOverlayState();
         }
+        if (!collision_worker_.valid())
+            settle(collision_job_);
     }
 
     void AsyncTaskManager::resetVideoExportEnvironmentState() {
@@ -954,7 +957,9 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::shutdown() {
         cancelCollision();
-        collision_thread_.reset();
+        collision_replacement_ = {};
+        if (collision_worker_.valid())
+            collision_worker_.wait();
         pollCollision();
         if (auto* loader = viewer_->getDataLoader())
             loader->cancelPendingImports();
@@ -1767,10 +1772,11 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        if (const auto job = collisionJob(); job && job->status == JobStatus::CompletionPending)
+            return true;
         if (import_cancel_pending_)
             return importWorkersFinished();
-        return collision_pending_.load(std::memory_order_acquire) ||
-               splat_load_state_.pending_render_request.has_value() ||
+        return splat_load_state_.pending_render_request.has_value() ||
                (viewer_->getDataLoader() && viewer_->getDataLoader()->hasPendingImports()) ||
                import_state_.load_complete.load(std::memory_order_acquire) ||
                splat_load_state_.worker_complete.load(std::memory_order_acquire) ||
@@ -3751,29 +3757,40 @@ namespace lfs::vis::gui {
         LOG_INFO("Mesh2Splat: added splat node '{}'", added_name);
     }
 
-    void AsyncTaskManager::cancelCollision() {
-        if (const auto state = collisionJob(); state && state->running()) {
-            jobs_.requestCancel(collision_job_);
-            if (collision_thread_)
-                collision_thread_->request_stop();
-            publishCollisionState();
-        }
+    bool AsyncTaskManager::collisionWorkerActive() const {
+        return collision_worker_.valid() &&
+               collision_worker_.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
     }
 
-    void AsyncTaskManager::publishCollisionState(const bool force) {
-        AppStore::TaskProgressState state;
-        if (const auto job = collisionJob()) {
-            state.active = job->running();
-            state.progress = job->progress;
-            state.stage = job->stage;
-            state.error = job->error;
+    void AsyncTaskManager::dropSceneReplacement() {
+        if (collision_replacement_ && viewer_->projectCreatePending()) {
+            viewer_->pending_training_action_ = VisualizerImpl::PendingTrainingAction::None;
+            viewer_->pending_create_project_path_.clear();
+            viewer_->pending_load_files_.clear();
         }
-        auto& store = app_store();
-        const bool changed = store.collision_state.set(std::move(state));
-        if (force && !changed)
-            store.store().enqueue_dirty(store.collision_state.field_id());
-        if (changed || force)
-            wakeMainThreadForAsyncWork();
+        collision_replacement_ = {};
+    }
+
+    bool AsyncTaskManager::deferSceneReplacement(std::move_only_function<void()> replacement) {
+        if (!sceneReplacementRequired())
+            return false;
+        cancelCollision();
+        dropSceneReplacement();
+        collision_replacement_ = [this, epoch = viewer_->project_lifecycle_->documentEpoch(),
+                                  scene_epoch = splat_simplify_scene_epoch_, replacement = std::move(replacement)]() mutable {
+            if (!viewer_->project_lifecycle_->isApplicationClosePending() &&
+                viewer_->project_lifecycle_->documentEpoch() == epoch && splat_simplify_scene_epoch_ == scene_epoch)
+                replacement();
+            else
+                LOG_WARN("Discarding stale collision scene replacement");
+        };
+        return true;
+    }
+
+    void AsyncTaskManager::cancelCollision() {
+        jobs_.requestCancel(collision_job_, LOC("common.cancel"));
+        collision_stop_.request_stop();
+        publish_viewport_toolbar_generation();
     }
 
     float AsyncTaskManager::collisionResolvedSize() const {
@@ -3788,26 +3805,26 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::startCollision(core::CollisionSettings settings) {
         if (!viewer_->isOnViewerThread())
-            throw std::logic_error("Collision capture requires the viewer thread");
+            throw core::collisionError("selection.operation_failed_generic", "Collision capture requires the viewer thread");
+        pollCollision();
         settings.validate();
         if (const auto state = collisionJob(); state && state->running())
-            throw std::runtime_error("A collision job is already running");
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision job is already running");
         auto* manager = viewer_->getSceneManager();
         if (!manager)
-            throw std::runtime_error("No scene manager");
+            throw core::collisionError("runtime.no_scene_manager", "No scene manager");
         const auto selected = manager->getSelectedNodeIds();
         if (selected.size() != 1)
-            throw std::runtime_error("Select exactly one splat node to voxelize");
+            throw core::collisionError("collision.source_unavailable", "Select exactly one splat node to voxelize");
         core::Scene::CollisionSourceIdentity identity;
-        auto sources = manager->getScene().captureCollisionSources(selected.front(), &identity);
+        auto source = manager->getScene().captureCollisionSource(selected.front(), &identity);
         collision_source_ = identity;
         collision_settings_ = settings;
         collision_resolved_size_ = 0;
-        launchCollision([this, settings, sources = std::move(sources)](std::stop_token stop, const core::ProgressCallback& progress) {
+        launchCollision([this, settings, source = std::move(source)](std::stop_token stop, const core::ProgressCallback& progress) {
             collision_result_ = std::make_shared<const core::CollisionVolume>(core::generateCollision(
-                sources.front(), settings, stop, progress, [this](float size) {
+                source, settings, stop, progress, [this](float size) {
                     collision_resolved_size_ = size;
-                    publishCollisionState(true);
                     publish_viewport_toolbar_generation();
                 }));
             return false;
@@ -3816,116 +3833,120 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::startCollisionExport(core::Uuid uuid, const std::filesystem::path& path) {
         if (!viewer_->isOnViewerThread())
-            throw std::logic_error("Collision export capture requires the viewer thread");
+            throw core::collisionError("selection.operation_failed_generic", "Collision export capture requires the viewer thread");
+        pollCollision();
         if (const auto state = collisionJob(); state && state->running())
-            throw std::runtime_error("A collision job is already running");
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision job is already running");
         auto* manager = viewer_->getSceneManager();
         const auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
         if (!node || node->type != core::NodeType::COLLISION || !node->collision)
-            throw std::runtime_error("The export target is not a collision node");
-        auto volume = node->collision;
+            throw core::collisionError("collision.select_export", "The export target is not a collision node");
         const auto transform = manager->getScene().getWorldTransform(node->id);
-        launchCollision([volume, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
+        launchCollision([volume = node->collision, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
             io::exportCollision(*volume, path, transform, stop, progress);
             return true; // Publication wins a cancellation arriving after installation.
         });
     }
 
     void AsyncTaskManager::launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work) {
-        collision_thread_.reset();
-        if (!beginJob(collision_job_, JobType::Collision, "Preparing collision"))
-            throw std::runtime_error("Cannot start collision job");
+        if (collisionWorkerActive() || collision_replacement_)
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision worker or scene replacement is still pending");
+        pollCollision();
+        if (!beginJob(collision_job_, JobType::Collision, LOC("gallery.transfer.phase.preparing")))
+            throw core::collisionError("projects.gallery.eligibility.busy", "Cannot start collision job");
         collision_result_.reset();
         collision_epoch_ = viewer_->project_lifecycle_->documentEpoch();
-        publishCollisionState(true);
+        publish_viewport_toolbar_generation();
         const auto job = collision_job_;
+        collision_stop_ = {};
         try {
-            collision_thread_.emplace([this, job, work = std::move(work)](std::stop_token stop) {
+            collision_worker_ = std::async(std::launch::async, [this, job, work = std::move(work), stop = collision_stop_.get_token()]() mutable {
                 jobs_.work(job);
-                publishCollisionState(true);
                 std::string error;
                 bool published = false, canceled = false;
                 try {
-                    published = work(stop, [this, job](float value, const std::string& stage) {
+                    AppStore::TaskProgressState shown;
+                    published = work(stop, [this, job, &shown](float value, const std::string& stage) {
                         jobs_.report(job, value, stage);
-                        publishCollisionState();
+                        AppStore::TaskProgressState next{.active = true, .progress = value, .stage = stage};
+                        if (next != shown) {
+                            shown = std::move(next);
+                            publish_viewport_toolbar_generation();
+                        }
                         return !jobs_.cancelRequested(job);
                     });
                 } catch (const core::OperationCancelled&) {
                     canceled = true;
                 } catch (const std::exception& e) {
-                    error = e.what();
-                    LOG_ERROR("Collision operation failed: {}", error);
+                    error = core::localizedCollisionError(e);
+                    LOG_ERROR("Collision operation failed: {}", e.what());
                 }
-                jobs_.finishWork(job, !published && error.empty() && (canceled || stop.stop_requested() || jobs_.cancelRequested(job)),
-                                 error, std::nullopt, std::nullopt, published);
-                publishCollisionState(true);
-                collision_pending_.store(true, std::memory_order_release);
-                wakeMainThreadForAsyncWork();
+                work = {};
+                jobs_.finishWork(job, canceled, std::move(error), std::nullopt, std::nullopt, published);
+                publish_viewport_toolbar_generation();
             });
         } catch (const std::exception& e) {
             LOG_ERROR("Cannot launch collision worker: {}", e.what());
-            jobs_.failed(job, e.what());
-            publishCollisionState(true);
-            throw;
+            jobs_.failed(job, core::localizedCollisionError(e));
+            publish_viewport_toolbar_generation();
+            throw core::collisionError("selection.operation_failed_generic", e.what(), lfs::ErrorCode::Internal);
         }
     }
 
     void AsyncTaskManager::pollCollision() {
-        if (!collision_pending_.exchange(false, std::memory_order_acq_rel))
-            return;
-        collision_thread_.reset();
         const auto state = collisionJob();
-        if (!state)
+        if (!state || state->status != JobStatus::CompletionPending)
             return;
+        if (collisionWorkerActive()) {
+            wakeMainThreadForAsyncWork();
+            return;
+        }
         auto result = std::move(collision_result_);
-        if (state->worker_canceled || (result && (jobs_.cancelRequested(collision_job_) ||
-                                                  !viewer_->project_lifecycle_ ||
-                                                  collision_epoch_ != viewer_->project_lifecycle_->documentEpoch()))) {
+        if (result && (state->cancel_requested ||
+                       !viewer_->project_lifecycle_ ||
+                       collision_epoch_ != viewer_->project_lifecycle_->documentEpoch())) {
             jobs_.canceled(collision_job_);
-        } else if (!state->error.empty()) {
-            LOG_ERROR("Collision job failed: {}", state->error);
-            jobs_.failed(collision_job_, state->error);
-        } else {
+        } else if (result && !state->worker_canceled && state->error.empty()) {
             try {
-                if (result) {
-                    auto* scene_manager = viewer_->getSceneManager();
-                    if (!scene_manager || !collision_source_)
-                        throw std::runtime_error(LOC("collision.source_unavailable"));
-                    auto& manager = *scene_manager;
-                    auto& scene = manager.getScene();
-                    std::optional<std::shared_lock<std::shared_mutex>> lock;
-                    if (auto* mutex = scene.liveModelMutex(); mutex && core::Scene::live_model_lock_depth() == 0)
-                        lock.emplace(*mutex);
-                    scene.noteLiveModelLockAcquired();
-                    const ScopeExit release_depth([&scene] { scene.noteLiveModelLockReleased(); });
-                    if (scene.collisionSourceIdentity(collision_source_->id) != collision_source_)
-                        throw std::runtime_error(LOC("collision.source_changed"));
-                    const op::SceneGraphCaptureOptions options{.include_selected_nodes = false, .include_scene_context = false, .scoped_topology = true};
-                    auto before = op::SceneGraphPatchEntry::captureStateByIds(manager, {}, options);
-                    const auto id = scene.addCollision("Collision", std::move(result), collision_source_->id);
-                    if (id == core::NULL_NODE)
-                        throw std::runtime_error("Cannot add collision node");
-                    bool installed = false;
-                    const ScopeExit rollback([&] {
-                        if (!installed)
-                            scene.removeNodeById(id);
-                    });
-                    // The owned grid is world-space; keep its initial world frame
-                    // while inheriting subsequent source/ancestor edits.
-                    scene.getNodeById(id)->local_transform.set(glm::inverse(collision_source_->world_transform), false);
-                    op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
-                        manager, "Generate collision", std::move(before),
-                        op::SceneGraphPatchEntry::captureStateByIds(manager, {id}, options)));
-                    installed = true;
-                }
-                jobs_.completed(collision_job_);
+                auto* scene_manager = viewer_->getSceneManager();
+                if (!scene_manager || !collision_source_)
+                    throw core::collisionError("collision.source_unavailable", "Collision source is no longer available");
+                auto& manager = *scene_manager;
+                auto& scene = manager.getScene();
+                std::optional<std::shared_lock<std::shared_mutex>> lock;
+                if (auto* mutex = scene.liveModelMutex(); mutex && core::Scene::live_model_lock_depth() == 0)
+                    lock.emplace(*mutex);
+                scene.noteLiveModelLockAcquired();
+                const ScopeExit release_depth([&scene] { scene.noteLiveModelLockReleased(); });
+                if (scene.collisionSourceIdentity(collision_source_->id) != collision_source_)
+                    throw core::collisionError("collision.source_unavailable", "Collision source changed during generation; generate it again");
+                const op::SceneGraphCaptureOptions options{.include_selected_nodes = false, .include_scene_context = false, .scoped_topology = true};
+                auto before = op::SceneGraphPatchEntry::captureStateByIds(manager, {}, options);
+                const auto id = scene.addCollision("Collision", std::move(result), collision_source_->id);
+                if (id == core::NULL_NODE)
+                    throw core::collisionError("selection.operation_failed_generic", "Cannot add collision node");
+                bool installed = false;
+                const ScopeExit rollback([&] {
+                    if (!installed)
+                        scene.removeNodeById(id);
+                });
+                // The owned grid is world-space; keep its initial world frame
+                // while inheriting subsequent source/ancestor edits.
+                scene.getNodeById(id)->local_transform.set(glm::inverse(collision_source_->world_transform), false);
+                op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                    manager, LOC("collision.title"), std::move(before),
+                    op::SceneGraphPatchEntry::captureStateByIds(manager, {id}, options)));
+                installed = true;
             } catch (const std::exception& e) {
                 LOG_ERROR("Collision completion failed: {}", e.what());
-                jobs_.failed(collision_job_, e.what());
+                jobs_.failed(collision_job_, core::localizedCollisionError(e));
             }
         }
-        publishCollisionState(true);
+        collision_worker_.get();
+        settlePendingJobs();
+        publish_viewport_toolbar_generation();
+        if (auto replacement = std::exchange(collision_replacement_, {}))
+            replacement();
     }
 
     void AsyncTaskManager::startSplatSimplify(const std::string& source_name,
