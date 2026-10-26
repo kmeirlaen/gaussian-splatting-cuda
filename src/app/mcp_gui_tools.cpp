@@ -21,6 +21,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_display_name.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -3595,10 +3596,17 @@ namespace lfs::app {
                             return json{{"error", LOC("training.reset_before_strategy_change")}};
                     }
                     if (const auto* trainer = viewer_impl->getTrainerManager(); trainer) {
+                        auto ref = core::prop::PropertyObjectRef::cpp(&params->getActiveParams());
                         for (const auto& change : changes) {
                             if (change.meta.id == "iterations" &&
                                 trainer->rejectsIterationLimit(std::any_cast<size_t>(change.value))) {
                                 return json{{"error", LOC("training.iterations_must_exceed_current")}};
+                            }
+                            if (change.meta.needs_restart()) {
+                                auto current_val = change.meta.getter(ref);
+                                if (!trainer->canChangeProperty(change.meta, current_val, change.value)) {
+                                    return json{{"error", LOCF("training.reset_before_param_change", core::prop::property_display_name(change.meta))}};
+                                }
                             }
                         }
                     }
