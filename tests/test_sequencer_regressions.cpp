@@ -1075,10 +1075,10 @@ namespace {
         EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
         for (const auto effect : {lfs::sequencer::RevealEffect::Magic, lfs::sequencer::RevealEffect::Spread,
                                   lfs::sequencer::RevealEffect::Unroll, lfs::sequencer::RevealEffect::Twister,
-                                  lfs::sequencer::RevealEffect::Rain, lfs::sequencer::RevealEffect::KrpanoUnveil,
-                                  lfs::sequencer::RevealEffect::KrpanoLightEdge, lfs::sequencer::RevealEffect::KrpanoRainbow,
-                                  lfs::sequencer::RevealEffect::KrpanoDarkToLight, lfs::sequencer::RevealEffect::KrpanoDistortion,
-                                  lfs::sequencer::RevealEffect::KrpanoCameraLight}) {
+                                  lfs::sequencer::RevealEffect::Rain, lfs::sequencer::RevealEffect::Unveil,
+                                  lfs::sequencer::RevealEffect::LightEdge, lfs::sequencer::RevealEffect::Rainbow,
+                                  lfs::sequencer::RevealEffect::DarkToLight, lfs::sequencer::RevealEffect::Distortion,
+                                  lfs::sequencer::RevealEffect::CameraLight}) {
             timeline.setRevealClip(lfs::sequencer::RevealClip{2.0f, 5.0f, 0.2f, effect});
             ASSERT_TRUE(loaded.loadFromJson(timeline.saveToJson()));
             EXPECT_EQ(loaded.revealClip()->effect, effect);

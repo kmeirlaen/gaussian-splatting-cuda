@@ -920,7 +920,7 @@ namespace lfs::vis {
             const auto html = fmt::format(
                 "<div id=\"reveal-clip\" class=\"sequence-clip reveal-clip\" style=\"left: {:.1f}px; width: {:.1f}px;\"><span class=\"sequence-clip-label\">{} reveal</span></div>",
                 start_x, std::max(2.0f * cached_dp_ratio_, end_x - start_x),
-                std::array{"Magic", "Spread", "Unroll", "Twister", "Rain", "Krpano Unveil", "Krpano Light Edge", "Krpano Rainbow", "Krpano Dark to Light", "Krpano Distortion", "Krpano Camera Light"}[static_cast<int>(reveal->effect) - 1]);
+                std::array{"Magic", "Spread", "Unroll", "Twister", "Rain", "Unveil", "Light Edge", "Rainbow", "Dark to Light", "Distortion", "Camera Light"}[static_cast<int>(reveal->effect) - 1]);
             setTimelineMarkup(el_sequence_strip_, html);
             if (auto* el = document_->GetElementById("reveal-clip")) {
                 el->RemoveEventListener(Rml::EventId::Click, &transport_listener_);

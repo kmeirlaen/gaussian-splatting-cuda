@@ -1087,7 +1087,7 @@ void main(
         reveal_edge_rgb = effect.edge_rgb;
         reveal_grayscale = effect.grayscale;
         if (int(round(bounds.x)) == 11 && reveal.w < 1.0f) {
-            // The light in krpano's demo follows the viewing position.
+            // The light follows the viewing position.
             float4x3 view = transpose(cam.world_view_transform);
             float3 eye = -mul(float3x3(view), view[3]);
             float range = max(length(float2(bounds.w, max(abs(reveal.y), abs(reveal.z)))), 0.0001f);

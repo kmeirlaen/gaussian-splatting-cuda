@@ -1692,12 +1692,12 @@ namespace lfs::vis::gui {
                 items.push_back({"Unroll", "reveal_3"});
                 items.push_back({"Twister", "reveal_4"});
                 items.push_back({"Rain", "reveal_5"});
-                items.push_back({"Krpano: Unveil", "reveal_6"});
-                items.push_back({"Krpano: Light Edge", "reveal_7"});
-                items.push_back({"Krpano: Rainbow", "reveal_8"});
-                items.push_back({"Krpano: Dark to Light", "reveal_9"});
-                items.push_back({"Krpano: Distortion", "reveal_10"});
-                items.push_back({"Krpano: Camera Light", "reveal_11"});
+                items.push_back({"Unveil", "reveal_6"});
+                items.push_back({"Light Edge", "reveal_7"});
+                items.push_back({"Rainbow", "reveal_8"});
+                items.push_back({"Dark to Light", "reveal_9"});
+                items.push_back({"Distortion", "reveal_10"});
+                items.push_back({"Camera Light", "reveal_11"});
                 break;
             default:
                 break;

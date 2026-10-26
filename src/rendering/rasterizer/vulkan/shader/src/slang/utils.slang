@@ -1402,7 +1402,7 @@ LfsRevealEffect lfs_reveal_effect(float3 position, float3 scales, float4 reveal,
     if (progress >= 1.0f) return e;
     int type = int(round(bounds.x));
     if (type >= 6 && type <= 10) {
-        // krpano's unveil is a spherical wave from the scene origin. Use the
+        // Unveil is a spherical wave from the scene origin. Use the
         // robust scene extent and the clip's softness in place of fixed units.
         float range = max(length(float2(bounds.w, max(abs(reveal.y), abs(reveal.z)))), 0.0001f);
         float blend_range = max(range * (reveal.x - 1.0f), range * 0.001f);
