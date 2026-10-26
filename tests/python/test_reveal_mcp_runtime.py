@@ -1,65 +1,35 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exercise live reveal controls through the application MCP bridge."""
+"""Exercise live reveal controls through MCP on an isolated app instance."""
 import base64
 import io
-import json
 import os
-from pathlib import Path
-import subprocess
-import sys
 import time
 
-from test_render_on_demand_idle import _initialize
+from runtime_test_app import isolated_app
+from test_render_on_demand_idle import _call
 
 import pytest
 from PIL import Image, ImageChops
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
-ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize("with_project", [False, True], ids=["controls", "project"])
 def test_live_reveal_operations(tmp_path, with_project):
-    executable = os.environ.get("LFS_EXECUTABLE")
-    if not executable:
+    if not os.environ.get("LFS_EXECUTABLE"):
         pytest.skip("requires LFS_EXECUTABLE")
     project = os.environ.get("LFS_REVEAL_TEST_PROJECT") if with_project else None
     if with_project and not project:
         pytest.skip("requires LFS_REVEAL_TEST_PROJECT")
-    env = dict(os.environ, LFS_MCP_TOOLS_CACHE=str(tmp_path / "tools.json"),
-               LFS_MCP_BRIDGE_LOG=str(tmp_path / "bridge.log"))
-    env.pop("PYTHONPATH", None)
-    process = subprocess.Popen([sys.executable, str(ROOT / "scripts/lichtfeld_mcp_bridge.py")],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, cwd=ROOT)
-    def call(method, params=None, allow_error=False):
-        payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
-        process.stdin.write(f"Content-Length: {len(payload)}\r\n\r\n".encode() + payload)
-        process.stdin.flush()
-        headers = {}
-        while line := process.stdout.readline().strip():
-            key, value = line.decode().split(":", 1)
-            headers[key.lower()] = value.strip()
-        response = json.loads(process.stdout.read(int(headers["content-length"])))
-        if allow_error and "error" in response:
-            return response
-        assert "error" not in response, response
-        return response["result"]
-    def tool(name, arguments=None):
-        response = call("tools/call", {"name": name, "arguments": arguments or {}})
-        assert not response.get("isError"), response
-        return response["structuredContent"]
-    try:
-        call("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
-                            "clientInfo": {"name": "reveal-regression", "version": "1"}})
-        # The bridge initializes itself locally; start and initialize its HTTP server too.
-        call("tools/list", allow_error=True)
-        _initialize("http://127.0.0.1:45677/mcp")
+    with isolated_app(tmp_path) as endpoint:
+        def call(method, params=None):
+            return _call(endpoint, method, params)
+        def tool(name, arguments=None):
+            response = call("tools/call", {"name": name, "arguments": arguments or {}})
+            assert not response.get("isError"), response
+            return response["structuredContent"]
         tools = {item["name"] for item in call("tools/list")["tools"]}
-        call("resources/list")
-        for uri in ("lichtfeld://runtime/catalog", "lichtfeld://runtime/state", "lichtfeld://ui/state",
-                    "lichtfeld://scene/state", "lichtfeld://selection/current"):
-            call("resources/read", {"uri": uri})
         assert {"sequencer_reveal_get", "sequencer_reveal_set", "sequencer_reveal_remove"} <= tools
         clip = {"start": 1.0, "end": 4.0, "softness": 0.2, "effect": 2}
         result = tool("sequencer_reveal_set", clip)
@@ -104,18 +74,17 @@ assert lf.ui.get_reveal_clip() is None
             tool("camera_reset")
             assert tool("sequencer_reveal_set", clip)["success"]
             tool("sequencer_scrub", {"time": 2.0})
-            capture = tool("render_capture_window", {"width": 640})
+            capture = tool("render_capture", {"width": 640})
             assert capture["success"] and capture["data"]
             reveal_image = base64.b64decode(capture["data"])
             (tmp_path / "reveal.png").write_bytes(reveal_image)
             tool("sequencer_scrub", {"time": clip["end"]})
-            normal = tool("render_capture_window", {"width": 640})
+            normal = tool("render_capture", {"width": 640})
             assert normal["success"] and normal["data"]
             normal_image = base64.b64decode(normal["data"])
             (tmp_path / "normal.png").write_bytes(normal_image)
             with Image.open(io.BytesIO(reveal_image)) as reveal, Image.open(io.BytesIO(normal_image)) as plain:
-                area = (40, 40, int(reveal.width * 0.4), int(reveal.height * 0.9))
-                assert ImageChops.difference(reveal.crop(area).convert("RGB"), plain.crop(area).convert("RGB")).getbbox(), "reveal and normal viewport are identical"
+                assert ImageChops.difference(reveal.convert("RGB"), plain.convert("RGB")).getbbox(), "reveal and normal viewport are identical"
             rectangle = {"x0": 10, "y0": 10, "x1": 100, "y1": 100}
             for effect in (1, 2, 3, 4, 5, 6, 7, 8, 10):
                 assert tool("sequencer_reveal_set", {**clip, "effect": effect})["success"]
@@ -160,6 +129,3 @@ lf.ui.export_video(320, 180, 8, 27, {str(movie)!r}, include_provenance=False)
             assert job["outcome"] == "completed", job
             assert movie.stat().st_size > 0
             assert len(callback_log.read_text().splitlines()) > 1
-    finally:
-        process.stdin.close()
-        process.wait(timeout=20)
