@@ -19,10 +19,14 @@ pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_live_reveal_operations(tmp_path):
+@pytest.mark.parametrize("with_project", [False, True], ids=["controls", "project"])
+def test_live_reveal_operations(tmp_path, with_project):
     executable = os.environ.get("LFS_EXECUTABLE")
     if not executable:
         pytest.skip("requires LFS_EXECUTABLE")
+    project = os.environ.get("LFS_REVEAL_TEST_PROJECT") if with_project else None
+    if with_project and not project:
+        pytest.skip("requires LFS_REVEAL_TEST_PROJECT")
     env = dict(os.environ, LFS_MCP_TOOLS_CACHE=str(tmp_path / "tools.json"),
                LFS_MCP_BRIDGE_LOG=str(tmp_path / "bridge.log"))
     env.pop("PYTHONPATH", None)
@@ -88,7 +92,6 @@ assert lf.ui.get_reveal_clip() is None
         assert tool("sequencer_reveal_get")["reveal"] == pytest.approx(clip)
         tool("history_redo")
         assert tool("sequencer_reveal_get")["reveal"] is None
-        project = os.environ.get("LFS_REVEAL_TEST_PROJECT")
         if project:
             tool("project_open", {"path": project, "discard_changes": True})
             deadline = time.monotonic() + 60
@@ -113,17 +116,24 @@ assert lf.ui.get_reveal_clip() is None
             with Image.open(io.BytesIO(reveal_image)) as reveal, Image.open(io.BytesIO(normal_image)) as plain:
                 area = (40, 40, int(reveal.width * 0.4), int(reveal.height * 0.9))
                 assert ImageChops.difference(reveal.crop(area).convert("RGB"), plain.crop(area).convert("RGB")).getbbox(), "reveal and normal viewport are identical"
+            rectangle = {"x0": 10, "y0": 10, "x1": 100, "y1": 100}
+            for effect in (1, 2, 3, 4, 5, 6, 7, 8, 10):
+                assert tool("sequencer_reveal_set", {**clip, "effect": effect})["success"]
+                for scene_time in (0.0, 2.0):
+                    tool("sequencer_scrub", {"time": scene_time})
+                    before = tool("selection_get")
+                    blocked = call("tools/call", {"name": "selection_rect", "arguments": rectangle})
+                    assert blocked.get("isError") is True, (effect, scene_time, blocked)
+                    assert "reveal" in str(blocked).lower(), blocked
+                    assert tool("selection_get") == before
+                tool("sequencer_scrub", {"time": clip["end"]})
+                tool("selection_rect", rectangle)
             tool("sequencer_scrub", {"time": 2.0})
-            before = tool("selection_get")
-            blocked = call("tools/call", {"name": "selection_rect", "arguments":
-                           {"x0": 10, "y0": 10, "x1": 100, "y1": 100}})
-            assert blocked.get("isError") is True, blocked
-            assert "reveal" in str(blocked).lower(), blocked
-            assert tool("selection_get") == before
-            tool("sequencer_reveal_set", {**clip, "effect": 6})
-            stationary = call("tools/call", {"name": "selection_rect", "arguments":
-                              {"x0": 10, "y0": 10, "x1": 100, "y1": 100}})
-            assert "reveal" not in str(stationary).lower(), stationary
+            for effect in (9, 11):
+                assert tool("sequencer_reveal_set", {**clip, "effect": effect})["success"]
+                tool("selection_rect", rectangle)
+            tool("sequencer_reveal_remove")
+            tool("selection_rect", rectangle)
             for effect in range(1, 12):
                 assert tool("sequencer_reveal_set", {**clip, "effect": effect})["success"]
                 frame = tool("render_capture_window", {"width": 320})

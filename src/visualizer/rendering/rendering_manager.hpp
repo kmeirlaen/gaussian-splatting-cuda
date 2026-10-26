@@ -304,7 +304,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool revealMovesSplats() const {
-            return sequencer_reveal_ && (sequencer_reveal_->effect <= 5 || sequencer_reveal_->effect == 10);
+            return sequencer_reveal_ && (sequencer_reveal_->effect <= 8 || sequencer_reveal_->effect == 10);
         }
 
         // Interactive edits validate changed environment maps before committing settings.
