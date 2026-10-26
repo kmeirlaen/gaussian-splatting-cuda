@@ -15,8 +15,12 @@ namespace collision_test {
     }
     inline std::shared_ptr<const CollisionVolume> box(glm::vec3 origin, glm::ivec3 dimensions, float size = 1) {
         auto volume = std::make_shared<CollisionVolume>(CollisionVolume{
-            .settings = {.voxel_size = size}, .origin = origin, .dimensions = dimensions, .edge = 4,
-            .occupied_count = uint64_t(dimensions.x) * dimensions.y * dimensions.z, .words = {1}});
+            .settings = {.voxel_size = size},
+            .origin = origin,
+            .dimensions = dimensions,
+            .edge = 4,
+            .occupied_count = uint64_t(dimensions.x) * dimensions.y * dimensions.z,
+            .words = {1}});
         while (volume->edge < std::max({dimensions.x, dimensions.y, dimensions.z}))
             volume->edge *= 2;
         volume->validate();

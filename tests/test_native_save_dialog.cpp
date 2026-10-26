@@ -6,8 +6,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
-#include <gtest/gtest.h>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <nfd.h>
 
 namespace {

@@ -1538,7 +1538,7 @@ namespace lfs::python {
             result["has_collision"] = state.colliders;
             result["walking"] = state.walking;
             result["walk_settings"] = nb::make_tuple(state.walk_settings.height, state.walk_settings.radius,
-                                                    state.walk_settings.step, state.walk_settings.speed);
+                                                     state.walk_settings.step, state.walk_settings.speed);
             result["target_uuid"] = state.uuid;
             result["target_name"] = state.name;
             result["source_name"] = state.source;

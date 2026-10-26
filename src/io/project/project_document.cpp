@@ -6357,7 +6357,7 @@ namespace lfs::io::project {
                     .splat_copy_ms = splat_copy_ms,
                     .splat_materialize_ms =
                         splat_materialize_ms,
-            };
+                };
             const double total_ms = milliseconds(
                 hydration_started,
                 std::chrono::steady_clock::now());
