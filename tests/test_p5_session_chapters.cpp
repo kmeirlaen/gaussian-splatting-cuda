@@ -17,16 +17,16 @@
 #include "gui/scene_tree_session.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "input/input_controller.hpp"
-#include "operation/undo_history.hpp"
 #include "io/project_document.hpp"
 #include "io/session_chapters.hpp"
 #include "io/video/video_export_options.hpp"
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
+#include "operation/undo_history.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
-#include "sequencer/timeline.hpp"
 #include "sequencer/reveal_render_state.hpp"
+#include "sequencer/timeline.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/control/command_api.hpp"
 #include "training/project_snapshot_chapters.hpp"
@@ -83,8 +83,11 @@ namespace {
         fs::copy_file(source, path);
         auto document = require_result(ProjectDocument::open(path));
         ProjectSessionChapters retained{
-            .gui_layout = document.gui_layout(), .editor = document.editor(),
-            .view = document.view(), .sequencer = document.sequencer(), .metrics = document.metrics(),
+            .gui_layout = document.gui_layout(),
+            .editor = document.editor(),
+            .view = document.view(),
+            .sequencer = document.sequencer(),
+            .metrics = document.metrics(),
         };
         ASSERT_TRUE(retained.sequencer.dom().set_json("timeline.review_extension", "preserve"));
         lfs::vis::ViewerOptions options;

@@ -4,8 +4,8 @@
 #pragma once
 
 #include "core/scene.hpp"
-#include "rendering/rendering.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/rendering.hpp"
 #include "sequencer/timeline.hpp"
 #include <algorithm>
 #include <cmath>

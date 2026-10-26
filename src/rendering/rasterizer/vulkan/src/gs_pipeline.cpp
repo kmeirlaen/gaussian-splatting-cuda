@@ -2028,7 +2028,8 @@ void VulkanGSPipeline::setRevealEffect(const bool enabled) {
         }
         reveal_active_ = false;
     }
-    if (banded) setBandedExport(false);
+    if (banded)
+        setBandedExport(false);
     if (enabled && !reveal_initialized_) {
         const size_t count = all_compute_pipelines.size();
         const size_t pending_count = pending_compute_pipelines.size();
@@ -2059,17 +2060,20 @@ void VulkanGSPipeline::setRevealEffect(const bool enabled) {
         } catch (...) {
             for (size_t i = banded_count; i < banded_export_pipelines_.size(); ++i)
                 destroyComputePipeline(*banded_export_pipelines_[i].second);
-            for (auto& entry : reveal_pipelines_) destroyComputePipeline(*entry.second);
+            for (auto& entry : reveal_pipelines_)
+                destroyComputePipeline(*entry.second);
             all_compute_pipelines.resize(count);
             pending_compute_pipelines.resize(pending_count);
             banded_export_pipelines_.resize(banded_count);
             reveal_pipelines_.clear();
-            if (banded) setBandedExport(true);
+            if (banded)
+                setBandedExport(true);
             throw;
         }
         reveal_initialized_ = true;
     }
-    if (banded) setBandedExport(true);
+    if (banded)
+        setBandedExport(true);
     if (enabled) {
         for (auto& [pipeline, variant] : reveal_pipelines_) {
             std::swap(pipeline->shader, variant->shader);

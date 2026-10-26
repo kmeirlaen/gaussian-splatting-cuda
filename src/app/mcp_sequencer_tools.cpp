@@ -247,10 +247,10 @@ namespace lfs::app {
             [viewer, backend](const json&) -> json {
                 return post_and_wait(viewer, [backend]() -> json {
                     auto controller = ensure_ready_controller(backend);
-                    if (!controller) return json{{"error", controller.error()}};
+                    if (!controller)
+                        return json{{"error", controller.error()}};
                     const auto& clip = (*controller)->timeline().revealClip();
-                    return json{{"success", true}, {"reveal", clip ? json{{"start", clip->start}, {"end", clip->end},
-                        {"softness", clip->softness}, {"effect", static_cast<int>(clip->effect)}} : json(nullptr)}};
+                    return json{{"success", true}, {"reveal", clip ? json{{"start", clip->start}, {"end", clip->end}, {"softness", clip->softness}, {"effect", static_cast<int>(clip->effect)}} : json(nullptr)}};
                 });
             });
 
@@ -258,16 +258,14 @@ namespace lfs::app {
             McpTool{
                 .name = "sequencer.reveal_set",
                 .description = "Set the live sequencer reveal clip",
-                .input_schema = {.type = "object", .properties = json{
-                    {"start", {{"type", "number"}}}, {"end", {{"type", "number"}}},
-                    {"softness", {{"type", "number"}}}, {"effect", {{"type", "integer"}}}},
-                    .required = {"start", "end", "softness", "effect"}}},
+                .input_schema = {.type = "object", .properties = json{{"start", {{"type", "number"}}}, {"end", {{"type", "number"}}}, {"softness", {{"type", "number"}}}, {"effect", {{"type", "integer"}}}}, .required = {"start", "end", "softness", "effect"}}},
             [viewer, backend](const json& args) -> json {
                 const sequencer::RevealClip clip{args.at("start").get<float>(), args.at("end").get<float>(),
-                    args.at("softness").get<float>(), static_cast<sequencer::RevealEffect>(args.at("effect").get<int>())};
+                                                 args.at("softness").get<float>(), static_cast<sequencer::RevealEffect>(args.at("effect").get<int>())};
                 return post_and_wait(viewer, [backend, clip]() -> json {
                     auto controller = ensure_ready_controller(backend);
-                    if (!controller) return json{{"error", controller.error()}};
+                    if (!controller)
+                        return json{{"error", controller.error()}};
                     try {
                         (*controller)->setRevealClip(clip);
                     } catch (const std::invalid_argument& e) {
@@ -285,7 +283,8 @@ namespace lfs::app {
             [viewer, backend](const json&) -> json {
                 return post_and_wait(viewer, [backend]() -> json {
                     auto controller = ensure_ready_controller(backend);
-                    if (!controller) return json{{"error", controller.error()}};
+                    if (!controller)
+                        return json{{"error", controller.error()}};
                     (*controller)->setRevealClip(std::nullopt);
                     return json{{"success", true}};
                 });

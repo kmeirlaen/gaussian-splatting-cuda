@@ -22,9 +22,17 @@ namespace lfs::sequencer {
 
     // A reveal is evaluated independently of camera keyframes. Its progress is
     // shared by interactive playback and offline rendering.
-    enum class RevealEffect : int { Magic = 1, Spread = 2, Unroll = 3, Twister = 4, Rain = 5,
-                                    Unveil = 6, LightEdge = 7, Rainbow = 8,
-                                    DarkToLight = 9, Distortion = 10, CameraLight = 11 };
+    enum class RevealEffect : int { Magic = 1,
+                                    Spread = 2,
+                                    Unroll = 3,
+                                    Twister = 4,
+                                    Rain = 5,
+                                    Unveil = 6,
+                                    LightEdge = 7,
+                                    Rainbow = 8,
+                                    DarkToLight = 9,
+                                    Distortion = 10,
+                                    CameraLight = 11 };
     struct RevealClip {
         float start = 0.0f;
         float end = 3.0f;

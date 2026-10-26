@@ -73,7 +73,8 @@ namespace lfs::vis {
         const auto before = timeline_.revealClip();
         const float duration_before = clipDuration();
         timeline_.setRevealClip(clip);
-        if (sameReveal(before, clip)) return;
+        if (sameReveal(before, clip))
+            return;
         markTimelineChanged();
         if (!pending_reveal_edit_ && reveal_commit_callback_)
             reveal_commit_callback_(before, clip, duration_before, clipDuration());
@@ -85,7 +86,8 @@ namespace lfs::vis {
     }
 
     void SequencerController::endRevealEdit() {
-        if (!pending_reveal_edit_) return;
+        if (!pending_reveal_edit_)
+            return;
         const auto before = *pending_reveal_edit_;
         pending_reveal_edit_.reset();
         if (reveal_commit_callback_ && (!sameReveal(before.clip, timeline_.revealClip()) || before.duration != clipDuration()))

@@ -476,8 +476,10 @@ namespace lfs::vis {
                 mx >= left - 6.0f * s && mx <= right + 6.0f * s) {
                 controller_.beginRevealEdit();
                 selectReveal(true);
-                if (std::abs(mx - left) <= 6.0f * s) reveal_drag_edge_ = -1;
-                else if (std::abs(mx - right) <= 6.0f * s) reveal_drag_edge_ = 1;
+                if (std::abs(mx - left) <= 6.0f * s)
+                    reveal_drag_edge_ = -1;
+                else if (std::abs(mx - right) <= 6.0f * s)
+                    reveal_drag_edge_ = 1;
                 else {
                     reveal_drag_edge_ = 2;
                     reveal_drag_origin_x_ = mx;
@@ -496,8 +498,10 @@ namespace lfs::vis {
                                                        sequencer::MAX_SEQUENCER_TIME_SECONDS - reveal_drag_origin_end_);
                         edited.start = reveal_drag_origin_start_ + delta;
                         edited.end = reveal_drag_origin_end_ + delta;
-                    } else if (reveal_drag_edge_ < 0) edited.start = std::max(0.0f, std::min(time, edited.end - 0.01f));
-                    else edited.end = std::min(sequencer::MAX_SEQUENCER_TIME_SECONDS, std::max(time, edited.start + 0.01f));
+                    } else if (reveal_drag_edge_ < 0)
+                        edited.start = std::max(0.0f, std::min(time, edited.end - 0.01f));
+                    else
+                        edited.end = std::min(sequencer::MAX_SEQUENCER_TIME_SECONDS, std::max(time, edited.start + 0.01f));
                     if (edited.end > edited.start)
                         controller_.setRevealClip(edited);
                     selectReveal(true);

@@ -214,7 +214,10 @@ namespace lfs::vis {
 
         ClipDurationCommitCallback clip_duration_commit_callback_;
         RevealCommitCallback reveal_commit_callback_;
-        struct PendingRevealEdit { std::optional<sequencer::RevealClip> clip; float duration; };
+        struct PendingRevealEdit {
+            std::optional<sequencer::RevealClip> clip;
+            float duration;
+        };
         std::optional<PendingRevealEdit> pending_reveal_edit_;
     };
 

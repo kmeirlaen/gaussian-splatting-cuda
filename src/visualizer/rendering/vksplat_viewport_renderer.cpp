@@ -1517,10 +1517,8 @@ namespace lfs::vis {
 
                 if (request.reveal) {
                     const auto& reveal = *request.reveal;
-                    writeVec4(dst, RevealParams, glm::vec4(1.0f + std::clamp(reveal.softness, 0.001f, 1.0f), reveal.min_y, reveal.max_y,
-                                                          std::clamp(reveal.progress, 0.0f, 1.0f)));
-                    writeVec4(dst, RevealEffectBounds, glm::vec4(static_cast<float>(reveal.effect),
-                                                            reveal.center_x, reveal.center_z, reveal.radius));
+                    writeVec4(dst, RevealParams, glm::vec4(1.0f + std::clamp(reveal.softness, 0.001f, 1.0f), reveal.min_y, reveal.max_y, std::clamp(reveal.progress, 0.0f, 1.0f)));
+                    writeVec4(dst, RevealEffectBounds, glm::vec4(static_cast<float>(reveal.effect), reveal.center_x, reveal.center_z, reveal.radius));
                 }
 
                 const auto write_crop = [&](const lfs::rendering::GaussianScopedBoxFilter& crop,

@@ -5979,7 +5979,8 @@ namespace lfs::core {
         size_t count = model ? model->size() : 0;
         if (!model) {
             std::lock_guard lock(combined_model_mutex_);
-            if (!consolidated_ || !cached_combined_) return false;
+            if (!consolidated_ || !cached_combined_)
+                return false;
             for (const auto& slot : consolidated_node_slots_) {
                 if (slot.id == id) {
                     combined = cached_combined_;
@@ -6007,8 +6008,8 @@ namespace lfs::core {
             auto sampled = means_view.slice(0, 0, count, step).contiguous().cpu();
             auto values = sampled.accessor<float, 2>();
             const auto deleted = model->has_deleted_mask()
-                ? model->deleted().slice(0, offset, offset + count, step).contiguous().cpu()
-                : Tensor{};
+                                     ? model->deleted().slice(0, offset, offset + count, step).contiguous().cpu()
+                                     : Tensor{};
             const auto* deleted_values = deleted.is_valid() ? deleted.ptr<uint8_t>() : nullptr;
             std::array<std::vector<float>, 3> columns;
             for (size_t i = 0; i < sampled.size(0); ++i) {

@@ -390,9 +390,9 @@ namespace lfs::vis::gui {
         skip_next_click_ = true;
 
         const std::string html = reveal
-            ? fmt::format("<div class=\"context-menu-item\" id=\"ctx-remove-reveal\">{}</div>",
-                          Rml::StringUtilities::EncodeRml(LOC("common.remove")))
-            : buildContextMenuHTML(keyframe_index, edit_mode);
+                                     ? fmt::format("<div class=\"context-menu-item\" id=\"ctx-remove-reveal\">{}</div>",
+                                                   Rml::StringUtilities::EncodeRml(LOC("common.remove")))
+                                     : buildContextMenuHTML(keyframe_index, edit_mode);
         el_context_menu_->SetInnerRML(html);
         el_context_menu_->SetClass("visible", true);
         el_menu_backdrop_->SetProperty("display", "block");

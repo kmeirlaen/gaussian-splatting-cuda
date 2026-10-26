@@ -17,6 +17,7 @@ namespace lfs::vis {
     inline const char* revealEffectKey(const sequencer::RevealEffect effect) {
         const int index = static_cast<int>(effect) - 1;
         return index >= 0 && index < static_cast<int>(reveal_effect_keys.size())
-            ? reveal_effect_keys[index] : reveal_effect_keys.front();
+                   ? reveal_effect_keys[index]
+                   : reveal_effect_keys.front();
     }
-}
+} // namespace lfs::vis
