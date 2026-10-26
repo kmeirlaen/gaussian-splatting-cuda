@@ -557,7 +557,8 @@ namespace lfs::io::project::detail {
                    a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
         const auto error = GetLastError();
 #else
-        struct stat a{}, b{};
+        struct stat a {
+        }, b{};
         if (::fstat(fd_, &a) == 0 && ::fstat(other.fd_, &b) == 0)
             return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
         const auto error = errno;
