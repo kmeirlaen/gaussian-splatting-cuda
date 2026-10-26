@@ -2414,6 +2414,24 @@
     "popularity_unavailable": "Populariteitsgegevens niet beschikbaar."
   },
   "sequencer": {
+    "reveal_effect_magic": "Magie",
+    "reveal_effect_spread": "Verspreiden",
+    "reveal_effect_unroll": "Uitrollen",
+    "reveal_effect_twister": "Wervelwind",
+    "reveal_effect_rain": "Regen",
+    "reveal_effect_unveil": "Onthullen",
+    "reveal_effect_light_edge": "Lichtrand",
+    "reveal_effect_rainbow": "Regenboog",
+    "reveal_effect_dark_to_light": "Donker naar licht",
+    "reveal_effect_distortion": "Vervorming",
+    "reveal_effect_camera_light": "Cameralicht",
+    "reveal_history_stale": "Het onthullingseffect is gewijzigd sinds deze bewerking is vastgelegd.",
+    "add_reveal": "Onthullingseffect toevoegen",
+    "change_reveal": "Onthullingseffect wijzigen",
+    "reveal_start": "Begin",
+    "reveal_end": "Einde",
+    "reveal_softness": "Zachtheid",
+    "reveal_softness_hint": "Van toepassing op Onthullen, Lichtrand, Regenboog, Donker naar licht en Vervorming.",
     "edit_focal_length": "Brandpuntsafstand bewerken...",
     "edit_focal_length_title": "Brandpuntsafstand bewerken",
     "play": "Afspelen (Spatie)",
@@ -3362,5 +3380,6 @@
   "preferences.drag_rejected_node": "Exporteren niet mogelijk: {}. Er zijn geen bestanden overgedragen. Raadpleeg het logboek voor details.",
   "preferences.drag_title": "Splats overdragen",
   "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
-  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details."
+  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details.",
+  "selection.reveal_moving_blocked": "Selecteren is niet mogelijk terwijl een onthullingseffect splats verplaatst."
 }

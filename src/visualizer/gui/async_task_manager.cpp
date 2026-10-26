@@ -3233,8 +3233,6 @@ namespace lfs::vis::gui {
         }
         const auto& timeline = gui_manager->sequencer().timeline();
         const auto reveal_clip = timeline.revealClip();
-        const auto reveal_bounds = reveal_clip ? makeRevealRenderState(scene_manager->getScene(), *reveal_clip, 0.0f)
-                                               : std::nullopt;
         const auto* sequence = gui_manager->sequencer().plySequence();
         const auto sequence_uuid = sequence ? std::optional(sequence->node_uuid) : std::nullopt;
         std::vector<size_t> sequence_frames;
@@ -3313,7 +3311,7 @@ namespace lfs::vis::gui {
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings,
-             sequence_uuid, sequence_frames = std::move(sequence_frames), reveal_clip, reveal_bounds,
+             sequence_uuid, sequence_frames = std::move(sequence_frames), reveal_clip,
              encoder = std::move(encoder),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
@@ -3381,7 +3379,7 @@ namespace lfs::vis::gui {
                             viewer,
                             [viewer, engine, scene_manager, rendering_manager, environment_state,
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
-                             cam_state = frame_states[frame], reveal_clip, reveal_bounds,
+                             cam_state = frame_states[frame], reveal_clip,
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
                             -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
@@ -3395,15 +3393,13 @@ namespace lfs::vis::gui {
                                     if (!*ready)
                                         return lfs::core::Tensor{};
                                 }
-                                if (lfs::python::has_scene_time_callback()) {
+                                const bool animated_scene = lfs::python::has_scene_time_callback();
+                                if (animated_scene)
                                     lfs::python::tick_scene_time_callback(clip_time);
-                                    refreshVideoExportMeshTransforms(
-                                        *snapshot_ptr, scene_manager->getScene());
-                                }
                                 // Borrow only inside this synchronous viewer-thread render; no
                                 // per-frame Gaussian clone or retained live pointer.
                                 std::optional<VideoExportSceneSnapshot> sequence_snapshot;
-                                if (sequence_uuid) {
+                                if (sequence_uuid || animated_scene) {
                                     auto current = captureVideoExportSceneSnapshot(*scene_manager, VideoExportCapture::ImmediateRender);
                                     if (!current)
                                         return std::unexpected(current.error());
@@ -3413,9 +3409,8 @@ namespace lfs::vis::gui {
                                 auto* const window_manager = viewer->getWindowManager();
                                 auto* const vulkan_context =
                                     window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
-                                auto reveal = reveal_bounds;
-                                if (reveal && reveal_clip)
-                                    reveal->progress = reveal_clip->progress(clip_time);
+                                auto reveal = reveal_clip ? makeRevealRenderState(scene_manager->getScene(), *reveal_clip, clip_time)
+                                                          : std::nullopt;
                                 return renderVideoExportFrame(
                                     *rendering_manager,
                                     *engine,

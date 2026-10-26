@@ -324,6 +324,7 @@ namespace lfs::vis {
         DurationEditListener duration_listener_;
         RevealEditListener reveal_listener_;
         bool reveal_selected_ = false;
+        bool ply_sequence_selected_ = false;
         int reveal_drag_edge_ = 0;
         float reveal_drag_origin_x_ = 0.0f;
         float reveal_drag_origin_start_ = 0.0f;

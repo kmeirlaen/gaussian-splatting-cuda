@@ -1326,8 +1326,8 @@ static const uint OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES = 64;
 static const uint OVERLAY_PARAM_CROP_POLYGON_STRIDE = OVERLAY_PARAM_CROP_POLYGON_VERTICES + OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES / 2;
 static const uint OVERLAY_PARAM_CROP_POLYGON_COUNT = 16;
 static const uint OVERLAY_PARAM_REVEAL = OVERLAY_PARAM_CROP_POLYGON_BASE + OVERLAY_PARAM_CROP_POLYGON_STRIDE * OVERLAY_PARAM_CROP_POLYGON_COUNT;
-static const uint OVERLAY_PARAM_REVEAL_SOFTNESS = OVERLAY_PARAM_REVEAL + 1;
-static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_REVEAL_SOFTNESS + 1;
+static const uint OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS = OVERLAY_PARAM_REVEAL + 1;
+static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS + 1;
 
 // Adapted from https://github.com/sparkjsdev/spark/blob/main/examples/splat-reveal-effects/index.html
 // Spark Spread's radial expansion, seed/full scale, and color stages. Map the
@@ -1485,7 +1485,7 @@ LfsRevealEffect lfs_reveal_effect(float3 position, float3 scales, float4 reveal,
         float top = max(5.0f,-reveal.y/unit+1.0f);
         p.y = min(lerp(bottom,top,s),p.y);
         p.xz = lfs_reveal_rotate(lerp(p.xz*0.3f,p.xz,s),t*0.3f*(1.0f-s));
-        float strength = smoothstep(bottom,y,p.y);
+        float strength = y <= bottom + 1e-6f ? step(y,p.y) : smoothstep(bottom,y,p.y);
         e.scale_mix = pow(strength,30.0f);
         e.seed_scale = 0.005f*unit*(1.0f-e.scale_mix);
         e.spin = -t*0.3f*(1.0f-s);

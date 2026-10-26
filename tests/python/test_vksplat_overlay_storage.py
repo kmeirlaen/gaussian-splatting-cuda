@@ -178,7 +178,7 @@ class VkSplatOverlayStorageTests(unittest.TestCase):
             "CropPolygonParamStride": "OVERLAY_PARAM_CROP_POLYGON_STRIDE",
             "CropPolygonCount": "OVERLAY_PARAM_CROP_POLYGON_COUNT",
             "RevealParams": "OVERLAY_PARAM_REVEAL",
-            "RevealSoftness": "OVERLAY_PARAM_REVEAL_SOFTNESS",
+            "RevealEffectBounds": "OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS",
             "ParamCount": "OVERLAY_PARAM_COUNT",
             "kMaxVertices": "OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES",
         }

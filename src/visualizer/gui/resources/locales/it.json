@@ -2427,6 +2427,24 @@
     "popularity_unavailable": "Dati sulla popolarità non disponibili."
   },
   "sequencer": {
+    "reveal_effect_magic": "Magia",
+    "reveal_effect_spread": "Espansione",
+    "reveal_effect_unroll": "Srotolamento",
+    "reveal_effect_twister": "Vortice",
+    "reveal_effect_rain": "Pioggia",
+    "reveal_effect_unveil": "Svelamento",
+    "reveal_effect_light_edge": "Bordo luminoso",
+    "reveal_effect_rainbow": "Arcobaleno",
+    "reveal_effect_dark_to_light": "Da scuro a chiaro",
+    "reveal_effect_distortion": "Distorsione",
+    "reveal_effect_camera_light": "Luce della camera",
+    "reveal_history_stale": "L’effetto di svelamento è cambiato dopo questa modifica.",
+    "add_reveal": "Aggiungi effetto di svelamento",
+    "change_reveal": "Cambia effetto di svelamento",
+    "reveal_start": "Inizio",
+    "reveal_end": "Fine",
+    "reveal_softness": "Morbidezza",
+    "reveal_softness_hint": "Si applica a Svelamento, Bordo luminoso, Arcobaleno, Da scuro a chiaro e Distorsione.",
     "edit_focal_length": "Modifica lunghezza focale...",
     "edit_focal_length_title": "Modifica lunghezza focale",
     "play": "Riproduci (Spazio)",
@@ -3362,5 +3380,6 @@
   "project.session.newer_settings.title": "Impostazioni del progetto da una versione più recente",
   "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}",
   "preferences.drag_pause": "Metti in pausa l’addestramento prima di trascinare gli splat.",
-  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli."
+  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli.",
+  "selection.reveal_moving_blocked": "La selezione non è disponibile mentre un effetto di rivelazione sposta gli splat."
 }

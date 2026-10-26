@@ -236,6 +236,58 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "sequencer.reveal_get",
+                .description = "Read the live sequencer reveal clip",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer, backend](const json&) -> json {
+                return post_and_wait(viewer, [backend]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller) return json{{"error", controller.error()}};
+                    const auto& clip = (*controller)->timeline().revealClip();
+                    return json{{"success", true}, {"reveal", clip ? json{{"start", clip->start}, {"end", clip->end},
+                        {"softness", clip->softness}, {"effect", static_cast<int>(clip->effect)}} : json(nullptr)}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.reveal_set",
+                .description = "Set the live sequencer reveal clip",
+                .input_schema = {.type = "object", .properties = json{
+                    {"start", {{"type", "number"}}}, {"end", {{"type", "number"}}},
+                    {"softness", {{"type", "number"}}}, {"effect", {{"type", "integer"}}}},
+                    .required = {"start", "end", "softness", "effect"}}},
+            [viewer, backend](const json& args) -> json {
+                const sequencer::RevealClip clip{args.at("start").get<float>(), args.at("end").get<float>(),
+                    args.at("softness").get<float>(), static_cast<sequencer::RevealEffect>(args.at("effect").get<int>())};
+                return post_and_wait(viewer, [backend, clip]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller) return json{{"error", controller.error()}};
+                    try {
+                        (*controller)->setRevealClip(clip);
+                    } catch (const std::invalid_argument& e) {
+                        return mcp::invalid_argument_result(e.what(), "reveal");
+                    }
+                    return json{{"success", true}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.reveal_remove",
+                .description = "Remove the live sequencer reveal clip",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer, backend](const json&) -> json {
+                return post_and_wait(viewer, [backend]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller) return json{{"error", controller.error()}};
+                    (*controller)->setRevealClip(std::nullopt);
+                    return json{{"success", true}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "sequencer.add_keyframe",
                 .description = "Add a keyframe at the current viewport camera, optionally setting the camera first",
                 .input_schema = {

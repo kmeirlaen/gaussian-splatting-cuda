@@ -123,8 +123,6 @@ namespace lfs::rendering {
     };
 
     struct GaussianRevealState {
-        float min_x = 0.0f;
-        float max_x = 1.0f;
         float progress = 0.0f;
         float softness = 0.1f;
         float center_x = 0.0f;

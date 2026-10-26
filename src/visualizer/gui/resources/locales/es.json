@@ -2414,6 +2414,24 @@
     "popularity_unavailable": "Datos de popularidad no disponibles."
   },
   "sequencer": {
+    "reveal_effect_magic": "Magia",
+    "reveal_effect_spread": "Expansión",
+    "reveal_effect_unroll": "Desenrollar",
+    "reveal_effect_twister": "Remolino",
+    "reveal_effect_rain": "Lluvia",
+    "reveal_effect_unveil": "Revelar",
+    "reveal_effect_light_edge": "Borde luminoso",
+    "reveal_effect_rainbow": "Arcoíris",
+    "reveal_effect_dark_to_light": "Oscuro a claro",
+    "reveal_effect_distortion": "Distorsión",
+    "reveal_effect_camera_light": "Luz de cámara",
+    "reveal_history_stale": "El efecto de revelado cambió desde que se registró esta edición.",
+    "add_reveal": "Añadir efecto de revelado",
+    "change_reveal": "Cambiar efecto de revelado",
+    "reveal_start": "Inicio",
+    "reveal_end": "Fin",
+    "reveal_softness": "Suavidad",
+    "reveal_softness_hint": "Se aplica a Revelar, Borde luminoso, Arcoíris, Oscuro a claro y Distorsión.",
     "edit_focal_length": "Editar la Longitud Focal...",
     "edit_focal_length_title": "Editar la Longitud Focal",
     "play": "Reproducir (Espacio)",
@@ -3362,5 +3380,6 @@
   "preferences.drag_rejected_node": "No se puede exportar: {}. No se transfirió ningún archivo. Consulta el registro para más detalles.",
   "preferences.drag_title": "Transferencia de splats",
   "preferences.drag_pause": "Pausa el entrenamiento antes de arrastrar los splats.",
-  "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles."
+  "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles.",
+  "selection.reveal_moving_blocked": "La selección no está disponible mientras un efecto de aparición mueve los splats."
 }

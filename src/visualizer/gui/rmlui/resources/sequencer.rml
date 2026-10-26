@@ -94,7 +94,7 @@
                 <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
                     <span class="transport-label">@tr:ui.load_sequence</span>
                 </div>
-                <div id="btn-add-reveal" class="transport-btn text"><span id="reveal-button-label" class="transport-label">Add reveal effect</span></div>
+                <div id="btn-add-reveal" class="transport-btn text"><span id="reveal-button-label" class="transport-label">@tr:sequencer.add_reveal</span></div>
                 <div class="transport-sep"></div>
                 <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
                     <span id="format-label" class="transport-label">@tr:ui.youtube_1080p</span>
@@ -135,6 +135,7 @@
                     <div id="track-bar">
                         <span id="hint"></span>
                     </div>
+                    <div id="reveal-strip"></div>
                     <div id="sequence-strip"></div>
                     <div id="keyframes"></div>
                     <div id="playhead">
@@ -162,9 +163,10 @@
             </div>
         </div>
         <div id="reveal-settings" class="hidden">
-            <span>Start</span><input id="reveal-start" type="text" />
-            <span>End</span><input id="reveal-end" type="text" />
-            <div id="btn-remove-reveal" class="transport-btn text"><span class="transport-label">Remove</span></div>
+            <span>@tr:sequencer.reveal_start</span><input id="reveal-start" type="text" />
+            <span>@tr:sequencer.reveal_end</span><input id="reveal-end" type="text" />
+            <span data-tooltip="sequencer.reveal_softness_hint">@tr:sequencer.reveal_softness</span><input id="reveal-softness" type="text" data-tooltip="sequencer.reveal_softness_hint" />
+            <div id="btn-remove-reveal" class="transport-btn text"><span class="transport-label">@tr:common.remove</span></div>
         </div>
     </div>
     <div id="panel-guides">

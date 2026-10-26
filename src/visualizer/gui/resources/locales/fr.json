@@ -2414,6 +2414,24 @@
     "popularity_unavailable": "Données de popularité indisponibles."
   },
   "sequencer": {
+    "reveal_effect_magic": "Magie",
+    "reveal_effect_spread": "Expansion",
+    "reveal_effect_unroll": "Déroulement",
+    "reveal_effect_twister": "Tourbillon",
+    "reveal_effect_rain": "Pluie",
+    "reveal_effect_unveil": "Dévoilement",
+    "reveal_effect_light_edge": "Bord lumineux",
+    "reveal_effect_rainbow": "Arc-en-ciel",
+    "reveal_effect_dark_to_light": "Sombre à clair",
+    "reveal_effect_distortion": "Distorsion",
+    "reveal_effect_camera_light": "Lumière de caméra",
+    "reveal_history_stale": "L’effet de dévoilement a changé depuis cet enregistrement.",
+    "add_reveal": "Ajouter un effet de dévoilement",
+    "change_reveal": "Modifier l’effet de dévoilement",
+    "reveal_start": "Début",
+    "reveal_end": "Fin",
+    "reveal_softness": "Douceur",
+    "reveal_softness_hint": "S’applique à Dévoilement, Bord lumineux, Arc-en-ciel, Sombre à clair et Distorsion.",
     "edit_focal_length": "Modifier la longueur focale...",
     "edit_focal_length_title": "Modifier la longueur focale",
     "play": "Lecture (Espace)",
@@ -3362,5 +3380,6 @@
   "preferences.drag_rejected_node": "Impossible d’exporter : {}. Aucun fichier n’a été transféré. Consultez le journal pour plus de détails.",
   "preferences.drag_title": "Transfert de splats",
   "preferences.drag_pause": "Mettre l’entraînement en pause avant de faire glisser les splats.",
-  "preferences.drag_failed": "Échec de l’exportation des splats. Consulter le journal de l’application pour les détails."
+  "preferences.drag_failed": "Échec de l’exportation des splats. Consulter le journal de l’application pour les détails.",
+  "selection.reveal_moving_blocked": "La sélection est indisponible pendant qu’un effet de révélation déplace les splats."
 }

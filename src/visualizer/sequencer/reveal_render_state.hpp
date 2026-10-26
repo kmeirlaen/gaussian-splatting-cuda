@@ -16,6 +16,8 @@ namespace lfs::vis {
     // Bounds are calculated in the same world space used by Gaussian projection.
     inline std::optional<rendering::GaussianRevealState> makeRevealRenderState(
         const core::Scene& scene, const sequencer::RevealClip& clip, const float time) {
+        if (time >= clip.end)
+            return std::nullopt;
         float min_x = std::numeric_limits<float>::max();
         float max_x = std::numeric_limits<float>::lowest();
         float min_y = std::numeric_limits<float>::max();
@@ -52,7 +54,7 @@ namespace lfs::vis {
         const float center_z = 0.0f;
         const float radius = glm::length(glm::vec2(std::max(std::abs(min_x), std::abs(max_x)),
                                                    std::max(std::abs(min_z), std::abs(max_z))));
-        return rendering::GaussianRevealState{min_x, max_x, clip.progress(time), clip.softness,
+        return rendering::GaussianRevealState{clip.progress(time), clip.softness,
                                               center_x, center_z, radius, static_cast<int>(clip.effect), min_y, max_y};
     }
 } // namespace lfs::vis

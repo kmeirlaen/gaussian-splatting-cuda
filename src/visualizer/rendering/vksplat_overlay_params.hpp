@@ -48,8 +48,8 @@ namespace lfs::vis::vksplat_overlay {
         CropPolygonParamStride = CropPolygonVertices + lfs::core::crop_polygon::kMaxVertices / 2,
         CropPolygonCount = 16,
         RevealParams = CropPolygonBase + CropPolygonParamStride * CropPolygonCount,
-        RevealSoftness = RevealParams + 1,
-        ParamCount = RevealSoftness + 1,
+        RevealEffectBounds = RevealParams + 1,
+        ParamCount = RevealEffectBounds + 1,
     };
     static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewFlags);
     static_assert(CropPolygonTransform + 4 == CropPolygonVertices);

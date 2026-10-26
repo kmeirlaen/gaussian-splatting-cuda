@@ -54,6 +54,11 @@ namespace lfs::vis {
         [[nodiscard]] bool hasTimelineCameraContent(const sequencer::Timeline& timeline) {
             return timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip();
         }
+
+        [[nodiscard]] bool sameReveal(const std::optional<sequencer::RevealClip>& a, const std::optional<sequencer::RevealClip>& b) {
+            return (!a && !b) || (a && b && a->start == b->start && a->end == b->end &&
+                                  a->softness == b->softness && a->effect == b->effect);
+        }
     } // namespace
 
     bool SequencerController::hasPlayableContent() const {
@@ -65,8 +70,26 @@ namespace lfs::vis {
     }
 
     void SequencerController::setRevealClip(std::optional<sequencer::RevealClip> clip) {
+        const auto before = timeline_.revealClip();
+        const float duration_before = clipDuration();
         timeline_.setRevealClip(clip);
+        if (sameReveal(before, clip)) return;
         markTimelineChanged();
+        if (!pending_reveal_edit_ && reveal_commit_callback_)
+            reveal_commit_callback_(before, clip, duration_before, clipDuration());
+    }
+
+    void SequencerController::beginRevealEdit() {
+        if (!pending_reveal_edit_)
+            pending_reveal_edit_ = PendingRevealEdit{timeline_.revealClip(), clipDuration()};
+    }
+
+    void SequencerController::endRevealEdit() {
+        if (!pending_reveal_edit_) return;
+        const auto before = *pending_reveal_edit_;
+        pending_reveal_edit_.reset();
+        if (reveal_commit_callback_ && (!sameReveal(before.clip, timeline_.revealClip()) || before.duration != clipDuration()))
+            reveal_commit_callback_(before.clip, timeline_.revealClip(), before.duration, clipDuration());
     }
 
     void SequencerController::play() {
@@ -523,6 +546,7 @@ namespace lfs::vis {
     void SequencerController::clear() {
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
+        pending_reveal_edit_.reset();
         deselectKeyframe();
         ply_sequence_.reset();
         timeline_.clear();
@@ -546,6 +570,7 @@ namespace lfs::vis {
             return false;
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
+        pending_reveal_edit_.reset();
         rebuildLoopKeyframe();
         markTimelineChanged();
         return true;
@@ -559,6 +584,7 @@ namespace lfs::vis {
             return false;
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
+        pending_reveal_edit_.reset();
         rebuildLoopKeyframe();
         markTimelineChanged();
         return true;

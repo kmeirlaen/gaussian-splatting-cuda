@@ -2425,6 +2425,24 @@
     "popularity_unavailable": "Popularity data unavailable."
   },
   "sequencer": {
+    "reveal_effect_magic": "Magic",
+    "reveal_effect_spread": "Spread",
+    "reveal_effect_unroll": "Unroll",
+    "reveal_effect_twister": "Twister",
+    "reveal_effect_rain": "Rain",
+    "reveal_effect_unveil": "Unveil",
+    "reveal_effect_light_edge": "Light Edge",
+    "reveal_effect_rainbow": "Rainbow",
+    "reveal_effect_dark_to_light": "Dark to Light",
+    "reveal_effect_distortion": "Distortion",
+    "reveal_effect_camera_light": "Camera Light",
+    "reveal_history_stale": "Reveal changed since this edit was recorded.",
+    "add_reveal": "Add reveal effect",
+    "change_reveal": "Change reveal effect",
+    "reveal_start": "Start",
+    "reveal_end": "End",
+    "reveal_softness": "Softness",
+    "reveal_softness_hint": "Applies to Unveil, Light Edge, Rainbow, Dark to Light, and Distortion.",
     "edit_focal_length": "Edit Focal Length...",
     "edit_focal_length_title": "Edit Focal Length",
     "play": "Play (Space)",
@@ -3362,5 +3380,6 @@
   "project.session.newer_settings.title": "Project settings from a newer version",
   "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}",
   "preferences.drag_pause": "Pause training before dragging splats.",
-  "preferences.drag_failed": "Splat export failed. See the application log for details."
+  "preferences.drag_failed": "Splat export failed. See the application log for details.",
+  "selection.reveal_moving_blocked": "Selection is unavailable while a reveal moves splats."
 }

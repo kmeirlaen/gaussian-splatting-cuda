@@ -459,7 +459,7 @@ namespace lfs::vis {
             const float right = timeToX(reveal->end, pos.x, width);
             bool mouse_on_reveal_row = mouse_in_timeline;
             if (document_) {
-                if (auto* strip = document_->GetElementById("sequence-strip")) {
+                if (auto* strip = document_->GetElementById("reveal-strip")) {
                     const auto offset = strip->GetAbsoluteOffset(Rml::BoxArea::Border);
                     const auto size = strip->GetBox().GetSize(Rml::BoxArea::Border);
                     if (size.y > 0.0f)
@@ -476,6 +476,7 @@ namespace lfs::vis {
             }
             if (input.mouse_clicked[0] && mouse_on_reveal_row && !hovered_keyframe_ && !on_playhead_handle &&
                 mx >= left - 6.0f * s && mx <= right + 6.0f * s) {
+                controller_.beginRevealEdit();
                 selectReveal(true);
                 if (std::abs(mx - left) <= 6.0f * s) reveal_drag_edge_ = -1;
                 else if (std::abs(mx - right) <= 6.0f * s) reveal_drag_edge_ = 1;
@@ -503,12 +504,33 @@ namespace lfs::vis {
                         controller_.setRevealClip(edited);
                     selectReveal(true);
                 } else {
+                    controller_.endRevealEdit();
                     reveal_drag_edge_ = 0;
                 }
                 return;
             }
         } else {
+            if (reveal_drag_edge_ != 0)
+                controller_.endRevealEdit();
             reveal_drag_edge_ = 0;
+        }
+
+        if (input.mouse_clicked[0] && !hovered_keyframe_ && !on_playhead_handle && document_) {
+            if (const auto* sequence = controller_.plySequence(); sequence && !sequence->frames.empty()) {
+                if (auto* strip = document_->GetElementById("sequence-strip")) {
+                    const auto offset = strip->GetAbsoluteOffset(Rml::BoxArea::Border);
+                    const auto size = strip->GetBox().GetSize(Rml::BoxArea::Border);
+                    const float end = timeToX(sequence->duration(), pos.x, width);
+                    if (my >= cached_panel_y_ + offset.y && my <= cached_panel_y_ + offset.y + size.y &&
+                        mx >= timeToX(0.0f, pos.x, width) && mx <= end) {
+                        selectReveal(false);
+                        ply_sequence_selected_ = true;
+                        selected_keyframes_.clear();
+                        controller_.deselectKeyframe();
+                        return;
+                    }
+                }
+            }
         }
 
         const float clip_duration = timeline.clipDuration();

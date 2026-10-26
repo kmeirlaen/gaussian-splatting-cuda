@@ -30,6 +30,7 @@
 #include "sequencer/interpolation.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/reveal_render_state.hpp"
+#include "sequencer/reveal_effect_i18n.hpp"
 #include "sequencer/timeline_view_math.hpp"
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
@@ -53,6 +54,40 @@
 namespace lfs::vis::gui {
 
     namespace {
+        [[nodiscard]] bool sameReveal(const std::optional<sequencer::RevealClip>& a, const std::optional<sequencer::RevealClip>& b) {
+            return (!a && !b) || (a && b && a->start == b->start && a->end == b->end &&
+                                  a->softness == b->softness && a->effect == b->effect);
+        }
+
+        class RevealUndoEntry final : public op::UndoEntry {
+        public:
+            RevealUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
+                            std::optional<sequencer::RevealClip> before, std::optional<sequencer::RevealClip> after,
+                            float duration_before, float duration_after)
+                : controller_(controller), lifetime_(std::move(lifetime)), generation_(controller.timelineGeneration()),
+                  before_(before), after_(after), duration_before_(duration_before), duration_after_(duration_after) {}
+            void undo() override { apply(after_, before_, duration_after_, duration_before_); }
+            void redo() override { apply(before_, after_, duration_before_, duration_after_); }
+            [[nodiscard]] std::string name() const override { return lfs::event::LocalizationManager::getInstance().get("sequencer.change_reveal"); }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+        private:
+            void apply(const std::optional<sequencer::RevealClip>& expected, const std::optional<sequencer::RevealClip>& desired,
+                       float expected_duration, float desired_duration) {
+                if (lifetime_.expired() || controller_.timelineGeneration() != generation_ ||
+                    !sameReveal(controller_.timeline().revealClip(), expected))
+                    throw op::HistoryStaleEntryError(lfs::event::LocalizationManager::getInstance().get("sequencer.reveal_history_stale"));
+                const bool restore_duration = controller_.clipDuration() == expected_duration;
+                controller_.setRevealClip(desired);
+                if (restore_duration && desired_duration != expected_duration)
+                    controller_.setClipDuration(desired_duration);
+            }
+            SequencerController& controller_;
+            std::weak_ptr<void> lifetime_;
+            uint64_t generation_;
+            std::optional<sequencer::RevealClip> before_, after_;
+            float duration_before_, duration_after_;
+        };
+
         [[nodiscard]] bool sameKeyframe(const sequencer::Keyframe& lhs, const sequencer::Keyframe& rhs) {
             return lhs.id == rhs.id && lhs.time == rhs.time && lhs.position == rhs.position &&
                    lhs.rotation == rhs.rotation && lhs.focal_length_mm == rhs.focal_length_mm &&
@@ -432,6 +467,10 @@ namespace lfs::vis::gui {
           panel_(std::make_unique<RmlSequencerPanel>(controller_, ui_state_, rml_manager)),
           overlay_(std::make_unique<RmlSequencerOverlay>(controller_, rml_manager)),
           scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {
+        controller_.setRevealCommitCallback([this](auto before, auto after, float duration_before, float duration_after) {
+            if (!op::undoHistory().isPlaybackActive())
+                op::undoHistory().push(std::make_unique<RevealUndoEntry>(controller_, history_lifetime_, before, after, duration_before, duration_after));
+        });
         controller_.setKeyframeRemovedCallback([this](const sequencer::Keyframe& keyframe, const float duration_before) {
             auto& history = op::undoHistory();
             if (!history.isPlaybackActive())
@@ -457,6 +496,7 @@ namespace lfs::vis::gui {
     }
 
     SequencerUIManager::~SequencerUIManager() {
+        controller_.setRevealCommitCallback({});
         controller_.setKeyframeRemovedCallback({});
         controller_.setKeyframeTimeCommitCallback({});
         controller_.setKeyframeEasingChangedCallback({});
@@ -1687,17 +1727,8 @@ namespace lfs::vis::gui {
                 break;
             }
             case Target::REVEAL:
-                items.push_back({"Magic", "reveal_1"});
-                items.push_back({"Spread", "reveal_2"});
-                items.push_back({"Unroll", "reveal_3"});
-                items.push_back({"Twister", "reveal_4"});
-                items.push_back({"Rain", "reveal_5"});
-                items.push_back({"Unveil", "reveal_6"});
-                items.push_back({"Light Edge", "reveal_7"});
-                items.push_back({"Rainbow", "reveal_8"});
-                items.push_back({"Dark to Light", "reveal_9"});
-                items.push_back({"Distortion", "reveal_10"});
-                items.push_back({"Camera Light", "reveal_11"});
+                for (size_t i = 0; i < reveal_effect_keys.size(); ++i)
+                    items.push_back({LOC(reveal_effect_keys[i]), std::format("reveal_{}", i + 1)});
                 break;
             default:
                 break;
@@ -1750,6 +1781,7 @@ namespace lfs::vis::gui {
                                    if (!action.starts_with("reveal_")) break;
                                    const int effect = std::stoi(std::string(action.substr(7)));
                                    if (effect < 1 || effect > 11) break;
+                                   controller_.beginRevealEdit();
                                    auto clip = controller_.timeline().revealClip();
                                    if (!clip) {
                                        const float start = std::min(controller_.playhead(), sequencer::MAX_SEQUENCER_TIME_SECONDS - 3.0f);
@@ -1760,6 +1792,7 @@ namespace lfs::vis::gui {
                                    }
                                    clip->effect = static_cast<sequencer::RevealEffect>(effect);
                                    controller_.setRevealClip(clip);
+                                   controller_.endRevealEdit();
                                    break;
                                }
                                case Target::NONE:
