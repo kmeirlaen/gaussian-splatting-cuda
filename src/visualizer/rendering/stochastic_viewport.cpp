@@ -5,8 +5,8 @@
 #include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
 #include <cstring>
-#include <utility>
 #include <glm/gtc/type_ptr.hpp>
+#include <utility>
 
 namespace lfs::vis {
     namespace {
@@ -147,8 +147,7 @@ namespace lfs::vis {
     void VksplatViewportRenderer::releaseUnusedStochasticBuffers(const OutputSlot slot, const std::uint32_t mode) {
         auto& history = stochastic_histories_[static_cast<std::size_t>(slot)];
         if (mode != 2u) {
-            retireStochasticBuffer(history.buffers.ids_depths.deviceBuffer, false);
-            retireStochasticBuffer(history.buffers.occlusion.deviceBuffer, false);
+            retireStochasticBuffer(history.buffers.occluders.deviceBuffer, false);
             retireStochasticBuffer(history.buffers.outgoing_weights.deviceBuffer, false);
             retireStochasticBuffer(history.buffers.rest_average.deviceBuffer, false);
         }
@@ -162,7 +161,7 @@ namespace lfs::vis {
                 return member(h.buffers).deviceBuffer.buffer != VK_NULL_HANDLE;
             });
         };
-        if (mode != 2u && !holds([](const auto& b) -> const auto& { return b.ids_depths; })) {
+        if (mode != 2u && !holds([](const auto& b) -> const auto& { return b.occluders; })) {
             auto noise = renderer_.releaseStochasticNoise();
             retireStochasticBuffer(noise, false);
         }
@@ -178,8 +177,7 @@ namespace lfs::vis {
     void VksplatViewportRenderer::releaseStochasticBuffers() {
         stochastic_projection_cache_ = {};
         for (auto& history : stochastic_histories_) {
-            retireStochasticBuffer(history.buffers.ids_depths.deviceBuffer, true);
-            retireStochasticBuffer(history.buffers.occlusion.deviceBuffer, true);
+            retireStochasticBuffer(history.buffers.occluders.deviceBuffer, true);
             retireStochasticBuffer(history.buffers.outgoing_weights.deviceBuffer, true);
             for (auto& color : history.buffers.color)
                 retireStochasticBuffer(color.deviceBuffer, true);

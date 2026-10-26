@@ -2819,10 +2819,8 @@ namespace {
 } // namespace
 
 namespace lfs::vis {
-    void installSessionTestInputController(VisualizerImpl& viewer) {
-        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
-    }
-} // namespace lfs::vis
+    void installSessionTestInputController(VisualizerImpl& viewer);
+}
 
 namespace {
 
