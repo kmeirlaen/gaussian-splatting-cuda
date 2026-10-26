@@ -237,54 +237,70 @@ TEST(SpaceMouseResponse, DeadZoneMonotonicCurveAndLinearTime) {
     EXPECT_EQ(spaceMouseStep(motion, 1, 1, 0.1f, false, true).rotation.z, 0);
 }
 
-TEST(SpaceMouseNavigation, RightMovesSceneInObjectModeAndCameraInFlyMode) {
-    const SpaceMouseMotion motion{{1, 0, 0}, {0, 0, 0}};
-    for (const bool object_mode : {false, true}) {
-        auto view = camera();
-        const auto step = spaceMouseStep(motion, 1, 1, 0.02f, object_mode, true);
-        view.applySpaceMouseStep(step.translation, step.rotation, object_mode, true);
-        EXPECT_GT(view.t.x * (object_mode ? -1 : 1), 0);
-        EXPECT_EQ(view.t - view.pivot, glm::vec3(0, 0, 5));
+// Catches a puck that orbits, pans or looks by its own rules instead of the mouse's: the same pixel drag through the
+// mouse path and the 3D mouse path must leave identical cameras, in turntable and trackball orbit, pan and fly look.
+TEST(SpaceMouseNavigation, PuckDrivesTheMouseOrbitPanAndLook) {
+    const glm::vec2 drag{12.0f, -7.0f};
+    for (const bool trackball : {false, true}) {
+        auto mouse = camera(), puck = camera();
+        mouse.startRotateAroundCenter({100, 100}, 0.0f);
+        if (trackball)
+            mouse.updateTrackballRotateAroundCenter(glm::vec2(100, 100) + drag, 0.0f);
+        else
+            mouse.updateRotateAroundCenter(glm::vec2(100, 100) + drag, 0.0f);
+        puck.applySpaceMouseOrbit(drag, {}, 0.0f, trackball);
+        EXPECT_LT(glm::length(puck.t - mouse.t), 1e-5f);
+        EXPECT_LT(glm::length(puck.R[2] - mouse.R[2]) + glm::length(puck.R[1] - mouse.R[1]), 1e-5f);
+        EXPECT_EQ(puck.pivot, mouse.pivot);
     }
+    auto mouse = camera(), puck = camera();
+    mouse.startPan({100, 100}, 0.0f);
+    mouse.panDrag(glm::vec2(100, 100) + drag, 0.0f);
+    puck.applySpaceMouseOrbit({}, drag, 0.0f, false);
+    EXPECT_LT(glm::length(puck.t - mouse.t) + glm::length(puck.pivot - mouse.pivot), 1e-5f);
+    mouse = camera();
+    puck = camera();
+    mouse.initScreenPos({100, 100});
+    mouse.rotateFpv(glm::vec2(100, 100) + drag);
+    puck.applySpaceMouseFly(drag, 0.0f, {}, true);
+    EXPECT_EQ(puck.t, mouse.t);
+    EXPECT_LT(glm::length(puck.R[2] - mouse.R[2]) + glm::length(puck.pivot - mouse.pivot), 1e-5f);
 }
 
-TEST(SpaceMouseNavigation, OrbitPreservesPivotWhileFlyTurnsInPlace) {
-    const SpaceMouseMotion motion{{0, 0, 0}, {0.4f, -0.8f, 0}};
-    for (const bool object_mode : {false, true}) {
-        auto view = camera();
-        const auto eye = view.t;
-        const auto pivot = view.pivot;
-        const auto step = spaceMouseStep(motion, 1, 1, 0.02f, object_mode, true);
-        view.applySpaceMouseStep(step.translation, step.rotation, object_mode, true);
-        if (object_mode) {
-            EXPECT_EQ(view.pivot, pivot);
-            EXPECT_NE(view.t, eye);
-        } else {
-            EXPECT_EQ(view.t, eye);
-            EXPECT_NE(view.pivot, pivot);
-        }
-        EXPECT_NEAR(glm::length(view.t - view.pivot), 5, 1e-5f);
-        EXPECT_NEAR(glm::dot(view.R[0], view.navigationUp()), 0, 1e-5f);
-    }
+// Catches a fly movement in world instead of camera axes, or one that leaves the pivot behind: pushing right moves
+// the camera and its pivot right together.
+TEST(SpaceMouseNavigation, FlyMovesTheCameraWithItsPivot) {
+    auto view = camera();
+    view.applySpaceMouseFly({}, 0.0f, {1, 0, 0}, true);
+    EXPECT_GT(view.t.x, 0);
+    EXPECT_EQ(view.t - view.pivot, glm::vec3(0, 0, 5));
 }
 
+// Catches a navigation that ignores the scene's up axis or a roll that leaves a skewed rotation: the same steps on a
+// Z-up scene give the Y-up result in its basis, and with the horizon free a roll tilts the right axis.
 TEST(SpaceMouseNavigation, NavigationUpAxisAndRollPreference) {
     const auto basis = lfs::vis::navigationFrame(lfs::vis::NavigationUpAxis::DataZ);
-    for (const bool object_mode : {false, true}) {
-        auto legacy = camera(), zup = camera();
-        zup.setNavigationUpAxis(lfs::vis::NavigationUpAxis::DataZ);
-        zup.R = basis * legacy.R;
-        zup.t = basis * legacy.t;
-        for (int i = 0; i < 100; ++i) {
-            legacy.applySpaceMouseStep({0.001f, -0.002f, 0.001f}, {0.001f, -0.002f, 0}, object_mode, true);
-            zup.applySpaceMouseStep({0.001f, -0.002f, 0.001f}, {0.001f, -0.002f, 0}, object_mode, true);
-        }
-        EXPECT_LT(glm::length(zup.t - basis * legacy.t), 1e-4f);
-        EXPECT_LT(glm::length(zup.R[1] - basis * legacy.R[1]), 1e-4f);
+    auto legacy = camera(), zup = camera();
+    zup.setNavigationUpAxis(lfs::vis::NavigationUpAxis::DataZ);
+    zup.R = basis * legacy.R;
+    zup.t = basis * legacy.t;
+    for (int i = 0; i < 100; ++i) {
+        legacy.applySpaceMouseOrbit({0.5f, -1.0f}, {0.5f, -1.0f}, 0.0f, false);
+        zup.applySpaceMouseOrbit({0.5f, -1.0f}, {0.5f, -1.0f}, 0.0f, false);
+        legacy.applySpaceMouseFly({0.5f, -1.0f}, 0.0f, {0.001f, -0.002f, 0.001f}, true);
+        zup.applySpaceMouseFly({0.5f, -1.0f}, 0.0f, {0.001f, -0.002f, 0.001f}, true);
+    }
+    EXPECT_LT(glm::length(zup.t - basis * legacy.t), 1e-4f);
+    EXPECT_LT(glm::length(zup.R[1] - basis * legacy.R[1]), 1e-4f);
+    for (const bool fly : {false, true}) {
         auto rolled = camera();
-        rolled.applySpaceMouseStep({}, {0, 0, 0.2f}, object_mode, false);
+        if (fly)
+            rolled.applySpaceMouseFly({}, 200.0f, {}, false);
+        else
+            rolled.applySpaceMouseOrbit({}, {}, 200.0f, true);
         EXPECT_GT(std::abs(rolled.R[0].y), 0.1f);
         EXPECT_NEAR(glm::determinant(rolled.R), 1, 1e-5f);
+        EXPECT_NEAR(glm::length(rolled.t - rolled.pivot), 5, 1e-5f);
     }
 }
 
@@ -373,12 +389,12 @@ TEST(SpaceMouseNavigation, TranslationScalesWithFrameTimeAndNavigationSpeed) {
     const auto initial = coarse.t;
     for (int i = 0; i < 60; ++i) {
         const auto step = spaceMouseStep(input, 1, 1, 1.0f / 60, false, true);
-        coarse.applySpaceMouseStep(step.translation, step.rotation, false, true);
-        faster.applySpaceMouseStep(step.translation, step.rotation, false, true);
+        coarse.applySpaceMouseFly({}, 0.0f, step.translation, true);
+        faster.applySpaceMouseFly({}, 0.0f, step.translation, true);
     }
     for (int i = 0; i < 120; ++i) {
         const auto step = spaceMouseStep(input, 1, 1, 1.0f / 120, false, true);
-        fine.applySpaceMouseStep(step.translation, step.rotation, false, true);
+        fine.applySpaceMouseFly({}, 0.0f, step.translation, true);
     }
     EXPECT_LT(glm::length(coarse.t - fine.t), 1e-4f);
     EXPECT_LT(glm::length((coarse.t - initial) * 2.0f - (faster.t - initial)), 1e-4f);

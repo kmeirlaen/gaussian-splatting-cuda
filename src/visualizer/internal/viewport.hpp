@@ -188,33 +188,41 @@ class Viewport {
 
         void translate(const glm::vec2& pos) { applyPanDrag(pos); }
 
-        void applySpaceMouseStep(const glm::vec3& translation, const glm::vec3& rotation,
-                                 const bool object_mode, const bool keep_horizon) {
+        // A 3D mouse in Orbit and Trackball acts as the mouse there: an orbit drag of `orbit` pixels and a pan drag of
+        // `pan` pixels about the same pivot, and `roll` pixels of roll about the view axis when the horizon is free.
+        void applySpaceMouseOrbit(const glm::vec2& orbit, const glm::vec2& pan, const float roll, const bool trackball) {
+            clearTransientMotion();
+            applyOrbitRotation(-orbit.x * rotateCenterSpeed, -orbit.y * rotateCenterSpeed, trackball);
+            if (roll != 0.0f) {
+                const auto previous_rotation = R;
+                rotate_roll(roll * rotateCenterSpeed / rotateRollSpeed);
+                t = pivot + R * glm::transpose(previous_rotation) * (t - pivot);
+            }
+            const auto saved_pos = prePos;
+            prePos = glm::vec2(0.0f);
+            applyPanDrag(pan);
+            prePos = saved_pos;
+        }
+
+        // A 3D mouse in Fly, Drone and Walk looks as a mouse look drag of `look` pixels, rolls by `roll` pixels when
+        // the horizon is free, and moves the camera by `movement` in its own frame at the WASD speed.
+        void applySpaceMouseFly(const glm::vec2& look, const float roll, const glm::vec3& movement,
+                                const bool keep_horizon) {
             clearTransientMotion();
             const auto saved_pos = prePos;
             prePos = glm::vec2(0.0f);
-            const float distance = std::max(glm::length(pivot - t), 0.1f);
-            if (object_mode && keep_horizon) {
-                applyRotationAroundCenter(rotation.y, rotation.x);
+            if (keep_horizon) {
+                rotateFpv(look);
             } else {
-                const auto previous_rotation = R;
-                rotate(prePos - glm::vec2(rotation.y, rotation.x) / rotateSpeed, keep_horizon);
-                if (!keep_horizon)
-                    rotate_roll(rotation.z / rotateRollSpeed);
-                if (object_mode)
-                    t = pivot + R * glm::transpose(previous_rotation) * (t - pivot);
-                else
-                    updatePivotFromCamera(distance);
-            }
-            if (object_mode) {
-                translate(prePos + glm::vec2(-translation.x, translation.y) / translateSpeed);
-                zoom(-translation.z * 10.0f);
-            } else {
-                const auto movement = R * translation * wasdSpeed * kWasdUnitsPerSecondPerLevel;
-                t += movement;
-                pivot += movement;
+                const float distance = std::max(glm::length(pivot - t), 0.1f);
+                rotate(look);
+                rotate_roll(roll * rotateSpeed / rotateRollSpeed);
+                updatePivotFromCamera(distance);
             }
             prePos = saved_pos;
+            const auto step = R * movement * wasdSpeed * kWasdUnitsPerSecondPerLevel;
+            t += step;
+            pivot += step;
         }
 
         void zoom(float delta, bool carry_pivot = false) {

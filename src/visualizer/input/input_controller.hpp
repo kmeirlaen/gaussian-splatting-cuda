@@ -210,6 +210,8 @@ namespace lfs::vis {
 
     private:
         void updateSpaceMouse(float delta_time);
+        // Wheel zoom of `delta` notches: ortho scale in orthographic views, else toward the pivot.
+        void zoomViewport(Viewport& target, float delta, bool carry_pivot);
         std::unique_ptr<input::SpaceMouseDevice> space_mouse_;
         bool space_mouse_active_ = false;
         glm::vec3 space_mouse_walk_velocity_{0.0f};
