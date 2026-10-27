@@ -1458,6 +1458,9 @@ namespace lfs::vis {
         if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
             context->cancelSceneCaptureRequest();
 
+        if (gui_manager_)
+            gui_manager_->asyncTasks().shutdownAprilTagScan();
+
         std::function<void()> shutdown_callback;
         {
             std::lock_guard lock(shutdown_callback_mutex_);
