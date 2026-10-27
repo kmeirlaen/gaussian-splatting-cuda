@@ -337,6 +337,10 @@ class Panel:
 
     def on_unmount(self, doc): ...
 
+    def on_visibility_changed(self, visible: bool):
+        """Release transient resources when hidden without unmounting the document."""
+        ...
+
     def on_update(self, doc): ...
 
     def on_scene_changed(self, doc): ...
@@ -2683,7 +2687,7 @@ def select_keyframe(index: int) -> None:
 
 def delete_keyframe(index: int) -> None:
     """
-    Delete keyframe by index; raises ValueError for the protected first keyframe
+    Delete a real keyframe by index, including the first; synthetic loop points cannot be deleted
     """
 
 def set_keyframe_easing(index: int, easing: int) -> None:
@@ -2875,6 +2879,31 @@ def set_camera_browse_repeat_rate(rate: float, persist: bool = True) -> None:
 
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
+
+def get_gamepad_test_state() -> dict:
+    """Read connected controllers and the selected input-test sample; does not move the camera."""
+    ...
+
+def take_gamepad_test_state() -> dict:
+    """Read and consume diagnostic presses without consuming navigation commands."""
+    ...
+
+def set_gamepad_test_device(device_id: int) -> bool:
+    """Select a connected mapped controller for diagnostics; zero clears selection."""
+    ...
+
+def set_gamepad_test_active(active: bool) -> None:
+    """Keep controller discovery active only while the gamepad page is visible."""
+    ...
+
+def get_gamepad_navigation_state() -> dict:
+    """Read saved preferences, current device selection and viewport routing status."""
+    ...
+
+def set_gamepad_navigation(enabled: bool, device_id: int, dead_zone: float = 0.15,
+                          look_speed: float = 1.5, move_speed: float = 1.0) -> bool:
+    """Select/configure the navigation controller independently of input testing."""
+    ...
 
 def get_rendering_defaults_json() -> str:
     """
@@ -3146,3 +3175,32 @@ def unregister_property_group(group_id: str) -> None:
 
 def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
+
+def get_gamepad_profile_json() -> str:
+    """Return saved enablement, tuning and semantic assignments, excluding connection identifiers and arming state."""
+    ...
+def get_gamepad_default_profile_json() -> str: ...
+def get_gamepad_binding_catalog_json() -> str: ...
+def set_gamepad_profile_json(serialized: str) -> bool:
+    """Validate and atomically save assignments, suspending navigation until rearmed."""
+    ...
+
+def set_gamepad_bindings_json(serialized: str, expected_revision: int) -> bool:
+    """Atomically edit bindings, preserving global enablement and tuning.
+
+    Rejects edits if the live configuration revision has changed.
+    """
+    ...
+
+
+def get_gamepad_profiles_json() -> str:
+    """Get the named controller layouts and optional model associations, independent of keymaps."""
+    ...
+
+def set_gamepad_profiles_json(serialized: str, expected: str = "") -> bool:
+    """Validate and atomically apply profiles without changing global enablement or device selection."""
+    ...
+
+def reset_gamepad_profiles() -> bool:
+    """Reset all joypad profiles/associations and disable navigation; keyboard profiles are preserved."""
+    ...

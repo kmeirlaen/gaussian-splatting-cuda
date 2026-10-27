@@ -33,6 +33,8 @@
 #include <unordered_set>
 #include <vector>
 
+class Viewport;
+
 namespace lfs::vis::gui {
     class RmlSequencerOverlay;
     class SequencerExportWorkflowTest;
@@ -58,6 +60,13 @@ namespace lfs::vis {
             ~SequencerUIManager();
 
             void setupEvents();
+            void addKeyframeFromView(const Viewport& source, std::optional<float> time = {});
+            bool captureKeyframeFromView(const Viewport& source);
+            bool updateSelectedKeyframeFromView(const Viewport& source);
+            bool deselectKeyframe();
+            [[nodiscard]] bool isTimelineGestureActive() const { return panel_->isTimelineGestureActive(); }
+            bool removeSelectedKeyframe();
+            bool selectAdjacentKeyframe(int direction, Viewport* target = nullptr);
             void render(const UIContext& ctx, const ViewportLayout& viewport,
                         float panel_x, float panel_y, float panel_width, float panel_height,
                         const PanelInputState& panel_input);
@@ -254,6 +263,14 @@ namespace lfs::vis {
             size_t ply_stream_cache_write_fail_count_ = 0;
             std::chrono::steady_clock::time_point pip_last_render_time_ = std::chrono::steady_clock::now();
             std::optional<sequencer::Keyframe> viewport_keyframe_edit_snapshot_;
+            struct KeyframeNavigationBoundary {
+                sequencer::KeyframeId id;
+                int direction;
+                float playhead;
+                uint64_t timeline_revision;
+                uint64_t selection_revision;
+            };
+            std::optional<KeyframeNavigationBoundary> keyframe_navigation_boundary_;
         };
 
     } // namespace gui

@@ -181,6 +181,10 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_analog_navigation.cpp
+        test_gamepad_service.cpp
+        test_gamepad_navigation.cpp
+        test_gamepad_sequencer.cpp
         licht_test_support.cpp
         test_json_chapter_dom.cpp
         test_visualizer_post_work.cpp
@@ -874,6 +878,10 @@ set(TEST_FILES
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
+    test_analog_navigation.cpp
+    test_gamepad_service.cpp
+    test_gamepad_navigation.cpp
+    test_gamepad_sequencer.cpp
     test_camera_browse_repeat.cpp
     test_input_controller_focus.cpp
     test_input_key_repeat.cpp

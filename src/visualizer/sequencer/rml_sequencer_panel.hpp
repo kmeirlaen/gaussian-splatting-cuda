@@ -134,6 +134,8 @@ namespace lfs::vis {
                                 RenderingManager* rm, SceneManager* sm,
                                 gui::FilmStripRenderer& film_strip);
         void clearPendingComposite();
+        void clearKeyframeSelection();
+        [[nodiscard]] bool isTimelineGestureActive() const { return dragging_keyframe_ || dragging_playhead_ || reveal_drag_edge_ != 0; }
 
         void setFilmStripAttached(bool attached) { film_strip_attached_ = attached; }
         void setFloating(bool floating) { floating_ = floating; }

@@ -66,6 +66,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
 #include <nanobind/stl/array.h>
 #include <stdexcept>
@@ -5219,12 +5220,10 @@ namespace lfs::python {
         m.def(
             "delete_keyframe",
             [](size_t index) {
-                if (index == 0)
-                    throw nb::value_error("The first keyframe cannot be deleted");
                 lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit();
             },
             nb::arg("index"),
-            "Delete keyframe by index; raises ValueError for the protected first keyframe");
+            "Delete a real keyframe by index, including the first; synthetic loop points cannot be deleted");
 
         m.def(
             "set_keyframe_easing",
@@ -5503,6 +5502,175 @@ namespace lfs::python {
             "get_navigation_speed_preference",
             []() -> float { return vis::loadNavigationSpeedPreference(); },
             "Get the default WASD navigation speed");
+
+        const auto gamepad_test_state = [](bool consume_presses) {
+            const auto state = invoke_on_viewer([consume_presses] {
+                if (get_visualizer())
+                    if (auto* window = vis::services().windowOrNull())
+                        return consume_presses ? window->gamepads().takeDiagnosticSnapshot() : window->gamepads().snapshot();
+                return vis::input::GamepadSnapshot{};
+            },
+                                                vis::input::GamepadSnapshot{});
+            nb::dict result;
+            result["available"] = state.available;
+            result["error"] = state.error;
+            result["selected"] = state.selected;
+            result["generation"] = state.sample.generation;
+            nb::list devices;
+            for (const auto& device : state.devices) {
+                nb::dict entry;
+                entry["id"] = device.id;
+                entry["name"] = device.name;
+                entry["mapped"] = device.mapped;
+                entry["type"] = static_cast<int>(device.type);
+                entry["error"] = device.error;
+                devices.append(entry);
+            }
+            result["devices"] = devices;
+            nb::list axes, has_axes, buttons, pressed;
+            for (auto axis : state.sample.axes)
+                axes.append(axis);
+            for (auto present : state.sample.has_axis)
+                has_axes.append(present);
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+                if (state.sample.buttons[i])
+                    buttons.append(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i)));
+                if (state.sample.pressed[i])
+                    pressed.append(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i)));
+            }
+            result["axes"] = axes;
+            result["has_axes"] = has_axes;
+            result["buttons"] = buttons;
+            result["pressed"] = pressed;
+            nb::list raw_buttons, raw_pressed;
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+                raw_buttons.append(state.sample.buttons[i]);
+                raw_pressed.append(state.sample.pressed[i]);
+            }
+            result["raw_buttons"] = raw_buttons;
+            result["raw_pressed"] = raw_pressed;
+            return result;
+        };
+        m.def("get_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(false); }, "Read connected controllers and the selected diagnostic sample; never consumes input or moves the camera.");
+        m.def("take_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(true); }, "Read and consume diagnostic presses, independently of navigation commands.");
+
+        m.def("set_gamepad_test_active", [](bool active) { invoke_on_viewer([active] {
+                                                               if (auto* window = vis::services().windowOrNull())
+                                                                   window->setGamepadDiagnosticsActive(active);
+                                                           }); }, nb::arg("active"), "Acquire controller discovery while the gamepad preferences page is visible; release it on exit.");
+
+        m.def("set_gamepad_test_device", [](uint32_t id) { return invoke_on_viewer([id] {
+                                                               if (get_visualizer())
+                                                                   if (auto* window = vis::services().windowOrNull())
+                                                                       return window->gamepads().select(id);
+                                                               return false;
+                                                           },
+                                                                                   false); }, nb::arg("device_id"), "Select a connected controller for input testing, or zero for none.");
+
+        m.def("get_gamepad_navigation_state", [] {
+            using State = std::tuple<bool, uint32_t, float, float, float, std::string, std::string, std::string, uint64_t, std::string>;
+            const auto state = invoke_on_viewer([]() -> State {
+                auto* controller = vis::InputController::instance();
+                auto* window = vis::services().windowOrNull();
+                if (!controller || !window)
+                    return {false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit", "", 0, ""};
+                const auto& settings = controller->gamepadNavigationSettings();
+                return {settings.enabled, window->gamepads().navigationSelected(),
+                        settings.dead_zone, settings.look_speed, settings.move_speed,
+                        controller->gamepadNavigationStatus(),
+                        vis::InputController::cameraNavigationModeName(controller->cameraNavigationMode()), controller->gamepadConfigurationError(),
+                        settings.revision, window->gamepads().navigationProfileKey()};
+            }, State{false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit", "", 0, ""});
+            nb::dict result;
+            result["enabled"] = std::get<0>(state);
+            result["selected"] = std::get<1>(state);
+            result["dead_zone"] = std::get<2>(state);
+            result["look_speed"] = std::get<3>(state);
+            result["move_speed"] = std::get<4>(state);
+            result["status"] = std::get<5>(state);
+            result["mode"] = std::get<6>(state);
+            result["configuration_error"] = std::get<7>(state);
+            result["profile_revision"] = std::get<8>(state);
+            result["device_key"] = std::get<9>(state);
+            return result; }, "Read saved gamepad preferences, current connection and navigation routing status.");
+
+        m.def("set_gamepad_navigation", [](bool enabled, uint32_t device, float dead_zone, float look_speed, float move_speed) { return invoke_on_viewer([=] {
+                                                                                                                                     if (auto* controller = vis::InputController::instance()) {
+                                                                                                                                         auto settings = controller->gamepadNavigationSettings();
+                                                                                                                                         settings.enabled = enabled;
+                                                                                                                                         settings.dead_zone = dead_zone;
+                                                                                                                                         settings.look_speed = look_speed;
+                                                                                                                                         settings.move_speed = move_speed;
+                                                                                                                                         return controller->configureGamepadNavigation(settings, device);
+                                                                                                                                     }
+                                                                                                                                     return false;
+                                                                                                                                 },
+                                                                                                                                                         false); }, nb::arg("enabled"), nb::arg("device_id"), nb::arg("dead_zone") = 0.15f, nb::arg("look_speed") = 1.5f, nb::arg("move_speed") = 1.0f, "Persist navigation enablement, tuning and assignments; connection IDs and viewport arming remain session-local.");
+
+        m.def("get_gamepad_profiles_json", [] { return invoke_on_viewer([] { return vis::UserPreferences::instance().gamepadProfiles(); }, std::string("{}")); }, "Get the named controller layouts and optional model associations; independent of keymaps.");
+        m.def("set_gamepad_profiles_json", [](const std::string& serialized, const std::string& expected) {
+            if (serialized.size() > 4 * 1024 * 1024) throw nb::value_error("Gamepad profile library is too large");
+            return invoke_on_viewer([serialized, expected] {
+                if (auto* controller = vis::InputController::instance()) return controller->configureGamepadProfiles(serialized, false, expected);
+                return false;
+            }, false); }, nb::arg("serialized"), nb::arg("expected") = "", "Validate and atomically apply named profiles, preserving global enablement and connected-device selection.");
+        m.def("reset_gamepad_profiles", [] { return invoke_on_viewer([] {
+                                                 if (auto* controller = vis::InputController::instance()) {
+                                                     // Migration shape also describes a fresh, unassociated personal profile.
+                                                     const auto defaults = vis::UserPreferences::instance().gamepadProfiles();
+                                                     auto library = nlohmann::json::parse(defaults);
+                                                     library["active"] = "personal";
+                                                     auto settings = vis::input::GamepadNavigationSettings{}.json();
+                                                     settings.erase("enabled");
+                                                     library["profiles"] = {{{"id", "personal"}, {"name", "Personal"}, {"settings", settings}}};
+                                                     library["device_profiles"] = nlohmann::json::object();
+                                                     return controller->configureGamepadProfiles(library.dump(), true);
+                                                 }
+                                                 return false;
+                                             },
+                                                                     false); }, "Reset all controller profiles and model associations and disable navigation. Does not affect keyboard profiles.");
+
+        m.def("get_gamepad_profile_json", [] {
+            return invoke_on_viewer([] {
+                const auto* controller = vis::InputController::instance();
+                return controller ? controller->gamepadNavigationSettings().json().dump() : vis::input::GamepadNavigationSettings{}.json().dump();
+            },
+                                    std::string("{}"));
+        });
+        m.def("get_gamepad_default_profile_json", [] { return vis::input::GamepadNavigationSettings{}.json().dump(); });
+        m.def("set_gamepad_bindings_json", [](const std::string& serialized, uint64_t expected_revision) {
+            if (serialized.size() > 256 * 1024) throw nb::value_error("Gamepad bindings are too large");
+            const auto bindings = vis::input::GamepadBindings::fromJson(nlohmann::json::parse(serialized));
+            return invoke_on_viewer([bindings, expected_revision] {
+                auto* controller = vis::InputController::instance();
+                if (!controller) return false;
+                auto settings = controller->gamepadNavigationSettings();
+                if (settings.revision != expected_revision)
+                    throw std::runtime_error("Gamepad configuration changed during editing");
+                settings.bindings = bindings;
+                return controller->configureGamepadNavigation(settings, controller->gamepadNavigationDevice());
+            }, false); }, nb::arg("serialized"), nb::arg("expected_revision"), "Atomically edit bindings without replacing enablement or tuning.");
+        m.def("set_gamepad_profile_json", [](const std::string& serialized) {
+            const auto settings = vis::input::GamepadNavigationSettings::fromJson(nlohmann::json::parse(serialized));
+            return invoke_on_viewer([settings] {
+                auto* controller = vis::InputController::instance();
+                if (!controller) return false;
+                return controller->configureGamepadNavigation(settings, controller->gamepadNavigationDevice());
+            }, false); }, nb::arg("serialized"));
+        m.def("get_gamepad_binding_catalog_json", [] {
+            using namespace vis::input;
+            nlohmann::json catalog{{"actions", nlohmann::json::array()}, {"controls", nlohmann::json::array()}, {"modes", gamepad_binding_contexts}};
+            for (size_t a = 0; a < gamepad_action_count; ++a) {
+                nlohmann::json modes = nlohmann::json::array();
+                for (size_t m = 0; m < gamepad_binding_contexts.size(); ++m)
+                    if (allowedGamepadAction(m, a))
+                        modes.push_back(gamepad_binding_contexts[m]);
+                catalog["actions"].push_back({{"id", gamepad_actions[a]}, {"continuous", continuousAction(a)}, {"modes", modes}});
+            }
+            for (int c = -1; c < SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_COUNT; ++c)
+                catalog["controls"].push_back({{"id", controlName(c)}, {"axis", c >= 0 && c < SDL_GAMEPAD_AXIS_COUNT}, {"signed", c >= 0 && c < SDL_GAMEPAD_AXIS_LEFT_TRIGGER}, {"index", c < SDL_GAMEPAD_AXIS_COUNT ? c : c - SDL_GAMEPAD_AXIS_COUNT}});
+            return catalog.dump();
+        });
 
         m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
         m.def("set_rendering_defaults_json", [](const std::string& serialized) {

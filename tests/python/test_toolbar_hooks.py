@@ -2795,4 +2795,3 @@ def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch
     controller._sync_scale_distance()
     assert model.bound_funcs["scale_distance_can_apply"]() is False
     assert model.bound_funcs["scale_distance_can_reset"]() is False
-

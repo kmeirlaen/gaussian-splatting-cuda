@@ -150,6 +150,12 @@ namespace lfs::vis {
 
     RmlSequencerPanel::~RmlSequencerPanel() = default;
 
+    void RmlSequencerPanel::clearKeyframeSelection() {
+        selectReveal(false);
+        selected_keyframes_.clear();
+        controller_.deselectKeyframe();
+    }
+
     void RmlSequencerPanel::TransportClickListener::ProcessEvent(Rml::Event& event) {
         assert(panel);
         auto* el = event.GetCurrentElement();
