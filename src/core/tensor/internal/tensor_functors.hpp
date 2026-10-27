@@ -842,7 +842,7 @@ namespace lfs::core {
             HOST_DEVICE constexpr scalar_right_op(T s) : scalar(s),
                                                          op() {}
             HOST_DEVICE constexpr scalar_right_op(T s, BinOp o) : scalar(s),
-                                                                 op(o) {}
+                                                                  op(o) {}
 
             template <typename U>
             HOST_DEVICE constexpr auto operator()(const U& x) const {
@@ -860,7 +860,7 @@ namespace lfs::core {
             HOST_DEVICE constexpr scalar_left_op(T s) : scalar(s),
                                                         op() {}
             HOST_DEVICE constexpr scalar_left_op(T s, BinOp o) : scalar(s),
-                                                                op(o) {}
+                                                                 op(o) {}
 
             template <typename U>
             HOST_DEVICE constexpr auto operator()(const U& x) const {
