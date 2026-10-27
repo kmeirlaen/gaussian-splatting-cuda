@@ -34,6 +34,13 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_batch_process_tests test_batch_process.cpp)
+target_compile_features(lichtfeld_batch_process_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_batch_process_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(lichtfeld_batch_process_tests PRIVATE GTest::gtest_main)
+add_test(NAME lichtfeld.batch_process COMMAND lichtfeld_batch_process_tests)
+set_tests_properties(lichtfeld.batch_process PROPERTIES LABELS "cpu;batch" TIMEOUT 60)
+
 add_executable(lichtfeld_collision_tests test_collision.cpp
     ../src/app/converter.cpp ../src/app/converter_overwrite.cpp ../src/app/converter_output_paths.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
@@ -1029,6 +1036,7 @@ list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 list(APPEND TEST_FILES test_rad_spark_paging.cpp)
+list(APPEND TEST_FILES test_batch_trainer.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -1048,6 +1056,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/licht_command.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/batch_trainer.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
 )
 
