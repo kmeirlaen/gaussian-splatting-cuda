@@ -790,9 +790,9 @@ namespace lfs::core {
         // Parameters for an individual batch training job
         struct LFS_CORE_API BatchJobItem {
             std::filesystem::path dataset_path;
-            std::string name;                          // Friendly name; defaults to stem of dataset_path
-            std::filesystem::path output_path;         // Explicit output directory
-            std::vector<std::string> extra_args;       // Extra CLI args for this specific job
+            std::string name;                                 // Friendly name; defaults to stem of dataset_path
+            std::filesystem::path output_path;                // Explicit output directory
+            std::vector<std::string> extra_args;              // Extra CLI args for this specific job
             std::optional<std::filesystem::path> config_file; // Optional per-job JSON config
         };
 

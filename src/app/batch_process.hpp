@@ -79,7 +79,7 @@ namespace lfs::app::detail {
     inline bool prepare_batch_child(const sigset_t& original_mask) {
         if (setpgid(0, 0) != 0)
             return false;
-        struct sigaction action{};
+        struct sigaction action {};
         action.sa_handler = SIG_DFL;
         sigemptyset(&action.sa_mask);
         if (sigaction(SIGINT, &action, nullptr) != 0 || sigaction(SIGTERM, &action, nullptr) != 0)

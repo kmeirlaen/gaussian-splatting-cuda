@@ -222,7 +222,7 @@ namespace {
 
     void cancel_before_exec(const int signal, const int count, const bool child_first = false) {
         alarm(10);
-        struct sigaction action{};
+        struct sigaction action {};
         action.sa_handler = record_interrupt;
         sigemptyset(&action.sa_mask);
         if (sigaction(SIGINT, &action, nullptr) || sigaction(SIGTERM, &action, nullptr))

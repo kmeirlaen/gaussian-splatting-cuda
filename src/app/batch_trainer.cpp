@@ -72,7 +72,7 @@ namespace lfs::app {
                 g_interrupt_count.store(0);
 #ifndef _WIN32
                 g_interrupt_signal.store(SIGINT);
-                struct sigaction sa{};
+                struct sigaction sa {};
                 sa.sa_handler = handle_sigint;
                 sigemptyset(&sa.sa_mask);
                 sa.sa_flags = 0;
@@ -94,8 +94,8 @@ namespace lfs::app {
 
         private:
 #ifndef _WIN32
-            struct sigaction old_sa_int_{};
-            struct sigaction old_sa_term_{};
+            struct sigaction old_sa_int_ {};
+            struct sigaction old_sa_term_ {};
 #endif
         };
 
@@ -731,7 +731,7 @@ namespace lfs::app {
                     result.error_message = std::format("Failed to stop child process (system error {})", errno);
                     break;
                 }
-                struct pollfd pfd{};
+                struct pollfd pfd {};
                 pfd.fd = pipe_fds[0];
                 pfd.events = POLLIN | POLLHUP;
 
