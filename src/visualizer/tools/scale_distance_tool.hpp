@@ -30,4 +30,3 @@ namespace lfs::vis::tools {
     };
 
 } // namespace lfs::vis::tools
-

@@ -106,7 +106,6 @@
 #include "visualizer/window/vulkan_context.hpp"
 #include "visualizer/window/window_manager.hpp"
 
-#include <nlohmann/json.hpp>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
@@ -115,6 +114,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <span>
 #include <sstream>
 #include <string>
