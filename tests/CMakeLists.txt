@@ -181,6 +181,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_point_cloud_vulkan_projection.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
+        test_scale_distance.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
         test_summary_labels.cpp
@@ -944,6 +945,7 @@ set(TEST_FILES
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp
+    test_scale_distance.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
@@ -1568,6 +1570,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scale_distance_contract.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_groups_panel.py
