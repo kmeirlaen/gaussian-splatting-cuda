@@ -67,6 +67,7 @@
     "tbb",
     "tiff",
     "openexr",
+    "openxr-loader",
     "vulkan",
     {
       "name": "vulkan-loader",
