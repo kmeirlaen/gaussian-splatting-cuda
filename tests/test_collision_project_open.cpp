@@ -251,7 +251,8 @@ namespace lfs::vis {
         begin();
         auto* shader_service = viewer->getShaderService();
         const auto edited = shader_service->command(shaders::SetShaderSource{
-            .source = "import lfs;", .name = "Keep shader edit"});
+            .source = "import lfs;",
+            .name = "Keep shader edit"});
         ASSERT_TRUE(edited);
         settle();
         EXPECT_FALSE(installed);

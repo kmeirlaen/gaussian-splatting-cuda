@@ -2714,7 +2714,7 @@ namespace lfs::vis {
                              "vkCreateFence", "Collision preview upload fence"))
                 return false;
             const VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO, nullptr,
-                                       0, nullptr, nullptr, 1, &commands, 0, nullptr};
+                                      0, nullptr, nullptr, 1, &commands, 0, nullptr};
             const auto submitted = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence);
             if (!vk_try_bool(submitted, "vk_queue_submit_synced", "Collision preview upload submit")) {
                 vkDestroyFence(device, fence, nullptr);
@@ -2725,7 +2725,7 @@ namespace lfs::vis {
         }
 
         detail::CollisionUploadStatus uploadCollision(CollisionFrame& frame, std::stop_token stop,
-                                                       VkFormat color_format, VkFormat depth_format) {
+                                                      VkFormat color_format, VkFormat depth_format) {
             using UploadStatus = detail::CollisionUploadStatus;
             auto status = UploadStatus::Failed;
             frame.device = device;

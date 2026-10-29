@@ -5821,7 +5821,7 @@ namespace lfs::io::project {
 
     bool ProjectDocument::has_deferred_collision_payloads() const {
         return std::ranges::any_of(impl_->deferred_geometry_keys,
-                                  [](const auto& key) { return key.fourcc == FOURCC_COLV; });
+                                   [](const auto& key) { return key.fourcc == FOURCC_COLV; });
     }
 
     lfs::Result<void> ProjectDocument::preload_collision_payloads(const std::function<bool()>& canceled) {

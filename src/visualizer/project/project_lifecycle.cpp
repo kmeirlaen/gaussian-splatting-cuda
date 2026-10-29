@@ -3841,9 +3841,7 @@ namespace lfs::vis::project {
                         document
                             ->dirty_chapters(),
                     .hydration_state =
-                        pending_collision_open_ ? "preparing" : hydrationName(
-                            hydration_.load(
-                                std::memory_order_acquire)),
+                        pending_collision_open_ ? "preparing" : hydrationName(hydration_.load(std::memory_order_acquire)),
                     .payloads = {},
                     .contains_embedded_secrets =
                         containsEmbeddedSecrets(),
@@ -8310,8 +8308,8 @@ namespace lfs::vis::project {
              !parameters || pending->parameter_serial != parameters->dirtySerial() ||
              pending->shader_token != shader_token)) {
             pending->result = fail<void>(lfs::ErrorCode::FailedPrecondition,
-                                        "The current project changed while opening. Open the project again.",
-                                        "Prepared collision open is stale; preserving the current scene", "project.open");
+                                         "The current project changed while opening. Open the project again.",
+                                         "Prepared collision open is stale; preserving the current scene", "project.open");
         }
         if (!pending->result) {
             viewer_.jobs().failed(pending->job, developerError(pending->result.error()));
@@ -10184,9 +10182,7 @@ namespace lfs::vis::project {
             .session_dirty = session_dirty,
             .dirty_chapters = dirty_chapters,
             .hydration_state =
-                pending_collision_open_ ? "preparing" : hydrationName(
-                    hydration_.load(
-                        std::memory_order_acquire)),
+                pending_collision_open_ ? "preparing" : hydrationName(hydration_.load(std::memory_order_acquire)),
             .payloads = {},
             .contains_embedded_secrets =
                 containsEmbeddedSecrets(),
