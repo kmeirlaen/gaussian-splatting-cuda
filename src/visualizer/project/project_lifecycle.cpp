@@ -2674,6 +2674,10 @@ namespace lfs::vis::project {
     }
 
     ProjectLifecycle::~ProjectLifecycle() {
+        if (pending_collision_open_) {
+            pending_collision_open_->worker.request_stop();
+            pending_collision_open_.reset(); // join before the viewer or candidate is destroyed
+        }
         cancelTrainingStartPreparation();
         if (auto* manager = viewer_.getTrainerManager()) {
             if (auto* trainer = manager->getTrainer()) {
@@ -2777,6 +2781,11 @@ namespace lfs::vis::project {
     ProjectLifecycle::preflightSwitch(
         const ProjectSwitchDisposition disposition,
         const bool allow_active_training) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "A project is still being opened.",
+                              "Wait for collision payload preparation or cancel opening", "project.open");
+        }
         if (pending_training_start_) {
             return fail<void>(lfs::ErrorCode::FailedPrecondition,
                               "The training project is still being prepared.",
@@ -2831,7 +2840,7 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::collisionSwitchPending() const {
         auto* gui = viewer_.getGuiManager();
-        return gui && gui->asyncTasks().sceneReplacementPending();
+        return pending_collision_open_ || (gui && gui->asyncTasks().sceneReplacementPending());
     }
 
     bool ProjectLifecycle::deferCollisionSwitch(std::move_only_function<lfs::Result<void>()>&& retry) {
@@ -3380,7 +3389,7 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::
         isBackgroundAutosaveSuppressed() const {
-        if (application_close_pending_) {
+        if (application_close_pending_ || pending_collision_open_) {
             return true;
         }
         if (close_save_state_.load(
@@ -3832,7 +3841,7 @@ namespace lfs::vis::project {
                         document
                             ->dirty_chapters(),
                     .hydration_state =
-                        hydrationName(
+                        pending_collision_open_ ? "preparing" : hydrationName(
                             hydration_.load(
                                 std::memory_order_acquire)),
                     .payloads = {},
@@ -4633,6 +4642,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProject(const bool wait_for_write) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (!pending_preview_png_.empty() ||
             project_write_purpose_ == ProjectWritePurpose::Thumbnail) {
             return fail<void>(lfs::ErrorCode::FailedPrecondition,
@@ -4775,6 +4789,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProjectAsync(std::function<lfs::Result<void>()> on_ready) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (pending_training_start_) {
             return {};
         }
@@ -6106,6 +6125,7 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::updateMaintenance() {
+        settleCollisionOpen();
         applyStartupRecoveryScan();
         settleScratchLocationCheck();
         settleProjectWrite();
@@ -8200,22 +8220,110 @@ namespace lfs::vis::project {
                 "The visualizer has not initialized its scene manager",
                 "project.open");
         }
-        auto shell =
-            candidate->stage_shell(
-                manager->getScene());
-        if (!shell) {
-            return lfs::Status::failure(
-                std::move(shell).error());
-        }
-        const auto shell_staged_at =
-            std::chrono::steady_clock::now();
+        const bool preload_collisions = candidate->has_deferred_collision_payloads();
+        auto worker_candidate = candidate;
+        std::move_only_function<lfs::Result<void>()> install =
+            [this, candidate = std::move(candidate), session = std::move(*session),
+             parameters = std::move(*parameters), discard_master = std::move(discard_master),
+             disposition, after_open = std::move(after_open), started, normalized_at,
+             document_opened_at, session_prepared_at, parameters_ready_at]() mutable -> lfs::Result<void> {
+            auto* manager = viewer_.getSceneManager();
+            if (!manager)
+                return fail<void>(lfs::ErrorCode::Unavailable, "The scene manager is unavailable.",
+                                  "Cannot install prepared project", "project.open");
+            auto shell = candidate->stage_shell(manager->getScene());
+            if (!shell)
+                return lfs::Status::failure(std::move(shell).error());
+            const auto shell_staged_at = std::chrono::steady_clock::now();
+            std::move_only_function<lfs::Result<void>()> commit =
+                [this, prepared = PreparedOpen{
+                           std::move(candidate), std::move(*shell), std::move(session),
+                           std::move(parameters), std::move(discard_master), disposition, std::move(after_open),
+                           std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at}}]() mutable { return commitOpen(std::move(prepared)); };
+            return deferCollisionSwitch(std::move(commit)) ? lfs::Result<void>{} : commit();
+        };
+        if (!preload_collisions)
+            return install();
 
-        std::move_only_function<lfs::Result<void>()> commit =
-            [this, prepared = PreparedOpen{
-                       std::move(candidate), std::move(*shell), std::move(*session),
-                       std::move(*parameters), std::move(discard_master), disposition, std::move(after_open),
-                       std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at}}]() mutable { return commitOpen(std::move(prepared)); };
-        return deferCollisionSwitch(std::move(commit)) ? lfs::Result<void>{} : commit();
+        auto pending = std::make_unique<PendingCollisionOpen>();
+        auto job = viewer_.jobs().init(JobType::ProjectOpen, "Reading collision volumes...");
+        if (!job)
+            return fail<void>(lfs::ErrorCode::Unavailable, "Project opening could not be started.",
+                              "The project-open job registry has no available slot", "project.open.job");
+        pending->install = std::move(install);
+        pending->job = *job;
+        pending->epoch = epoch_.load(std::memory_order_acquire);
+        pending->scene_serial = scene_mutation_serial_.load(std::memory_order_acquire);
+        pending->parameter_serial = parameter_manager->dirtySerial();
+        if (const auto* shaders = viewer_.getShaderService())
+            pending->shader_token = shaders->projectToken();
+        auto* state = pending.get();
+        try {
+            pending->worker = std::jthread([this, state, candidate = std::move(worker_candidate)](std::stop_token stop) {
+                viewer_.jobs().work(state->job);
+                try {
+                    state->result = candidate->preload_collision_payloads([&] {
+                        return stop.stop_requested() || viewer_.jobs().cancelRequested(state->job);
+                    });
+                } catch (const std::bad_alloc& error) {
+                    state->result = fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening failed.", error.what(), "COLV");
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Collision payload preparation failed: {}", error.what());
+                    state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", error.what(), "COLV");
+                } catch (...) {
+                    LOG_ERROR("Collision payload preparation failed with an unknown exception");
+                    state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", "Unknown collision reader exception", "COLV");
+                }
+                state->done.store(true, std::memory_order_release);
+                viewer_.wakeMainLoop();
+            });
+        } catch (const std::exception& error) {
+            LOG_ERROR("Collision payload worker could not start: {}", error.what());
+            viewer_.jobs().failed(*job, error.what());
+            viewer_.jobs().free(*job);
+            return fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening could not be started.", error.what(), "COLV");
+        }
+        pending_collision_open_ = std::move(pending);
+        cached_project_info_.reset();
+        return {};
+    }
+
+    void ProjectLifecycle::settleCollisionOpen() {
+        if (!pending_collision_open_ || !pending_collision_open_->done.load(std::memory_order_acquire))
+            return;
+        auto pending = std::move(pending_collision_open_);
+        pending->worker.join();
+        cached_project_info_.reset();
+        if (viewer_.jobs().cancelRequested(pending->job)) {
+            viewer_.jobs().canceled(pending->job);
+            viewer_.jobs().free(pending->job);
+            if (application_close_pending_)
+                viewer_.requestApplicationClose();
+            return;
+        }
+        auto* parameters = viewer_.getParameterManager();
+        const auto* shaders = viewer_.getShaderService();
+        const auto shader_token = shaders ? shaders->projectToken() : std::array<std::uint64_t, 2>{};
+        if (pending->result &&
+            (pending->epoch != epoch_.load(std::memory_order_acquire) ||
+             pending->scene_serial != scene_mutation_serial_.load(std::memory_order_acquire) ||
+             !parameters || pending->parameter_serial != parameters->dirtySerial() ||
+             pending->shader_token != shader_token)) {
+            pending->result = fail<void>(lfs::ErrorCode::FailedPrecondition,
+                                        "The current project changed while opening. Open the project again.",
+                                        "Prepared collision open is stale; preserving the current scene", "project.open");
+        }
+        if (!pending->result) {
+            viewer_.jobs().failed(pending->job, developerError(pending->result.error()));
+            viewer_.jobs().free(pending->job);
+            publishProjectToast(std::move(pending->result).error(), gui::error_op::kOpenProject);
+            return;
+        }
+        viewer_.jobs().completed(pending->job);
+        viewer_.jobs().free(pending->job);
+        if (auto installed = pending->install(); !installed) {
+            publishProjectToast(std::move(installed).error(), gui::error_op::kOpenProject);
+        }
     }
 
     lfs::Result<void> ProjectLifecycle::commitOpen(PreparedOpen&& prepared) {
@@ -9556,6 +9664,13 @@ namespace lfs::vis::project {
     ProjectLifecycle::beginOrPollCloseSave() {
         settleProjectWrite();
         markApplicationClosePending();
+        // Keep pumping the window while the reader finishes its current chunk.
+        // Joining it in the destructor would make a normal Close look hung.
+        if (pending_collision_open_) {
+            settleCollisionOpen();
+            if (pending_collision_open_)
+                return CloseSaveStatus::Saving;
+        }
         switch (close_save_state_.load(
             std::memory_order_acquire)) {
         case CloseSaveState::Saving:
@@ -9766,6 +9881,10 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::markApplicationClosePending() {
+        if (pending_collision_open_) {
+            pending_collision_open_->worker.request_stop();
+            viewer_.jobs().requestCancel(pending_collision_open_->job);
+        }
         if (auto* gui = viewer_.getGuiManager())
             gui->asyncTasks().dropSceneReplacement();
         application_close_pending_ = true;
@@ -10065,7 +10184,7 @@ namespace lfs::vis::project {
             .session_dirty = session_dirty,
             .dirty_chapters = dirty_chapters,
             .hydration_state =
-                hydrationName(
+                pending_collision_open_ ? "preparing" : hydrationName(
                     hydration_.load(
                         std::memory_order_acquire)),
             .payloads = {},

@@ -34,6 +34,34 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
+target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+target_link_libraries(lichtfeld_collision_preview_upload_tests PRIVATE GTest::gtest_main)
+add_test(NAME lichtfeld.collision_preview_upload COMMAND lichtfeld_collision_preview_upload_tests)
+set_tests_properties(lichtfeld.collision_preview_upload PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
+
+if(TARGET lfs_core)
+    add_executable(lichtfeld_collision_volume_tests test_collision_volume_validation.cpp)
+    target_compile_features(lichtfeld_collision_volume_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_volume_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
+    target_link_libraries(lichtfeld_collision_volume_tests PRIVATE lfs_core GTest::gtest_main CUDA::cuda_driver)
+    add_test(NAME lichtfeld.collision_volume COMMAND lichtfeld_collision_volume_tests)
+    set_tests_properties(lichtfeld.collision_volume PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
+    if(WIN32)
+        set_tests_properties(lichtfeld.collision_volume PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
+    endif()
+endif()
+
+if(TARGET Vulkan::Vulkan)
+    add_executable(lichtfeld_collision_preview_vulkan_tests test_collision_preview_vulkan.cpp)
+    target_compile_features(lichtfeld_collision_preview_vulkan_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_preview_vulkan_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+    target_link_libraries(lichtfeld_collision_preview_vulkan_tests PRIVATE GTest::gtest Vulkan::Vulkan)
+    add_test(NAME lichtfeld.collision_preview_vulkan COMMAND lichtfeld_collision_preview_vulkan_tests)
+    set_tests_properties(lichtfeld.collision_preview_vulkan PROPERTIES LABELS "gpu;collision" TIMEOUT 30)
+endif()
 
 # Runtime shader effect compiler contracts; no GPU. Validation builds also run
 # spirv-val on every SPIR-V module the tests emit.
@@ -223,6 +251,7 @@ if(BUILD_VISUALIZER_TESTS)
         licht_test_support.cpp
         test_json_chapter_dom.cpp
         test_visualizer_post_work.cpp
+        test_collision_project_open.cpp
         test_project_document.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
@@ -847,6 +876,7 @@ set(TEST_FILES
     test_video_cuda_frame_handoff.cpp
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
+    test_collision_project_open.cpp
     test_file_association.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_registry_default_closed.cpp

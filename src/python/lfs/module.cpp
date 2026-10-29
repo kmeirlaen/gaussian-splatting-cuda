@@ -1581,8 +1581,8 @@ NB_MODULE(lichtfeld, m) {
                                 .keep_asset_manager_open =
                                     keep_asset_manager_open}
                                 .emit();
-                        if (const auto* gui = lfs::vis::services().guiOrNull())
-                            deferred = gui->asyncTasks().sceneReplacementPending();
+                        if (const auto* viewer = lfs::python::get_visualizer())
+                            deferred = viewer->projectOpenPending();
                     });
                 return deferred ? lfs::vis::ProjectOpenOutcome::Deferred : lfs::vis::ProjectOpenOutcome::Opened;
             }
