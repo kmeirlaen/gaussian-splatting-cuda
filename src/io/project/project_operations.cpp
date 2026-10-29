@@ -2090,12 +2090,12 @@ namespace lfs::io::project {
                 }
             }
         }
-        const auto operation = drop_embedded_dataset       ? "dataset_removed"
-                               : selection.save_generation ? "save_removed"
+        const auto operation = drop_embedded_dataset            ? "dataset_removed"
+                               : selection.save_generation      ? "save_removed"
                                : !selection.checkpoints.empty() ? "checkpoint_removed"
-                               : selection.thumbnail       ? "thumbnail_removed"
-                               : selection.metrics         ? "metrics_removed"
-                                                           : "changed";
+                               : selection.thumbnail            ? "thumbnail_removed"
+                               : selection.metrics              ? "metrics_removed"
+                                                                : "changed";
         if (auto marked = mark_contents_edit(*document, operation, drop_embedded_dataset ? 3 : 1); !marked)
             return std::move(marked).error();
         ProjectDocumentSaveOptions save_options;
@@ -2213,12 +2213,10 @@ namespace lfs::io::project {
         }
         auto after_bound = details->scene_graph.training_node_id;
         const bool bound_removed = *bound && std::ranges::contains(selection.checkpoints, **bound);
-        if (*bound && !bound_removed && (!after_bound ||
-                       !std::ranges::any_of(details->retained_checkpoints,
-                                            [&](const auto& checkpoint) {
-                                                return checkpoint.binds_scene_graph &&
-                                                       checkpoint.instance_uuid == **bound;
-                                            }))) {
+        if (*bound && !bound_removed && (!after_bound || !std::ranges::any_of(details->retained_checkpoints, [&](const auto& checkpoint) {
+                return checkpoint.binds_scene_graph &&
+                       checkpoint.instance_uuid == **bound;
+            }))) {
             return fail<ProjectReduceResult>(
                 lfs::ErrorCode::DataLoss, path,
                 "The reduced project lost its bound checkpoint.",
