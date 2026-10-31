@@ -60,6 +60,10 @@ namespace lfs::vis {
         int cam_id = -1;
         if (pick_result) {
             cam_id = *pick_result;
+            if (settings.hide_disabled_camera_frustums &&
+                scene_manager->getScene().getTrainingDisabledCameraUids().contains(cam_id)) {
+                cam_id = -1;
+            }
         }
 
         hover_changed = updateHoveredCamera(cam_id);
