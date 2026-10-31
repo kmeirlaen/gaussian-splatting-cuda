@@ -13,6 +13,12 @@ SCRUB_FIELD_DEFS = {
     "overlap": ScrubFieldSpec(0, 100, 1, "%d", data_type=int),
     "coverage": ScrubFieldSpec(0, 100, 1, "%d", data_type=int),
 }
+OPERATION_LABEL_KEYS = {
+    "random": "scene.select_random_cameras",
+    "every_n": "scene.select_every_n_cameras",
+    "distinct": "scene.select_distinct_cameras",
+    "cropbox_visibility": "scene.select_cropbox_cameras",
+}
 
 
 @panel_class("camera_selection")
@@ -33,7 +39,7 @@ class CameraSelectionPanel(Panel):
         model = ctx.create_data_model("camera_selection")
         if model is None:
             return
-        model.bind_func("panel_label", lambda: lf.ui.tr("scene.camera_selection"))
+        model.bind_func("panel_label", self._panel_label)
         for name, operation in (("is_random", "random"), ("is_every_n", "every_n"),
                                 ("is_distinct", "distinct"), ("is_cropbox", "cropbox_visibility")):
             model.bind_func(name, lambda operation=operation: self._operation == operation)
@@ -77,12 +83,15 @@ class CameraSelectionPanel(Panel):
             for name in names:
                 self._handle.dirty(name)
 
+    def _panel_label(self):
+        return lf.ui.tr(OPERATION_LABEL_KEYS.get(self._operation, "scene.camera_selection"))
+
     def _refresh(self):
         operation = lf.ui.get_camera_selection_operation() or "random"
         if operation == self._operation:
             return False
         self._operation, self._message = operation, ""
-        self._dirty("is_random", "is_every_n", "is_distinct", "is_cropbox", "cropboxes", "message")
+        self._dirty("panel_label", "is_random", "is_every_n", "is_distinct", "is_cropbox", "cropboxes", "message")
         return True
 
     def _set_int(self, attribute, value, minimum, maximum):

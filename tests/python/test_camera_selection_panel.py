@@ -35,6 +35,19 @@ def test_cropbox_popup_registers_its_record_list_and_keeps_coverage_retained():
     assert 'self._cropbox_id = records[0]["id"]' in panel
 
 
+def test_popup_title_tracks_the_selected_operation_with_i18n_keys():
+    root = Path(__file__).parents[2]
+    panel = (root / "src/python/lfs_plugins/camera_selection_panel.py").read_text(encoding="utf-8")
+
+    assert 'model.bind_func("panel_label", self._panel_label)' in panel
+    assert '"random": "scene.select_random_cameras"' in panel
+    assert '"every_n": "scene.select_every_n_cameras"' in panel
+    assert '"distinct": "scene.select_distinct_cameras"' in panel
+    assert '"cropbox_visibility": "scene.select_cropbox_cameras"' in panel
+    assert '"panel_label"' in panel
+
+
 if __name__ == "__main__":
     test_distinct_and_cropbox_controls_use_editable_scrub_fields()
     test_cropbox_popup_registers_its_record_list_and_keeps_coverage_retained()
+    test_popup_title_tracks_the_selected_operation_with_i18n_keys()
