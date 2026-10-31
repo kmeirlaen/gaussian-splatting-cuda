@@ -28,7 +28,8 @@ class CameraSelectionPanel(Panel):
         self._operation = "random"
         self._percentage, self._every_n = 25, 2
         self._overlap, self._coverage, self._cropbox_id = 65, 40, ""
-        self._message = ""
+        self._local_error = ""
+        self._task_error = ""
         self._running = False
         self._cropbox_records = []
         self._scrub_fields = ScrubFieldController(
@@ -36,6 +37,7 @@ class CameraSelectionPanel(Panel):
         self._reactive_binding = PanelStateBinding()
 
     def on_bind_model(self, ctx):
+        self._cropbox_records = None
         model = ctx.create_data_model("camera_selection")
         if model is None:
             return
@@ -49,7 +51,7 @@ class CameraSelectionPanel(Panel):
         model.bind("coverage", lambda: str(self._coverage), lambda value: self._set_int("_coverage", value, 0, 100))
         model.bind("cropbox_id", lambda: self._cropbox_id, self._set_cropbox)
         model.bind_record_list("cropboxes")
-        model.bind_func("message", lambda: self._message)
+        model.bind_func("message", lambda: self._local_error or self._task_error)
         model.bind_func("running", lambda: self._running)
         model.bind_event("apply", self._apply)
         model.bind_event("cancel", self._cancel)
@@ -90,7 +92,7 @@ class CameraSelectionPanel(Panel):
         operation = lf.ui.get_camera_selection_operation() or "random"
         if operation == self._operation:
             return False
-        self._operation, self._message = operation, ""
+        self._operation, self._local_error = operation, ""
         self._dirty("panel_label", "is_random", "is_every_n", "is_distinct", "is_cropbox", "cropboxes", "message")
         return True
 
@@ -140,10 +142,10 @@ class CameraSelectionPanel(Panel):
     def _sync_task_state(self, force=False):
         state = self._task_state()
         running = bool(state.get("active", False))
-        message = str(state.get("error", "") or "")
-        if not force and running == self._running and message == self._message:
+        error = str(state.get("error", "") or "")
+        if not force and running == self._running and error == self._task_error:
             return False
-        self._running, self._message = running, message
+        self._running, self._task_error = running, error
         self._dirty("running", "message")
         return True
 
@@ -154,10 +156,10 @@ class CameraSelectionPanel(Panel):
             lf.camera_selection_start(self._operation, self._percentage, self._every_n, self._overlap,
                                       self._coverage, int(self._cropbox_id or 0))
         except Exception as error:
-            self._message = str(error)
+            self._local_error = str(error)
             self._dirty("message")
             return
-        self._message = ""
+        self._local_error = ""
         self._sync_task_state(force=True)
 
     def _cancel(self, *_):

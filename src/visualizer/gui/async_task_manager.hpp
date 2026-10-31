@@ -487,6 +487,11 @@ namespace lfs::vis {
             uint64_t splat_simplify_scene_epoch_ = 0;
 
             struct CameraSelectionState {
+                enum class Completion {
+                    Idle,
+                    Apply,
+                    Settle,
+                };
                 struct CameraSnapshot {
                     core::Uuid uuid;
                     glm::vec3 center{0.0f};
@@ -494,17 +499,19 @@ namespace lfs::vis {
                     float fov = 0.0f;
                     float focal_x = 0.0f;
                     float focal_y = 0.0f;
+                    float center_x = 0.0f;
+                    float center_y = 0.0f;
                     float width = 0.0f;
                     float height = 0.0f;
-                    std::array<float, 9> rotation{};
-                    glm::vec3 translation{0.0f};
+                    core::CameraModelType model = core::CameraModelType::PINHOLE;
+                    glm::mat4 world_to_camera{1.0f};
                     bool pose_valid = false;
                 };
                 JobHandle job;
-                std::atomic<bool> apply_pending{false};
-                std::atomic<bool> completed{false};
+                std::atomic<Completion> completion{Completion::Idle};
                 mutable std::mutex mutex;
                 uint64_t document_epoch = 0;
+                uint64_t scene_generation = 0;
                 std::vector<core::Uuid> camera_uuids;
                 std::vector<CameraSnapshot> cameras;
                 core::Uuid cropbox_uuid;

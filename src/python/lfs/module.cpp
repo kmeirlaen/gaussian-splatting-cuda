@@ -2504,46 +2504,59 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "select_cameras", [](const std::string& operation, const double percentage, const int every_n) {
-            auto* scene = get_scene_internal();
-            if (!scene)
-                throw std::runtime_error("No scene available");
-            if (operation == "enable_all") {
-                scene->setAllCameraTrainingEnabled(true);
-                return;
-            }
-            if (operation == "disable_all") {
-                scene->setAllCameraTrainingEnabled(false);
-                return;
-            }
-            if (operation == "invert") {
-                scene->invertAllCameraTrainingEnabled();
-                return;
-            }
-            std::vector<lfs::core::NodeId> cameras;
-            for (const auto* node : scene->getNodes()) {
-                if (node && node->type == lfs::core::NodeType::CAMERA && node->camera)
-                    cameras.push_back(node->id);
-            }
-            if (operation == "random") {
-                const auto count = static_cast<size_t>(std::clamp(
-                    std::floor(std::clamp(percentage, 0.0, 100.0) * cameras.size() / 100.0 + 0.5),
-                    0.0, static_cast<double>(cameras.size())));
-                std::shuffle(cameras.begin(), cameras.end(), std::mt19937{std::random_device{}()});
-                std::unordered_set<lfs::core::NodeId> selected(cameras.begin(), cameras.begin() + count);
-                static_cast<void>(scene->setCameraTrainingSelection(selected));
-                return;
-            }
-            if (operation == "every_n") {
-                const size_t step = static_cast<size_t>(std::max(1, every_n));
-                std::unordered_set<lfs::core::NodeId> selected;
-                for (size_t index = 0; index < cameras.size(); ++index) {
-                    if (index % step == 0)
-                        selected.insert(cameras[index]);
+            const auto apply = [&]() -> lfs::Result<void> {
+                auto* scene = get_scene_internal();
+                if (!scene)
+                    throw std::runtime_error("No scene available");
+                if (operation == "enable_all") {
+                    scene->setAllCameraTrainingEnabled(true);
+                    return {};
                 }
-                static_cast<void>(scene->setCameraTrainingSelection(selected));
+                if (operation == "disable_all") {
+                    scene->setAllCameraTrainingEnabled(false);
+                    return {};
+                }
+                if (operation == "invert") {
+                    scene->invertAllCameraTrainingEnabled();
+                    return {};
+                }
+                std::vector<lfs::core::NodeId> cameras;
+                for (const auto* node : scene->getNodes()) {
+                    if (node && node->type == lfs::core::NodeType::CAMERA && node->camera)
+                        cameras.push_back(node->id);
+                }
+                if (operation == "random") {
+                    const auto count = static_cast<size_t>(std::clamp(
+                        std::floor(std::clamp(percentage, 0.0, 100.0) * cameras.size() / 100.0 + 0.5),
+                        0.0, static_cast<double>(cameras.size())));
+                    std::shuffle(cameras.begin(), cameras.end(), std::mt19937{std::random_device{}()});
+                    std::unordered_set<lfs::core::NodeId> selected(cameras.begin(), cameras.begin() + count);
+                    static_cast<void>(scene->setCameraTrainingSelection(selected));
+                    return {};
+                }
+                if (operation == "every_n") {
+                    const size_t step = static_cast<size_t>(std::max(1, every_n));
+                    std::unordered_set<lfs::core::NodeId> selected;
+                    for (size_t index = 0; index < cameras.size(); ++index) {
+                        if (index % step == 0)
+                            selected.insert(cameras[index]);
+                    }
+                    static_cast<void>(scene->setCameraTrainingSelection(selected));
+                    return {};
+                }
+                throw std::invalid_argument("Unknown camera selection operation: " + operation);
+            };
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                if (const auto result = apply(); !result)
+                    throw std::runtime_error(lfs::format_for_developer(result.error()));
                 return;
             }
-            throw std::invalid_argument("Unknown camera selection operation: " + operation);
+            nb::gil_scoped_release release;
+            const lfs::core::TaskContext context{.name = "python.select_cameras", .domain = lfs::ErrorDomain::Python,
+                                                  .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
+            if (const auto result = lfs::vis::post_guarded_and_wait<void>(*viewer, context, apply, python_viewer_shutdown_error()); !result)
+                throw std::runtime_error(lfs::format_for_developer(result.error()));
         },
         nb::arg("operation"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2,
         "Apply a synchronous global camera-training selection operation. Prefer camera_selection_start for GUI-safe asynchronous work.");
@@ -2590,8 +2603,22 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "camera_selection_status", []() -> nb::dict {
-            auto* gui = lfs::python::get_gui_manager();
-            const auto status = gui ? gui->asyncTasks().cameraSelectionStatus() : std::nullopt;
+            const auto query = [] {
+                auto* gui = lfs::python::get_gui_manager();
+                return gui ? gui->asyncTasks().cameraSelectionStatus() : std::nullopt;
+            };
+            auto* const viewer = lfs::python::get_visualizer();
+            std::optional<lfs::vis::JobSnapshot> status;
+            if (!viewer || viewer->isOnViewerThread()) {
+                status = query();
+            } else {
+                nb::gil_scoped_release release;
+                const lfs::core::TaskContext context{.name = "python.camera_selection_status", .domain = lfs::ErrorDomain::Python,
+                                                      .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
+                const auto result = lfs::vis::post_guarded_and_wait<std::optional<lfs::vis::JobSnapshot>>(*viewer, context, query, python_viewer_shutdown_error());
+                if (!result) throw std::runtime_error(lfs::format_for_developer(result.error()));
+                status = *result;
+            }
             if (!status) { nb::dict result; result["job_id"] = "camera.selection"; result["status"] = "idle"; result["active"] = false; return result; }
             const char* state = status->running() ? "running" : status->status == lfs::vis::JobStatus::Completed ? "completed" : status->status == lfs::vis::JobStatus::Canceled ? "cancelled" : status->status == lfs::vis::JobStatus::Failed ? "failed" : "idle";
             nb::dict result;
@@ -2603,11 +2630,22 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "camera_selection_cancel", []() -> bool {
-            auto* gui = lfs::python::get_gui_manager();
-            const auto status = gui ? gui->asyncTasks().cameraSelectionStatus() : std::nullopt;
-            if (!status || !status->running()) return false;
-            gui->asyncTasks().cancelCameraSelection();
-            return true;
+            const auto cancel = [] {
+                auto* gui = lfs::python::get_gui_manager();
+                const auto status = gui ? gui->asyncTasks().cameraSelectionStatus() : std::nullopt;
+                if (!status || !status->running()) return false;
+                gui->asyncTasks().cancelCameraSelection();
+                return true;
+            };
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer || viewer->isOnViewerThread())
+                return cancel();
+            nb::gil_scoped_release release;
+            const lfs::core::TaskContext context{.name = "python.camera_selection_cancel", .domain = lfs::ErrorDomain::Python,
+                                                  .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
+            const auto result = lfs::vis::post_guarded_and_wait<bool>(*viewer, context, cancel, python_viewer_shutdown_error());
+            if (!result) throw std::runtime_error(lfs::format_for_developer(result.error()));
+            return *result;
         }, "Request cancellation. Returns true only when a running job accepted the request.");
 
     m.def(

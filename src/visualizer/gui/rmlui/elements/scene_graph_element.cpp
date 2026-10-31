@@ -3485,7 +3485,11 @@ namespace lfs::vis::gui {
             }
         } else if (kind == "camera_selection" && parts.size() >= 2) {
             lfs::python::set_camera_selection_operation(parts[1]);
-            PanelRegistry::instance().set_panel_enabled("lfs.camera_selection", true);
+            auto& panels = PanelRegistry::instance();
+            if (const auto panel = panels.get_panel_instance("lfs.camera_selection"))
+                panel->on_content_changed();
+            panels.set_panel_enabled("lfs.camera_selection", true);
+            panels.bring_panel_to_front("lfs.camera_selection");
         } else if (kind == "delete" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id)) {
