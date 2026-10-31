@@ -49,15 +49,27 @@ namespace lfs::python {
     struct SequencerUIStateData;
 } // namespace lfs::python
 
+namespace lfs::vis::gui {
+    class CollisionJobsTest;
+}
+
 namespace lfs::vis {
     class SceneManager;
+    namespace vr {
+        class OpenXrService;
+    } // namespace vr
 } // namespace lfs::vis
 
 namespace lfs::vis {
     class DataLoadingService;
 
+    namespace shaders {
+        class ShaderService;
+    } // namespace shaders
+
     namespace tools {
         class AlignTool;
+        class ScaleDistanceTool;
         class SelectionTool;
     } // namespace tools
 
@@ -65,6 +77,7 @@ namespace lfs::vis {
         friend class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         friend class gui::GuiManager;
         friend class gui::AsyncTaskManager;
+        friend class gui::CollisionJobsTest;
 
     public:
         explicit VisualizerImpl(const ViewerOptions& options);
@@ -183,6 +196,7 @@ namespace lfs::vis {
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;
+        [[nodiscard]] bool projectOpenPending() const override;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
@@ -206,6 +220,8 @@ namespace lfs::vis {
         const WindowManager* getWindowManager() const {
             return window_manager_.get();
         }
+        shaders::ShaderService* getShaderService() { return shader_service_.get(); }
+        const shaders::ShaderService* getShaderService() const { return shader_service_.get(); }
         RenderingManager* getRenderingManager() override { return rendering_manager_.get(); }
         const RenderingManager* getRenderingManager() const {
             return rendering_manager_.get();
@@ -265,6 +281,14 @@ namespace lfs::vis {
             return align_tool_.get();
         }
 
+        tools::ScaleDistanceTool* getScaleDistanceTool() {
+            return scale_distance_tool_.get();
+        }
+
+        const tools::ScaleDistanceTool* getScaleDistanceTool() const {
+            return scale_distance_tool_.get();
+        }
+
         tools::SelectionTool* getSelectionTool() {
             return selection_tool_.get();
         }
@@ -303,7 +327,9 @@ namespace lfs::vis {
         friend class AlignDepthIntegrationTest;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class CollisionProjectOpenTest;
         friend void installSessionTestInputController(VisualizerImpl& viewer);
+        friend class VisualizerImplResetTest_AprilTagJobShutdownSettlesPendingRequestWaiter_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
@@ -549,6 +575,14 @@ namespace lfs::vis {
         bool allowclose();
         void wakeMainLoop() const;
 
+        // VR viewing: enter/exit requests apply at the start of the next update.
+        void updateVrSession();
+        void enterVr();
+        void exitVr();
+        // Submits one headset frame; false when the desktop frame should be skipped.
+        bool renderVrFrame();
+        void publishVrState();
+
         // Frame exception boundary. Contains an OOM or other error escaping a
         // frame so the loop never aborts: OOM triggers one render-safe pressure
         // episode, other errors escalate under a rate limit.
@@ -692,11 +726,19 @@ namespace lfs::vis {
         // Core components
         Viewport viewport_;
         std::unique_ptr<WindowManager> window_manager_;
+        // After the window, so the VR session ends before its Vulkan device.
+        std::unique_ptr<vr::OpenXrService> vr_;
+        bool vr_active_ = false;
+        std::optional<bool> vr_request_;
+        std::uint64_t vr_scene_generation_ = 0;
+        std::optional<RenderSettings> vr_saved_settings_;
         std::unique_ptr<InputController> input_controller_;
         std::unique_ptr<RenderingManager> rendering_manager_;
         DemandToken gui_animation_demand_;
         DemandToken python_animation_demand_;
         std::unique_ptr<SceneManager> scene_manager_;
+        // Reads the scene; declared after it so it is destroyed first.
+        std::unique_ptr<shaders::ShaderService> shader_service_;
         std::shared_ptr<TrainerManager> trainer_manager_;
         std::unique_ptr<DataLoadingService> data_loader_;
         std::unique_ptr<ParameterManager> parameter_manager_;
@@ -710,6 +752,7 @@ namespace lfs::vis {
 
         // Tools
         std::shared_ptr<tools::AlignTool> align_tool_;
+        std::shared_ptr<tools::ScaleDistanceTool> scale_distance_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
         std::unique_ptr<ToolContext> tool_context_;
 

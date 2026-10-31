@@ -6,7 +6,7 @@
 #pragma once
 
 #include "core/checkpoint_format.hpp"
-#include "core/collision_serialization.hpp"
+#include "core/collision.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "io/geometry_payload.hpp"
@@ -21,7 +21,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
@@ -35,9 +34,13 @@ namespace lfs::io {
 
 namespace lfs::io::project {
 
-    // The current SCNG-bound checkpoint is resumable; older CKPT chapters are
-    // retained history. This cap counts only unbound historical chapters.
-    inline constexpr std::size_t CHECKPOINT_HISTORY_LIMIT = 16;
+    // Compare without overflowing when a project contains very large payloads.
+    [[nodiscard]] constexpr bool checkpoint_rewrite_required(
+        std::uint64_t dead_bytes, std::uint64_t superseded_bytes,
+        std::uint64_t resulting_live_bytes) noexcept {
+        const auto threshold = resulting_live_bytes / 2 + resulting_live_bytes % 2;
+        return dead_bytes >= threshold || superseded_bytes >= threshold - dead_bytes;
+    }
 
     // A binary chapter whose clean source range is also its lazy hydration
     // handle. Reading a clean value never marks it dirty; saving that same
@@ -98,8 +101,8 @@ namespace lfs::io::project {
         // Skip Impl::validate after the chapter scan. Hydration re-opens a
         // path the shell already validated; identity is checked by the caller.
         bool skip_validation = false;
-        // Aggregate COLV allocation bound, counted once per distinct volume.
-        std::size_t collision_byte_budget = std::numeric_limits<std::size_t>::max();
+        // Optional validated source: retain its file handle, path and exact commit. Borrowed only during open().
+        const ProjectReader* retained_source = nullptr;
     };
 
     struct ProjectDocumentSaveOptions {
@@ -141,6 +144,10 @@ namespace lfs::io::project {
         // Untitled crash-protection writes a complete master without binding
         // the live document to that app-private path.
         bool leave_unbound = false;
+        // A captured checkpoint carries the preference at its training safe point.
+        // Other callers use the active PRMS preference.
+        std::optional<bool> keep_all_checkpoints = std::nullopt;
+        CommitBoundaryObserver boundary_observer = {};
     };
 
     // Inspect a first-save destination without creating, truncating, or
@@ -203,6 +210,9 @@ namespace lfs::io::project {
         std::uint64_t reused_chunks = 0;
         std::uint64_t opaque_chunks_carried = 0;
         std::uint64_t erased_chunks = 0;
+        bool rewrote_container = false;
+        std::uint64_t resulting_live_bytes = 0;
+        std::uint64_t superseded_checkpoint_bytes = 0;
     };
 
     struct LFS_IO_API DatasetEmbedSource {
@@ -305,6 +315,8 @@ namespace lfs::io::project {
         [[nodiscard]] ViewSessionChapter& edit_view() noexcept;
         [[nodiscard]] const EditorSessionChapter& editor() const noexcept;
         [[nodiscard]] EditorSessionChapter& edit_editor() noexcept;
+        [[nodiscard]] const ShaderLibraryChapter& shaders() const noexcept;
+        [[nodiscard]] ShaderLibraryChapter& edit_shaders() noexcept;
         [[nodiscard]] const SequencerSessionChapter& sequencer() const noexcept;
         [[nodiscard]] SequencerSessionChapter& edit_sequencer() noexcept;
         [[nodiscard]] const MetricsChapter& metrics() const noexcept;
@@ -384,6 +396,11 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_collision(const lfs::core::Uuid& instance_uuid,
                       std::shared_ptr<const lfs::core::CollisionVolume> volume);
+        [[nodiscard]] bool has_deferred_collision_payloads() const;
+        // May run on a worker only while this candidate document is exclusively
+        // owned by the opener. Publishes no live scene state.
+        [[nodiscard]] lfs::Result<void>
+        preload_collision_payloads(const std::function<bool()>& canceled = {});
         // Drop SPLT/PCLD/MESH/COLV payloads the current scene graph no longer binds.
         void remove_geometry_payloads_not_bound_by_scene();
 

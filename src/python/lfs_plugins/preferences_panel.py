@@ -11,6 +11,7 @@ from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve
 from .asset_watch import scan_all_asset_folders, scan_asset_folder
 
 from .keymap_bindings import KeymapBindingsSection
+from .gamepad_preferences import GamepadTestSection
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .rendering_defaults import RenderingDefaultsSection, vignette_value, set_vignette_value
@@ -89,9 +90,20 @@ class PreferencesPanel(Panel):
         "space_mouse_rotation_speed": ScrubFieldSpec(0.1, 5.0, 0.1, "%.1f"),
         **{f"theme_vignette_{name}": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")
            for name in ("intensity", "radius", "softness")},
+        "vr_resolution_scale": ScrubFieldSpec(0.25, 1.5, 0.05, "%.2f"),
+        "vr_scene_units_per_meter": ScrubFieldSpec(0.001, 1000.0, 0.001, "%.3f"),
+        "vr_move_speed": ScrubFieldSpec(0.1, 10.0, 0.1, "%.1f"),
+    }
+
+    VR_PREFERENCE_DEFAULTS = {
+        "enabled": False,
+        "resolution_scale": 0.7,
+        "scene_units_per_meter": 1.0,
+        "move_speed": 1.5,
     }
 
     EXPANDABLE_SECTIONS = (
+        "gamepad_bindings",
         "language",
         "project_location",
         "project_manager",
@@ -116,12 +128,16 @@ class PreferencesPanel(Panel):
         self._scene_upscaler_catalog = []
         self._scene_upscaler_presets = {}
         self._keymap = KeymapBindingsSection()
+        self._gamepad_test = GamepadTestSection()
         self._theme_catalog = []
         self._theme_families = []
         self._language_catalog = []
         self._last_state = None
         self._marketplace_git_available = shutil.which("git") is not None
         self._section = "general"
+        self._input_page = "navigation"
+        self._input_expanded = False
+        self._gamepad_page = "controls"
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._mcp_enabled = True
         self._mcp_expose_network = False
@@ -176,6 +192,18 @@ class PreferencesPanel(Panel):
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
+        model.bind_func("input_expanded", lambda: self._input_expanded)
+        model.bind_func("input_page_title", self._input_page_title)
+        model.bind_func("show_input_navigation", lambda: self._section == "input" and self._input_page == "navigation")
+        model.bind_func("show_input_shortcuts", lambda: self._section == "input" and self._input_page == "shortcuts")
+        model.bind_func("show_input_gamepad", lambda: self._section == "input" and self._input_page == "gamepad")
+        model.bind_func("show_gamepad_controls", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "controls")
+        model.bind_func("show_gamepad_test", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
+        model.bind_func("show_input_vr", lambda: self._section == "input" and self._input_page == "vr")
+        for key in self.VR_PREFERENCE_DEFAULTS:
+            model.bind("vr_" + key, lambda k=key: lf.ui.get_vr_preferences()[k],
+                       lambda value, k=key: self._set_vr_preference(k, value))
+        model.bind_func("vr_status", lambda: lf.ui.get_vr_state()["status"])
         model.bind_func("show_interface", lambda: self._section == "interface")
         model.bind_func("show_file_associations", self._show_file_associations)
         model.bind_func("has_file_associations", self._has_file_associations)
@@ -320,7 +348,9 @@ class PreferencesPanel(Panel):
         model.bind_event("clear_startup_sidebar", lambda *_: lf.ui.clear_startup_sidebar())
         model.bind_event("show_general", lambda *_: self._set_section("general"))
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
-        model.bind_event("show_input", lambda *_: self._set_section("input"))
+        model.bind_event("show_input", lambda *_: self._toggle_input_group())
+        model.bind_event("input_page", lambda _handle, _event, args: self._set_input_page(str(args[0])) if args else None)
+        model.bind_event("gamepad_page", lambda _handle, _event, args: self._set_gamepad_page(str(args[0])) if args else None)
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
         model.bind_event("show_file_associations", lambda *_: self._set_section("file_associations"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
@@ -358,6 +388,7 @@ class PreferencesPanel(Panel):
         self._handle = model.get_handle()
         self._portal_state_binding.set_handle(self._handle)
         self._keymap.bind(model)
+        self._gamepad_test.bind(model)
         self._reload_file_associations()
 
     def on_mount(self, doc):
@@ -397,6 +428,7 @@ class PreferencesPanel(Panel):
         self._last_state = self._state()
         self._refresh_selection()
         self._keymap.on_mount(doc)
+        self._gamepad_test.mount(doc)
         self._ensure_keymap_rows_if_visible()
         if callable(getattr(doc, "query_selector_all", None)) and callable(
             getattr(doc, "add_event_listener", None)
@@ -404,6 +436,7 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._gamepad_test.close()
         self._rendering_defaults.unmount()
         self._portal_state_binding.close()
         self._scrub_fields.unmount()
@@ -412,7 +445,16 @@ class PreferencesPanel(Panel):
         self._handle = None
         doc.remove_data_model("preferences")
 
+    def on_visibility_changed(self, visible):
+        if not visible:
+            self._gamepad_test.deactivate()
+
     def on_update(self, doc):
+        if self._section == "input" and self._input_page == "gamepad":
+            self._gamepad_test.activate()
+            self._gamepad_test.sync()
+        else:
+            self._gamepad_test.deactivate()
         self._refresh_project_folders()
         self._consume_section_request()
         self._sync_mcp_runtime()
@@ -429,7 +471,7 @@ class PreferencesPanel(Panel):
         self._keymap.on_update(doc)
 
     def _ensure_keymap_rows_if_visible(self):
-        if self._section == "input" and "key_bindings" in self._expanded_sections:
+        if self._section == "input" and self._input_page == "shortcuts" and "key_bindings" in self._expanded_sections:
             self._keymap.ensure_binding_rows()
 
     def _state(self):
@@ -468,6 +510,8 @@ class PreferencesPanel(Panel):
             lf.ui.remember_camera_view_snap(),
             self._mcp_status_signature(),
             tuple(vignette_value(name) for name in ("enabled", "intensity", "radius", "softness")),
+            tuple(lf.ui.get_vr_preferences().values()),
+            lf.ui.get_vr_state()["status"],
         )
 
     @staticmethod
@@ -949,6 +993,8 @@ class PreferencesPanel(Panel):
             return float(lf.ui.get_zoom_speed_preference())
         if prop == "navigation_speed":
             return float(lf.ui.get_navigation_speed_preference())
+        if prop.startswith("vr_"):
+            return float(lf.ui.get_vr_preferences()[prop.removeprefix("vr_")])
         return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
 
     def _set_scrub_value(self, prop, value):
@@ -961,6 +1007,9 @@ class PreferencesPanel(Panel):
             set_vignette_value(prop.removeprefix("theme_vignette_"), value, persist=False)
             if self._handle:
                 self._handle.dirty(prop)
+            return
+        if prop.startswith("vr_"):
+            self._set_vr_preference(prop.removeprefix("vr_"), value, persist=False)
             return
         if prop == "zoom_speed":
             lf.ui.set_zoom_speed_preference(float(value), persist=False)
@@ -975,10 +1024,21 @@ class PreferencesPanel(Panel):
         if prop.startswith("theme_vignette_"):
             set_vignette_value(prop.removeprefix("theme_vignette_"), value)
             return
+        if prop.startswith("vr_"):
+            self._set_vr_preference(prop.removeprefix("vr_"), value)
+            return
         if prop == "zoom_speed":
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":
             self._set_navigation_speed(value)
+
+    def _set_vr_preference(self, key, value, persist=True):
+        preferences = lf.ui.get_vr_preferences()
+        # Range inputs snap in float32; three decimals cover every VR step.
+        preferences[key] = bool(value) if key == "enabled" else round(float(value), 3)
+        lf.ui.set_vr_preferences(*(preferences[name] for name in self.VR_PREFERENCE_DEFAULTS), persist=persist)
+        if self._handle:
+            self._handle.dirty("vr_" + key)
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
@@ -1560,9 +1620,17 @@ class PreferencesPanel(Panel):
             self._handle.dirty_all()
 
     def _set_section(self, section):
+        if section == "input":
+            self._input_expanded = True
+            self._dirty_input_pages()
         if self._section == section:
             return
+        if self._section == "input":
+            lf.keymap.cancel_capture()
+            self._gamepad_test.deactivate()
         self._section = section
+        self._dirty_input_pages()
+        self._reset_content_scroll()
         self._ensure_keymap_rows_if_visible()
         if self._handle:
             for name in (
@@ -1581,6 +1649,56 @@ class PreferencesPanel(Panel):
             ):
                 self._handle.dirty(name)
 
+    def _reset_content_scroll(self):
+        if self._document is not None:
+            content = self._document.query_selector(".preferences-content")
+            if content is not None:
+                content.scroll_top = 0
+
+    def _dirty_input_pages(self):
+        if self._handle:
+            for name in ("input_expanded", "input_page_title", "show_input_navigation", "show_input_shortcuts", "show_input_gamepad",
+                         "show_gamepad_controls", "show_gamepad_test", "show_input_vr", "show_section_reset", "reset_section_label"):
+                self._handle.dirty(name)
+
+    def _set_input_page(self, page):
+        if page not in ("navigation", "shortcuts", "gamepad", "vr"):
+            return
+        self._set_section("input")
+        if self._input_page == page:
+            return
+        lf.keymap.cancel_capture()
+        self._gamepad_test.deactivate()
+        self._input_page = page
+        self._ensure_keymap_rows_if_visible()
+        self._reset_content_scroll()
+        self._dirty_input_pages()
+
+    def _toggle_input_group(self):
+        if self._input_expanded:
+            self._input_expanded = False
+            self._dirty_input_pages()
+        else:
+            self._set_section("input")
+
+    def _input_page_title(self):
+        key = "preferences.input_" + self._input_page
+        if self._input_page == "gamepad" and self._gamepad_page == "test":
+            key = "preferences.gamepad_diagnostics"
+        return lf.ui.tr(key)
+
+    def _set_gamepad_page(self, page):
+        if page not in ("controls", "test") or self._gamepad_page == page:
+            return
+        self._gamepad_test.deactivate(release_discovery=False)
+        self._gamepad_page = page
+        if page == "test":
+            identifier = self._gamepad_test.navigation.get("selected", 0)
+            if identifier:
+                self._gamepad_test.select(str(identifier))
+        self._reset_content_scroll()
+        self._dirty_input_pages()
+
     @staticmethod
     def _portal_account():
         from .portal_account import get_portal_account_service
@@ -1596,7 +1714,9 @@ class PreferencesPanel(Panel):
         return connection_action(self._portal_connection_state())[0]
 
     def _show_section_reset(self):
-        return self._section != "portal"
+        return self._section not in ("portal", "file_associations") and not (
+            self._section == "mcp" and self._mcp_safe_mode) and not (
+            self._section == "input" and self._input_page == "gamepad" and self._gamepad_page != "controls")
 
     def _portal_connection_status(self):
         account = self._portal_connection_snapshot()
@@ -1673,18 +1793,26 @@ class PreferencesPanel(Panel):
             self._handle.dirty(f"{section}_expanded")
 
     def _reset_section_label(self):
-        return lf.ui.tr("preferences.reset_current_section")
+        return lf.ui.tr("preferences.reset_page")
 
     def _on_reset_current_section(self, _handle, _event, _args):
-        if self._section == "portal":
+        if not self._show_section_reset():
             return
         reset_label = self._reset_section_label()
-        section_name = lf.ui.tr(f"preferences.{self._section}")
+        scope = "input_" + self._input_page if self._section == "input" else self._section
+        section_name = lf.ui.tr(f"preferences.{scope}")
+        message = lf.ui.tr("preferences.reset_page_confirmation").replace("{page}", section_name)
+        if scope == "input_gamepad":
+            message += "\n\n" + lf.ui.tr("gamepad.profile.reset_scope")
+        if scope == "input_shortcuts":
+            message += "\n\n" + lf.ui.tr("input_settings.reset_scope")
+        if self._mcp_safe_mode:
+            message += "\n\n" + lf.ui.tr("preferences.reset_safe_mode_note")
 
         def _on_result(button):
             if button != reset_label:
                 return
-            error = self._reset_section()
+            error = self._reset_section(scope)
             if error:
                 lf.ui.message_dialog(
                     reset_label,
@@ -1699,13 +1827,16 @@ class PreferencesPanel(Panel):
 
         lf.ui.confirm_dialog(
             f"{reset_label}: {section_name}",
-            f"{lf.ui.tr('preferences.reset_section_confirmation')} {section_name}.",
+            message,
             [lf.ui.tr("common.cancel"), reset_label],
             _on_result,
         )
 
     def _on_reset_all_settings(self, _handle, _event, _args):
         reset_label = lf.ui.tr("preferences.reset_all_settings")
+        message = lf.ui.tr("preferences.reset_all_settings_confirmation") + "\n\n" + lf.ui.tr("preferences.reset_all_scope") + "\n\n" + lf.ui.tr("gamepad.profile.reset_all_scope")
+        if self._mcp_safe_mode:
+            message += "\n\n" + lf.ui.tr("preferences.reset_safe_mode_note")
 
         def _on_result(button):
             if button != reset_label:
@@ -1728,13 +1859,14 @@ class PreferencesPanel(Panel):
 
         lf.ui.confirm_dialog(
             reset_label,
-            lf.ui.tr("preferences.reset_all_settings_confirmation"),
+            message,
             [lf.ui.tr("common.cancel"), reset_label],
             _on_result,
         )
 
     def _reset_section(self, section=None):
         section = section or self._section
+        reset_error = None
         if section == "portal":
             return None
         if section == "viewport":
@@ -1766,9 +1898,17 @@ class PreferencesPanel(Panel):
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
-        elif section == "input":
-            self._keymap.reset_to_default()
-
+        elif section in ("input", "input_navigation", "input_shortcuts", "input_gamepad", "input_vr"):
+            if section in ("input", "input_shortcuts"):
+                self._keymap.reset_to_default()
+            if section in ("input", "input_vr"):
+                lf.ui.set_vr_preferences(*self.VR_PREFERENCE_DEFAULTS.values())
+            if section in ("input", "input_gamepad"):
+                self._gamepad_test.deactivate(release_discovery=False)
+                reset_error = self._gamepad_test.reset(all_profiles=True) if section == "input" else self._gamepad_test.reset()
+            if section != "input" and section != "input_navigation":
+                self._refresh_selection()
+                return reset_error
             lf.set_new_project_navigation_defaults("legacy_y", True)
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
@@ -1796,7 +1936,7 @@ class PreferencesPanel(Panel):
                 lf.ui.set_mcp_preferences(True, False, 45677, False)
                 self._load_mcp_preferences()
         self._refresh_selection()
-        return None
+        return reset_error
 
     def _refresh_selection(self):
         self._last_state = self._state()
@@ -1825,6 +1965,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("navigation_speed")
             for key in ("enabled", "translation_speed", "rotation_speed", "keep_horizon", "status", "linux_hint"):
                 self._handle.dirty("space_mouse_" + key)
+            for key in (*self.VR_PREFERENCE_DEFAULTS, "status"):
+                self._handle.dirty("vr_" + key)
             self._handle.dirty("camera_browse_repeat")
             self._handle.dirty("camera_browse_repeat_rate")
             self._handle.dirty("view_snap")

@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/batch_trainer.hpp"
 #include "app/compare.hpp"
 #include "app/converter.hpp"
 #include "app/licht_command.hpp"
-#include "app/voxelizer.hpp"
 #include "core/abi.hpp"
 #include "core/argument_parser.hpp"
 #include "core/crash_handler.hpp"
@@ -21,6 +21,7 @@
 #include "git_version.h"
 #include "lfs_core_abi_stamp.h"
 #include "preprocessing/preprocess.hpp"
+#include "preprocessing/video_mask_command.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
@@ -163,6 +164,10 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
                 preflightGpuOrExit(false);
                 return lfs::preprocessing::run_preprocess(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::VideoMaskMode>) {
+                if (!mode.params.download_only)
+                    preflightGpuOrExit(false);
+                return lfs::preprocessing::run_video_masking(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::CompareMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_compare(mode.params);
@@ -170,6 +175,11 @@ namespace {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::LichtMode>) {
                 return lfs::app::run_licht_command(mode);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::BatchTrainingMode>) {
+                if (!mode.params.dry_run) {
+                    preflightGpuOrExit(false);
+                }
+                return lfs::app::run_batch_training(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
 #ifdef __GLIBC__
                 // Training workers create many short-lived glibc arenas. Limit their

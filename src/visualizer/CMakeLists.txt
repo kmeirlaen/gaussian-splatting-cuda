@@ -25,6 +25,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
+        vr/openxr_service.cpp
 
         # Project session chapters
         project/session_state.cpp
@@ -65,6 +66,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_depth_blit_pass.cpp
         rendering/passes/vulkan_split_view_pass.cpp
         rendering/framerate_controller.cpp
+
+        # User shader effects
+        shaders/shader_api.cpp
+        shaders/shader_service.cpp
+        shaders/slang_compiler.cpp
 
         # Preferences and theme system
         preferences.cpp
@@ -131,6 +137,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/video_widget_factory.cpp
 
         # Scene management
+        scene/apriltag_calibration.cpp
         scene/scene_manager.cpp
         scene/selection_state.cpp
         scene/viewer_splat_quantize.cpp
@@ -140,6 +147,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         input/space_mouse.cpp
         input/space_mouse_device.cpp
         input/space_mouse_windows.cpp
+        input/gamepad_service.cpp
         input/input_router.cpp
         input/input_bindings.cpp
         input/sdl_key_mapping.cpp
@@ -150,7 +158,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Tools
         tools/selection_tool.cpp
+        tools/point_pick_overlay.cpp
         tools/align_tool.cpp
+        tools/scale_distance_tool.cpp
         tools/unified_tool_registry.cpp
         tools/builtin_tools.cpp
 
@@ -170,7 +180,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_context.cpp
         operator/operator_id.cpp
         operator/operator_registry.cpp
+        operator/ops/point_pick_operator.cpp
         operator/ops/align_ops.cpp
+        operator/ops/scale_distance_ops.cpp
         operator/ops/crop_polygon_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp
@@ -232,12 +244,15 @@ target_include_directories(lfs_visualizer
         ${CMAKE_SOURCE_DIR}/external/httplib
 )
 
+find_package(OpenXR CONFIG REQUIRED)
+
 target_link_libraries(lfs_visualizer
         PRIVATE
         lfs_core
         lfs_diagnostics
         lfs_video
         lfs_geometry
+        lfs_preprocessing
         lfs_io
         lfs_rendering_tensor
         lfs_training
@@ -258,6 +273,7 @@ target_link_libraries(lfs_visualizer
         nfd::nfd
         vterm
         fmt::fmt-header-only
+        OpenXR::openxr_loader
 )
 
 set_property(SOURCE
@@ -541,3 +557,8 @@ file(GLOB_RECURSE VISUALIZER_RESOURCE_FILES
 if (VISUALIZER_RESOURCE_FILES)
     add_custom_target(visualizer_resources SOURCES ${VISUALIZER_RESOURCE_FILES})
 endif ()
+
+# Runtime effect compiler; Slang headers stay private to the implementation.
+target_link_libraries(lfs_visualizer PRIVATE slang::slang)
+target_include_directories(lfs_visualizer PRIVATE "${CMAKE_BINARY_DIR}/generated/user_shaders")
+add_dependencies(lfs_visualizer lfs_user_shader_ir)

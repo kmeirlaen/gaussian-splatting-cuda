@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -18,14 +19,11 @@
 namespace lfs::core {
     struct MeshData;
     struct CollisionVolume;
-    struct SceneNode;
 } // namespace lfs::core
 
 namespace lfs::vis {
 
     class VulkanContext;
-    class SceneManager;
-    [[nodiscard]] bool hasVisibleCollisionPreview(const SceneManager& manager);
 
     // GPU-rendered mesh draw item. Full PBR (Cook-Torrance: GGX + Smith + Schlick) with
     // albedo / normal / metallic-roughness textures, vertex colors, Reinhard tonemap +
@@ -99,7 +97,8 @@ namespace lfs::vis {
         // must match the render-pass attachments the caller will record into.
         [[nodiscard]] bool init(VulkanContext& context,
                                 VkFormat color_format,
-                                VkFormat depth_stencil_format);
+                                VkFormat depth_stencil_format,
+                                std::function<void()> collision_wake = {});
 
         // Upload any new / changed mesh GPU buffers. Idempotent — caches by
         // (MeshData*, generation).

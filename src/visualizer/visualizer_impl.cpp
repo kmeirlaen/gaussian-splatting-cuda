@@ -21,6 +21,7 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/native_panels.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/panels/python_console_panel.hpp"
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
 #include "gui/string_keys.hpp"
@@ -34,6 +35,7 @@
 #include "operator/ops/align_ops.hpp"
 #include "operator/ops/crop_polygon_ops.hpp"
 #include "operator/ops/edit_ops.hpp"
+#include "operator/ops/scale_distance_ops.hpp"
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
@@ -46,12 +48,15 @@
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "scene/scene_manager.hpp"
+#include "shaders/shader_service.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
+#include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
+#include "vr/openxr_service.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_messagebox.h>
@@ -109,6 +114,12 @@ namespace lfs::vis {
             };
         }
 
+        lfs::ErrorNotification vrNotice(const lfs::ErrorCode code, std::string message,
+                                        const lfs::core::SourceSite site) {
+            return makeFrameNotification(code, lfs::ErrorDomain::App, lfs::Severity::Warning,
+                                         lfs::ErrorSurface::Toast, std::move(message), {}, {}, site, "vr");
+        }
+
         template <typename T>
         [[nodiscard]] lfs::Result<T> visualizerFailure(
             const lfs::ErrorCode code,
@@ -151,6 +162,8 @@ namespace lfs::vis {
 
         constexpr double kResizeSettleMinWaitSeconds = 0.001;
         constexpr double kArenaRetryPollSeconds = 0.004;
+        // The runtime reports session changes only through polled events.
+        constexpr double kVrSessionPollSeconds = 0.01;
 
         [[nodiscard]] std::uint64_t viewInputFingerprint(const Viewport& viewport,
                                                          const SceneManager* scene_manager,
@@ -292,7 +305,8 @@ namespace lfs::vis {
           window_manager_(std::make_unique<WindowManager>(options.title, options.width, options.height,
                                                           options.monitor_x, options.monitor_y,
                                                           options.monitor_width, options.monitor_height,
-                                                          options.graphics_backend)) {
+                                                          options.graphics_backend)),
+          vr_(std::make_unique<vr::OpenXrService>()) {
         viewer_thread_id_ = std::this_thread::get_id();
 
         LOG_DEBUG("Creating visualizer with window size {}x{}", options.width, options.height);
@@ -312,6 +326,14 @@ namespace lfs::vis {
         rendering_manager_->setWakeCallback([this] {
             wakeMainLoop();
         });
+        shader_service_ = std::make_unique<shaders::ShaderService>(
+            scene_manager_->getScene(),
+            shaders::slangHostLinker(lfs::core::getResourceBaseDir() / "shaders" / "vulkan_rasterizer" / "user" /
+                                     "manifest.json"),
+            [this] { wakeMainLoop(); });
+        gui::panels::PythonConsoleState::getInstance().setShaderChanges(shader_service_->changes());
+        rendering_manager_->setShaderService(shader_service_.get());
+        gui_manager_->sequencer().setShaderService(shader_service_.get());
 
         // Set initial antialiasing
         RenderSettings initial_settings;
@@ -370,6 +392,7 @@ namespace lfs::vis {
         op::operators().setSceneManager(scene_manager_.get());
         op::registerTransformOperators();
         op::registerAlignOperators();
+        op::registerScaleDistanceOperators();
         op::registerSelectionOperators();
         op::registerCropPolygonOperators();
         op::registerEditOperators();
@@ -406,6 +429,7 @@ namespace lfs::vis {
         op::unregisterSceneOperators();
         op::unregisterCropPolygonOperators();
         op::unregisterSelectionOperators();
+        op::unregisterScaleDistanceOperators();
         op::unregisterAlignOperators();
         op::unregisterTransformOperators();
         op::operators().clear();
@@ -463,6 +487,14 @@ namespace lfs::vis {
             align_tool_.reset();
         } else if (input_controller_) {
             input_controller_->setAlignTool(align_tool_);
+        }
+
+        scale_distance_tool_ = std::make_shared<tools::ScaleDistanceTool>();
+        if (!scale_distance_tool_->initialize(*tool_context_)) {
+            LOG_ERROR("Failed to initialize scale distance tool");
+            scale_distance_tool_.reset();
+        } else if (input_controller_) {
+            input_controller_->setScaleDistanceTool(scale_distance_tool_);
         }
 
         selection_tool_ = std::make_shared<tools::SelectionTool>();
@@ -748,7 +780,8 @@ namespace lfs::vis {
             []() -> bool {
                 auto* gm = python::get_gui_manager();
                 return gm ? (gm->sequencer().timeline().realKeyframeCount() > 0 ||
-                             gm->sequencer().timeline().hasAnimationClip())
+                             gm->sequencer().timeline().hasAnimationClip() ||
+                             gm->sequencer().timeline().revealClip().has_value())
                           : false;
             },
             [](const std::string& path) -> bool {
@@ -1419,6 +1452,7 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {
+        exitVr();
         std::vector<WorkItem> pending_work;
         std::vector<WorkItem> pending_render_work;
         {
@@ -1444,6 +1478,11 @@ namespace lfs::vis {
         scene_capture_jobs_.cancelAll(true);
         if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
             context->cancelSceneCaptureRequest();
+        if (shader_service_)
+            shader_service_->stop();
+
+        if (gui_manager_)
+            gui_manager_->asyncTasks().shutdownAprilTagScan();
 
         std::function<void()> shutdown_callback;
         {
@@ -1466,6 +1505,22 @@ namespace lfs::vis {
 
         // NOTE: Training control and project-save commands
         // are now handled by TrainerManager::setupEventHandlers()
+
+        cmd::SetVrActive::when([this](const auto& command) {
+            vr_request_ = command.active;
+            wakeMainLoop();
+        });
+        cmd::RecenterVr::when([this](const auto&) { vr_->recenter(); });
+        cmd::SnapTurnVr::when([this](const auto& command) { vr_->snapTurn(command.direction); });
+        cmd::SetVrPreferences::when([this](const auto& command) {
+            auto& preferences = UserPreferences::instance();
+            preferences.setVrPreferences({.enabled = command.enabled,
+                                          .resolution_scale = command.resolution_scale,
+                                          .scene_units_per_meter = command.scene_units_per_meter,
+                                          .move_speed = command.move_speed},
+                                         command.persist);
+            vr_->setMoveSpeed(preferences.vrPreferences().move_speed);
+        });
 
         cmd::ResetTraining::when([this](const auto&) {
             if (!scene_manager_ || !scene_manager_->hasDataset()) {
@@ -1557,7 +1612,7 @@ namespace lfs::vis {
                         : ProjectSwitchDisposition::RequireClean,
                     command.stop_training,
                     command.allow_existing_destination_replacement);
-                last_project_create_succeeded_ = created.has_value();
+                last_project_create_succeeded_ = created.has_value() && !projectCreatePending();
             });
 
         cmd::SwitchToEditMode::when(
@@ -2169,9 +2224,15 @@ namespace lfs::vis {
         if (!window_initialized_) {
             {
                 LOG_TIMER("startup.window_manager.init"); // wraps Vulkan instance/device/swapchain bring-up
-                if (!window_manager_->init()) {
+                if (UserPreferences::instance().vrPreferences().enabled && !vr_->prepare())
+                    LOG_WARN("VR unavailable: {}", vr_->statusDetail());
+                const auto vr_hooks = vr_->available() ? std::optional(vr_->deviceHooks()) : std::nullopt;
+                if (!window_manager_->init(vr_hooks ? &*vr_hooks : nullptr)) {
                     return false;
                 }
+                if (vr_hooks && !window_manager_->deviceHooksError().empty())
+                    vr_->setUnavailable(window_manager_->deviceHooksError());
+                publishVrState();
             }
             window_initialized_ = true;
 
@@ -2264,7 +2325,10 @@ namespace lfs::vis {
         if (gui_manager_ && gui_manager_->asyncTasks().hasPendingMainThreadCompletions())
             gui_manager_->asyncTasks().pollImportCompletion();
 
-        motion_only_wake_skipped_ = isMotionOnlyWake();
+        // Shader compiles and publications wake the loop without input.
+        rendering_manager_->syncCustomPrograms();
+
+        motion_only_wake_skipped_ = !vr_active_ && isMotionOnlyWake();
         if (motion_only_wake_skipped_)
             return;
 
@@ -2333,6 +2397,8 @@ namespace lfs::vis {
         }
         viewport_.frameBufferSize = window_manager_->getFramebufferSize();
 
+        updateVrSession();
+
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
         if (trainer_manager_)
@@ -2347,11 +2413,13 @@ namespace lfs::vis {
             wakeMainLoop();
         }
 
-        if (selection_tool_ && selection_tool_->isEnabled() && tool_context_) {
-            selection_tool_->update(*tool_context_);
-        }
-        if (align_tool_ && align_tool_->isEnabled() && tool_context_) {
-            align_tool_->update(*tool_context_);
+        if (tool_context_ && !vr_active_) {
+            if (selection_tool_ && selection_tool_->isEnabled())
+                selection_tool_->update(*tool_context_);
+            if (align_tool_ && align_tool_->isEnabled())
+                align_tool_->update(*tool_context_);
+            if (scale_distance_tool_ && scale_distance_tool_->isEnabled())
+                scale_distance_tool_->update(*tool_context_);
         }
 
         if (!gui_frame_rendered_) {
@@ -2512,7 +2580,8 @@ namespace lfs::vis {
                                                                    const bool drained_store_dirty) {
         FrameDemand demand;
         demand.viewport_export_locked = viewport_export_locked;
-        demand.scene_dirty = rendering_manager_ && rendering_manager_->pollDirtyState();
+        demand.scene_dirty = (rendering_manager_ && rendering_manager_->pollDirtyState()) ||
+                             (vr_active_ && vr_->mirror().rendered);
         demand.continuous_input = input_controller_ && input_controller_->needsCameraAnimationFrame();
         const bool plugin_preload_running = python::is_plugin_preload_running();
         const bool scene_playback_active = gui_manager_ &&
@@ -2598,6 +2667,11 @@ namespace lfs::vis {
     void VisualizerImpl::waitForNextEvent(const bool is_training, const bool continuous_animation) {
         if (!window_manager_)
             return;
+        if (vr_active_ && vr_->running()) {
+            // xrWaitFrame paces the headset; desktop deadlines would cap it at the monitor rate.
+            window_manager_->pollEvents();
+            return;
+        }
 
         std::optional<double> wait_seconds;
         std::string timeout_source = "event";
@@ -2635,6 +2709,8 @@ namespace lfs::vis {
         }
         if (rendering_manager_ && rendering_manager_->hasParkedArenaRetry())
             consider_timeout(kArenaRetryPollSeconds, "arena_retry");
+        if (vr_active_)
+            consider_timeout(kVrSessionPollSeconds, "vr_session");
         if (rendering_manager_ && trainer_manager_ && trainer_manager_->isRunning()) {
             const double settle_wait = rendering_manager_->secondsUntilCameraSettle();
             if (std::isfinite(settle_wait))
@@ -2686,11 +2762,117 @@ namespace lfs::vis {
         last_wake_timeout_source_ = window_manager_->frameInput().had_event ? "none" : timeout_source;
     }
 
+    void VisualizerImpl::publishVrState() {
+        app_store().vr_state.set({.available = vr_->available(), .active = vr_active_, .status_key = vr_->statusKey(), .status_detail = vr_->statusDetail()});
+    }
+
+    void VisualizerImpl::updateVrSession() {
+        const auto request = std::exchange(vr_request_, std::nullopt);
+        if (!vr_active_ && request != true)
+            return;
+        auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr;
+        const bool training = trainer_manager_ &&
+                              (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending());
+        const bool blocked = !context || context->rendererTerminalState() != RendererTerminalState::Running ||
+                             training || !scene_manager_ || scene_manager_->hasDataset() ||
+                             op::operators().hasModalOperator() ||
+                             (gui_manager_ && (gui_manager_->isViewportExportLocked() || gui_manager_->isModalWindowOpen()));
+        if (vr_active_) {
+            if (request == false || blocked || !vr_->active() ||
+                app_store().scene_generation.get() != vr_scene_generation_)
+                exitVr();
+        } else if (blocked || !hasRenderableGaussians(scene_manager_->getModelForRendering())) {
+            lfs::ErrorBus::instance().publish(vrNotice(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("vr.enter_blocked"),
+                LFS_SOURCE_SITE_CURRENT()));
+        } else {
+            enterVr();
+        }
+    }
+
+    void VisualizerImpl::enterVr() {
+        if (auto started = vr_->start(*window_manager_->getVulkanContext(), viewport_.getRotationMatrix(),
+                                      viewport_.getTranslation());
+            !started) {
+            lfs::ErrorBus::instance().publish(vrNotice(
+                lfs::ErrorCode::Unavailable, LOCF("vr.enter_failed", started.error().user_message()),
+                LFS_SOURCE_SITE_CURRENT()));
+            publishVrState();
+            return;
+        }
+        vr_active_ = true;
+        vr_scene_generation_ = app_store().scene_generation.get();
+        editor_context_.setVrViewing(true);
+        if (input_controller_)
+            input_controller_->setVrViewing(true);
+        vr_saved_settings_ = rendering_manager_->getSettings();
+        rendering_manager_->updateSettings(RenderingManager::vrRenderSettings(*vr_saved_settings_));
+        rendering_manager_->clearVulkanMeshFrame();
+        scene_capture_jobs_.cancelAll();
+        publishVrState();
+    }
+
+    void VisualizerImpl::exitVr() {
+        vr_->stop();
+        if (!vr_active_)
+            return;
+        vr_active_ = false;
+        editor_context_.setVrViewing(false);
+        if (input_controller_)
+            input_controller_->setVrViewing(false);
+        if (rendering_manager_) {
+            // The desktop scene image still points at the left eye.
+            rendering_manager_->viewportInterop().setSceneImage({}, {}, false, 0);
+            auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr;
+            if (context && context->rendererTerminalState() == RendererTerminalState::Running &&
+                context->waitForSubmittedFrames())
+                rendering_manager_->releaseVrResources();
+            if (vr_saved_settings_)
+                rendering_manager_->updateSettings(*vr_saved_settings_);
+            rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::SceneChange, "vr_exit");
+        }
+        vr_saved_settings_.reset();
+        last_presented_frame_start_.reset();
+        publishVrState();
+    }
+
+    bool VisualizerImpl::renderVrFrame() {
+        auto* const context = window_manager_->getVulkanContext();
+        const glm::vec3 move = input_controller_ ? input_controller_->vrMovement() : glm::vec3(0.0f);
+        const auto frame = vr_->frame(move, [&](const auto& views) {
+            return rendering_manager_->renderVrEyes(*context, *scene_manager_, views);
+        });
+        if (!frame) {
+            LOG_ERROR("VR frame failed: {}", frame.error().user_message());
+            lfs::ErrorBus::instance().publish(vrNotice(
+                lfs::ErrorCode::Unavailable, LOCF("vr.stopped", frame.error().user_message()),
+                LFS_SOURCE_SITE_CURRENT()));
+        }
+        if (!frame || !*frame)
+            exitVr();
+        publishVrState();
+        if (context->rendererTerminalState() != RendererTerminalState::Running) {
+            applyFrameStateEffects(frame_state_.on_renderer_terminal(context->rendererTerminalState()));
+            window_manager_->pollEvents();
+            return false;
+        }
+        // Headset frames run every loop; the desktop mirror and UI stay monitor-paced.
+        if (vr_active_ && last_presented_frame_start_ && !window_manager_->frameInput().hasUserInput() &&
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - *last_presented_frame_start_).count() <
+                displayFrameInterval()) {
+            window_manager_->pollEvents();
+            return false;
+        }
+        return true;
+    }
+
     void VisualizerImpl::render() {
 
         if (auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
             applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
         if (frame_state_.state() == FrameStateMachine::State::RendererDead) {
+            exitVr();
             // Keep the CPU event and MCP queues responsive without issuing another GPU frame.
             scene_capture_jobs_.cancelAll();
             if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
@@ -2706,6 +2888,8 @@ namespace lfs::vis {
             window_manager_->pollEvents();
             return;
         }
+        if (vr_active_ && !renderVrFrame())
+            return;
 
         // Frames no input asked for (GUI animation, Python redraws, training updates) would run far
         // above the display rate when presenting does not block. Wakes without input start at most
@@ -2716,7 +2900,7 @@ namespace lfs::vis {
         const bool refinement_pending = rendering_manager_ &&
                                         rendering_manager_->frameDemandLedger().hasPendingRequest(
                                             FrameReason::StochasticAccumulation);
-        if (last_presented_frame_start_ && !refinement_pending) {
+        if (!vr_active_ && last_presented_frame_start_ && !refinement_pending) {
             const auto ready_at = *last_presented_frame_start_ +
                                   std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                       std::chrono::duration<double>(displayFrameInterval()));
@@ -2794,6 +2978,9 @@ namespace lfs::vis {
                 input_controller_->update(delta_time);
             }
         }
+        // Event pumps may run more than once before an input update. Acknowledge
+        // navigation edges only here; diagnostics has its own consuming reader.
+        window_manager_->gamepads().consumeNavigationPresses();
 
         if (gui_manager_) {
             gui_manager_->updateInteractiveTransitions();
@@ -2829,7 +3016,8 @@ namespace lfs::vis {
             .screen_size_px = window_manager_->getFramebufferSize(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
             .scene_manager = scene_manager_.get(),
-            .vulkan_context = window_manager_->getVulkanContext()};
+            .vulkan_context = window_manager_->getVulkanContext(),
+            .on_screen = true};
 
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
@@ -2906,7 +3094,7 @@ namespace lfs::vis {
             ledger_plan.view_flags[0] |= rendering_manager_->pendingDirtyMask();
             ledger_plan.reasons.set(static_cast<std::size_t>(FrameReason::SceneChange));
         }
-        if (ledger_plan.render_views == 0 && rendering_manager_)
+        if (!vr_active_ && ledger_plan.render_views == 0 && rendering_manager_)
             rendering_manager_->releaseIdleVksplatScratch(is_training);
         if (has_rendered_view_fingerprint_ && ledger_plan.present &&
             ledger_plan.render_views == 0 &&
@@ -2989,7 +3177,7 @@ namespace lfs::vis {
             const bool preview_refresh_only =
                 gui_frame_rendered_ && frame_demand.onlySceneDirty() &&
                 rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
-            const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+            const auto vulkan_frame = vr_active_ ? vr_->mirror() : rendering_manager_->renderVulkanFrame(context);
             capture_view_rendered = vulkan_frame.rendered;
             rendering_manager_->retainVksplatScratch();
             if (vulkan_frame.rendered)
@@ -3148,7 +3336,7 @@ namespace lfs::vis {
 
         // Every autonomous frame waits for its actual animation cadence. Input and
         // worker events wake the same blocking wait immediately.
-        if (presented_gui_frame) {
+        if (presented_gui_frame && !vr_active_) {
             if (auto* const vulkan_context = window_manager_->getVulkanContext())
                 static_cast<void>(vulkan_context->waitForNextFrameSlot());
         }
@@ -3321,6 +3509,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::shutdown() {
+        // On every quit path, before the MCP server joins its handlers: their shader waits end.
+        if (shader_service_)
+            shader_service_->stop();
         if (trainer_manager_ &&
             (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
             LOG_CRITICAL("Shutdown reached before the training worker was reaped");
@@ -3467,6 +3658,12 @@ namespace lfs::vis {
             return std::unexpected("No data loader available");
         }
 
+        if (scene_manager_ && scene_manager_->canClearScene() && gui_manager_ &&
+            gui_manager_->asyncTasks().deferSceneReplacement([this] {
+                if (auto result = clearScene(); !result)
+                    LOG_ERROR("Deferred scene clear failed: {}", result.error());
+            }))
+            return {};
         if (scene_manager_ && scene_manager_->canClearScene()) {
             data_loader_->cancelPendingImports();
             if (gui_manager_)
@@ -4032,6 +4229,8 @@ namespace lfs::vis {
         hydration_terminal_restore_ticket_.reset();
         retained_project_session_ = {};
         camera_bookmarks_.clear();
+        if (shader_service_)
+            shader_service_->clear();
         if (reset_panel_registry) {
             gui::PanelRegistry::instance()
                 .reset_project_state();
@@ -4064,7 +4263,7 @@ namespace lfs::vis {
     void VisualizerImpl::
         tryApplyProjectSessionRestore() {
         auto prepared =
-            gui_session_restore_.takeReady();
+            gui_session_restore_.takeReady(hydration_terminal_restore_ticket_ && gui_session_restore_.isCurrent(*hydration_terminal_restore_ticket_));
         if (!prepared)
             return;
         auto retained = prepared->chapters;
@@ -4139,6 +4338,7 @@ namespace lfs::vis {
         if (ticket == 0)
             return;
         hydration_terminal_restore_ticket_ = ticket;
+        tryApplyProjectSessionRestore();
         tryApplyProjectSessionTools(ticket);
     }
 
@@ -4285,6 +4485,8 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> VisualizerImpl::startTraining() {
+        if (project_lifecycle_ && project_lifecycle_->isOpenPending())
+            return std::unexpected("Wait for project opening before starting training.");
         if (isTrainingStartPending())
             return {};
         if (!trainer_manager_)
@@ -4731,6 +4933,12 @@ namespace lfs::vis {
                PendingTrainingAction::CreateProject;
     }
 
+    bool VisualizerImpl::projectOpenPending() const {
+        return (project_lifecycle_ && project_lifecycle_->isOpenPending()) ||
+               (gui_manager_ && gui_manager_->asyncTasks().sceneReplacementPending()) ||
+               pending_training_action_ == PendingTrainingAction::OpenProject;
+    }
+
     void VisualizerImpl::projectWaitWrite() {
         if (!project_lifecycle_) {
             return;
@@ -4967,6 +5175,7 @@ namespace lfs::vis {
             if (!path.empty()) {
                 const auto created = performCreateProject(
                     path, disposition, allow_existing);
+                last_project_create_succeeded_ = created.has_value() && !projectCreatePending();
                 if (!created) {
                     pending_load_files_.clear();
                     pending_project_dataset_embed_ = false;

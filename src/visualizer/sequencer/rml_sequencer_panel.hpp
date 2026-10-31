@@ -88,6 +88,7 @@ namespace lfs::vis {
 
     struct TimelineContextMenuState {
         bool open = false;
+        bool reveal = false;
         float time = 0.0f;
         std::optional<size_t> keyframe;
     };
@@ -99,6 +100,7 @@ namespace lfs::vis {
                             PLY,
                             SNAP,
                             PREVIEW,
+                            REVEAL,
                             PROJECTION,
                             CAMERA_ASPECT };
         Target target = Target::NONE;
@@ -132,6 +134,8 @@ namespace lfs::vis {
                                 RenderingManager* rm, SceneManager* sm,
                                 gui::FilmStripRenderer& film_strip);
         void clearPendingComposite();
+        void clearKeyframeSelection();
+        [[nodiscard]] bool isTimelineGestureActive() const { return dragging_keyframe_ || dragging_playhead_ || reveal_drag_edge_ != 0; }
 
         void setFilmStripAttached(bool attached) { film_strip_attached_ = attached; }
         void setFloating(bool floating) { floating_ = floating; }
@@ -174,6 +178,7 @@ namespace lfs::vis {
         friend class gui::SequencerExportWorkflowTest;
 
         friend class SequencerRulerRegressionTest;
+        friend class SequencerKeyframeGestureTest;
         void initContext(int width, int height);
 
         void syncTheme();
@@ -189,6 +194,7 @@ namespace lfs::vis {
         void updateTransportSettings();
         void rebuildKeyframes();
         void rebuildPlySequenceClip();
+        void selectReveal(bool selected);
         LFS_VIS_API void rebuildRuler();
         LFS_VIS_API void rebuildEasingStripe(float timeline_x, float timeline_width);
         LFS_VIS_API void rebuildFilmStrip(float timeline_x, float timeline_width,
@@ -209,8 +215,8 @@ namespace lfs::vis {
             float x, y;
         };
 
-        void handleTimelineInteraction(const Vec2& pos, float width, float height,
-                                       const PanelInputState& input);
+        LFS_VIS_API void handleTimelineInteraction(const Vec2& pos, float width, float height,
+                                                   const PanelInputState& input);
         LFS_VIS_API void handleEasingStripeInteraction(float timeline_x, float timeline_width,
                                                        const PanelInputState& input);
         void handleFilmStripInteraction(float timeline_x, float timeline_width,
@@ -228,6 +234,11 @@ namespace lfs::vis {
         };
 
         struct DurationEditListener : Rml::EventListener {
+            RmlSequencerPanel* panel = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
+        struct RevealEditListener : Rml::EventListener {
             RmlSequencerPanel* panel = nullptr;
             void ProcessEvent(Rml::Event& event) override;
         };
@@ -298,6 +309,14 @@ namespace lfs::vis {
         gui::RmlUIManager* rml_manager_;
         TransportClickListener transport_listener_;
         DurationEditListener duration_listener_;
+        RevealEditListener reveal_listener_;
+        bool reveal_selected_ = false;
+        bool ply_sequence_selected_ = false;
+        int reveal_drag_edge_ = 0;
+        float reveal_drag_origin_x_ = 0.0f;
+        float reveal_drag_origin_start_ = 0.0f;
+        float reveal_drag_origin_end_ = 0.0f;
+        float reveal_drag_seconds_per_pixel_ = 0.0f;
         SequenceFpsEditListener sequence_fps_listener_;
         bool duration_editing_ = false;
         bool sequence_fps_editing_ = false;
@@ -402,11 +421,15 @@ namespace lfs::vis {
         // Interaction state
         bool dragging_playhead_ = false;
         bool dragging_keyframe_ = false;
+        bool keyframe_drag_started_ = false;
+        bool keyframe_double_click_pending_ = false;
         bool dragging_scrollbar_ = false;
         bool dragged_keyframe_changed_ = false;
         bool film_strip_scrubbing_ = false;
         sequencer::KeyframeId dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
         float drag_start_mouse_x_ = 0.0f;
+        float keyframe_press_time_ = 0.0f;
+        float drag_grab_offset_x_ = 0.0f;
         float scrollbar_drag_origin_x_ = 0.0f;
         float scrollbar_drag_origin_pan_ = 0.0f;
         std::optional<size_t> hovered_keyframe_;
@@ -442,6 +465,7 @@ namespace lfs::vis {
 
         // Context menu state
         bool context_menu_open_ = false;
+        bool context_menu_reveal_ = false;
         float context_menu_time_ = 0.0f;
         float context_menu_x_ = 0.0f;
         float context_menu_y_ = 0.0f;
@@ -449,7 +473,7 @@ namespace lfs::vis {
 
         // Double-click detection
         float last_click_time_ = 0.0f;
-        std::optional<size_t> last_clicked_keyframe_;
+        std::optional<sequencer::KeyframeId> last_clicked_keyframe_id_;
 
         bool hovered_ = false;
         bool wants_keyboard_ = false;

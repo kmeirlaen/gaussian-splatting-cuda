@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/utils/native_file_dialog.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/native_fs.hpp"
+#include "gui/editor/document_kind.hpp"
 #include "gui/utils/file_dialog_path.hpp"
 
 #include "core/logger.hpp"
@@ -34,6 +36,18 @@ namespace lfs::vis::gui {
     namespace {
 
         std::atomic_uint native_dialog_block_count{0};
+        std::atomic_uint native_dialog_active_count{0};
+        std::atomic_uint64_t native_dialog_epoch{0};
+        struct NativeDialogActivity {
+            NativeDialogActivity() {
+                ++native_dialog_active_count;
+                ++native_dialog_epoch;
+            }
+            ~NativeDialogActivity() {
+                --native_dialog_active_count;
+                ++native_dialog_epoch;
+            }
+        };
         thread_local bool native_dialog_block_attempted = false;
 
         enum class DialogKind : uint8_t {
@@ -350,6 +364,7 @@ namespace lfs::vis::gui {
                 return false;
             }
 
+            const NativeDialogActivity activity;
             const FilterListStorage filters(request.filters);
             const std::filesystem::path defaultDirectory =
                 normalizeDefaultDirectory(request.default_path);
@@ -434,6 +449,7 @@ namespace lfs::vis::gui {
             if (!ensureDialogBackendInitialized())
                 return false;
 
+            const NativeDialogActivity activity;
             const FilterListStorage filters(request.filters);
             const std::filesystem::path default_directory = normalizeDefaultDirectory(request.default_path);
             const std::string default_directory_utf8 =
@@ -547,8 +563,12 @@ namespace lfs::vis::gui {
             return {makeFilter("Video Files", std::move(extensions))};
         }
 
-        [[nodiscard]] std::vector<DialogFilter> pythonFilters() {
-            return {makeFilter("Python Files", {".py"})};
+        [[nodiscard]] std::vector<DialogFilter> editorFilters(const editor::DocumentKind kind, const bool save) {
+            const bool shader = kind == editor::DocumentKind::Shader;
+            return {makeFilter(!save ? LOC("editor.documents") : shader ? LOC("editor.shader_files")
+                                                                        : LOC("editor.python_files"),
+                               save ? std::vector<std::string>{shader ? ".slang" : ".py"}
+                                    : std::vector<std::string>{".py", ".slang"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> singleExtensionFilter(
@@ -572,6 +592,7 @@ namespace lfs::vis::gui {
                 return {};
             }
 
+            const NativeDialogActivity activity;
             const char* const acceptLabel =
                 action == GTK_FILE_CHOOSER_ACTION_OPEN ? "_Open" : "_Select";
             GtkWidget* const dialog = gtk_file_chooser_dialog_new(
@@ -627,6 +648,9 @@ namespace lfs::vis::gui {
     void warmupNativeFileDialogBackend() {
         (void)ensureDialogBackendInitialized();
     }
+
+    bool nativeFileDialogActive() noexcept { return native_dialog_active_count.load() != 0; }
+    uint64_t nativeFileDialogEpoch() noexcept { return native_dialog_epoch.load(); }
 
     ScopedNativeFileDialogBlock::ScopedNativeFileDialogBlock() noexcept {
         if (native_dialog_block_count.fetch_add(1, std::memory_order_acq_rel) == 0)
@@ -797,8 +821,12 @@ namespace lfs::vis::gui {
     }
 
     std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath) {
+        return OpenPythonFileDialog(defaultPath, editor::DocumentKind::Python);
+    }
+
+    std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath, const editor::DocumentKind kind) {
         std::filesystem::path result;
-        runDialog(makeOpenFileRequest(pythonFilters(), defaultPath), result);
+        runDialog(makeOpenFileRequest(editorFilters(kind, false), defaultPath), result);
         return result;
     }
 
@@ -815,14 +843,15 @@ namespace lfs::vis::gui {
 
     std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
                                              const std::filesystem::path& defaultPath) {
-        return SaveJsonFileDialog(defaultName, defaultPath, nullptr);
+        return SaveJsonFileDialogWithConfirmation(defaultName, defaultPath).first;
     }
 
-    std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
-                                             const std::filesystem::path& defaultPath, bool* overwriteConfirmed) {
+    std::pair<std::filesystem::path, bool> SaveJsonFileDialogWithConfirmation(
+        const std::string& defaultName, const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
-        runDialog(makeSaveFileRequest(jsonFilters(), defaultPath, defaultName, ".json"), result, overwriteConfirmed);
-        return result;
+        bool confirmed = false;
+        runDialog(makeSaveFileRequest(jsonFilters(), defaultPath, defaultName, ".json"), result, &confirmed);
+        return {std::move(result), confirmed};
     }
 
     std::filesystem::path SavePngFileDialog(const std::string& defaultName,
@@ -956,10 +985,16 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::filesystem::path SavePythonFileDialog(const std::string& defaultName, const std::filesystem::path& defaultPath) {
+        return SavePythonFileDialog(defaultName, defaultPath, editor::DocumentKind::Python);
+    }
+
     std::filesystem::path SavePythonFileDialog(const std::string& defaultName,
-                                               const std::filesystem::path& defaultPath) {
+                                               const std::filesystem::path& defaultPath, const editor::DocumentKind kind) {
         std::filesystem::path result;
-        runDialog(makeSaveFileRequest(pythonFilters(), defaultPath, defaultName, ".py"), result);
+        runDialog(makeSaveFileRequest(editorFilters(kind, true), defaultPath, defaultName,
+                                      kind == editor::DocumentKind::Shader ? ".slang" : ".py"),
+                  result);
         return result;
     }
 

@@ -8,6 +8,8 @@
 
 #include "core/collision.hpp"
 #include "core/parameters.hpp"
+#include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -16,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace lfs::core::args {
 
@@ -40,6 +43,16 @@ namespace lfs::core::args {
     LFS_CORE_API std::span<const OptimizationCliBinding> optimization_cli_bindings();
     LFS_CORE_API std::string optimization_cli_help(std::string_view flag);
 
+    struct TrainingFlag {
+        std::string name; // "--iter" or "-i"
+        bool takes_value = false;
+        std::string canonical_name; // Shared by aliases of the same parser option.
+    };
+
+    // Every option of the training command line, read from the parser itself.
+    LFS_CORE_API std::vector<TrainingFlag> training_flags();
+    LFS_CORE_API const TrainingFlag* training_flag(std::string_view argument);
+
     // Parsed argument modes
     struct TrainingMode {
         std::unique_ptr<param::TrainingParameters> params;
@@ -58,6 +71,9 @@ namespace lfs::core::args {
     struct PreprocessMode {
         param::PreprocessParameters params;
     };
+    struct VideoMaskMode {
+        param::VideoMaskParameters params;
+    };
     struct CompareMode {
         param::CompareParameters params;
     };
@@ -72,17 +88,28 @@ namespace lfs::core::args {
         std::string name;
     };
     struct LichtMode {
+        enum class Action { EMBED,
+                            LIST_CHECKPOINTS,
+                            PRUNE_CHECKPOINTS,
+                            REMOVE_CHECKPOINTS };
         std::filesystem::path project_path;
         std::optional<std::filesystem::path> dataset_path;
+        Action action = Action::EMBED;
+        std::size_t keep_checkpoints = 0;
+        std::vector<std::int32_t> checkpoint_iterations;
+    };
+    struct BatchTrainingMode {
+        param::BatchTrainingParameters params;
     };
 
-    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, CompareMode, HelpMode,
-                                    VersionMode, WarmupMode, PluginMode, LichtMode, VoxelizeMode>;
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, VideoMaskMode, CompareMode,
+                                    HelpMode, VersionMode, WarmupMode, PluginMode, LichtMode, VoxelizeMode,
+                                    BatchTrainingMode>;
 
     LFS_CORE_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 
     // Legacy interface - prefer parse_args()
     LFS_CORE_API std::expected<std::unique_ptr<param::TrainingParameters>, std::string>
-    parse_args_and_params(int argc, const char* const argv[]);
+    parse_args_and_params(int argc, const char* const argv[], bool create_output_directory = true, bool validate_only = false);
 
 } // namespace lfs::core::args

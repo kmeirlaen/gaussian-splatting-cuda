@@ -44,6 +44,8 @@ namespace lfs::vis {
     enum class ProjectOpenOutcome {
         Opened,
         RecoveryPromptPending,
+        // The destination is validated; collision completion will resume the switch.
+        Deferred,
     };
 
     enum class RuntimeServicePhase : std::uint8_t {
@@ -311,6 +313,9 @@ namespace lfs::vis {
         }
         // True while a stop-then-create is queued and has not bound yet.
         [[nodiscard]] virtual bool projectCreatePending() const {
+            return false;
+        }
+        [[nodiscard]] virtual bool projectOpenPending() const {
             return false;
         }
         virtual void projectWaitWrite() {}

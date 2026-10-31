@@ -4,13 +4,17 @@
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_app_utils.hpp"
 #include "app/mcp_event_handlers.hpp"
+#include "shaders/shader_api.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/async_task_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
@@ -74,15 +78,17 @@ namespace lfs::app {
                         {"live_holders", std::move(holders)}};
         }
 
-        constexpr std::array<std::string_view, 8> kRuntimeJobIds = {
+        constexpr std::array<std::string_view, 10> kRuntimeJobIds = {
             "collision.main",
             "editor.python",
+            "shader.compile",
             "training.main",
             "export.scene",
             "import.dataset",
             "export.video",
             "mesh2splat",
             "operator.modal",
+            "apriltag.scan",
         };
 
         json supported_runtime_job_ids_json() {
@@ -110,6 +116,8 @@ namespace lfs::app {
         }
 
         std::string_view runtime_job_label(const std::string_view job_id) {
+            if (job_id == "apriltag.scan")
+                return LOC("runtime.apriltag_scan");
             if (job_id == "collision.main")
                 return "Collision";
             if (job_id == "editor.python") {
@@ -209,6 +217,8 @@ namespace lfs::app {
             }
 
             return json{
+                {"shader_catalog_uri", "lichtfeld://shaders/catalog"},
+                {"shader_state_uri", "lichtfeld://shaders/state"},
                 {"catalog_uri", "lichtfeld://runtime/catalog"},
                 {"state_uri", "lichtfeld://runtime/state"},
                 {"jobs_uri", "lichtfeld://runtime/jobs"},
@@ -657,6 +667,46 @@ namespace lfs::app {
             return payload;
         }
 
+        json apriltag_job_json(vis::gui::GuiManager& gui) {
+            auto& tasks = gui.asyncTasks();
+            const auto state = tasks.aprilTagScanStatus();
+            const bool active = state && state->running();
+            const bool completed = state && state->status == vis::JobStatus::Completed;
+            const bool canceled = state && state->status == vis::JobStatus::Canceled;
+            const bool failed = state && state->status == vis::JobStatus::Failed;
+            json payload{
+                {"id", "apriltag.scan"},
+                {"label", LOC("runtime.apriltag_scan")},
+                {"kind", "calibration"},
+                {"active", active},
+                {"status", active ? "running" : completed ? "finished"
+                                            : failed      ? "failed"
+                                                          : "idle"},
+                {"outcome", active ? "running" : completed ? "completed"
+                                             : canceled    ? "cancelled"
+                                             : failed      ? "failed"
+                                                           : "idle"},
+                {"progress", state ? state->progress : 0.0f},
+                {"stage", state ? state->stage : ""},
+                {"cancel_supported", true},
+                {"dismiss_supported", false},
+                {"actions", {{"start", false}, {"pause", false}, {"resume", false}, {"cancel", active}, {"dismiss", false}}},
+            };
+            if (state) {
+                payload["cancel_requested"] = state->cancel_requested;
+                if (!state->error.empty())
+                    payload["error"] = state->error;
+            }
+            if (completed || failed) {
+                auto output = vis::aprilTagResultJson(tasks.aprilTagScanResult());
+                output["success"] = completed && tasks.aprilTagScanResult().scale_report.success;
+                output.erase("manifest_json");
+                payload["result"] = std::move(output);
+            }
+            add_runtime_job_links(payload);
+            return payload;
+        }
+
         json operator_modal_job_json() {
             auto& operators = vis::op::operators();
             const auto modal_state = operators.modalState();
@@ -700,7 +750,20 @@ namespace lfs::app {
             }
 
             auto* const gui = viewer_impl->getGuiManager();
+            if (job_id == "shader.compile") {
+                auto* service = viewer_impl->getShaderService();
+                if (!service)
+                    return unavailable_job_json(job_id, "Shaders", "shader", "Shader service is unavailable");
+                auto payload = vis::shaders::shaderJob(service->work());
+                add_runtime_job_links(payload);
+                return payload;
+            }
 
+            if (job_id == "apriltag.scan") {
+                return gui ? std::expected<json, std::string>(apriltag_job_json(*gui))
+                           : std::expected<json, std::string>(unavailable_job_json(
+                                 "apriltag.scan", LOC("runtime.apriltag_scan"), "calibration", "GUI manager is not initialized"));
+            }
             if (job_id == "editor.python") {
                 return editor_job_json(include_output, output_max_chars, output_tail);
             }
@@ -1009,6 +1072,15 @@ namespace lfs::app {
 
             auto* const gui = viewer_impl->getGuiManager();
 
+            if (job_id == "apriltag.scan") {
+                if (action != "cancel" || !gui)
+                    return std::unexpected("Only cancellation is supported for apriltag.scan");
+                const auto state = gui->asyncTasks().aprilTagScanStatus();
+                if (!state || !state->running())
+                    return std::unexpected("AprilTag scan is not running");
+                gui->asyncTasks().cancelAprilTagScan();
+                return {};
+            }
             if (job_id == "editor.python") {
                 auto& console = vis::gui::panels::PythonConsoleState::getInstance();
                 if (action != "cancel") {
@@ -1278,8 +1350,11 @@ namespace lfs::app {
                     return json{{"error", baseline.error()}};
                 }
 
+                auto* shader_service = as_visualizer_impl(viewer)->getShaderService();
+                auto changes = job_id == "shader.compile" && shader_service ? shader_service->changes() : nullptr;
                 const auto start = std::chrono::steady_clock::now();
                 while (true) {
+                    const auto generation = changes ? changes->generation.load(std::memory_order_acquire) : 0;
                     auto current = describe();
                     if (!current) {
                         return json{{"error", current.error()}};
@@ -1296,7 +1371,7 @@ namespace lfs::app {
 
                     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - start);
-                    if (elapsed.count() >= timeout_ms) {
+                    if (elapsed.count() >= timeout_ms || (changes && changes->cancelled(generation))) {
                         (*current)["success"] = true;
                         (*current)["until"] = until;
                         (*current)["timed_out"] = true;
@@ -1304,7 +1379,10 @@ namespace lfs::app {
                         return *current;
                     }
 
-                    std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+                    if (changes)
+                        changes->wait(generation, start + std::chrono::milliseconds(timeout_ms));
+                    else
+                        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
                 }
             });
 

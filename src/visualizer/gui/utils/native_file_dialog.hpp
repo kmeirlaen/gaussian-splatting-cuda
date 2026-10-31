@@ -4,9 +4,15 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
+
+namespace lfs::vis::editor {
+    enum class DocumentKind;
+}
 
 namespace lfs::vis::gui {
 
@@ -17,6 +23,9 @@ namespace lfs::vis::gui {
         ScopedNativeFileDialogBlock(const ScopedNativeFileDialogBlock&) = delete;
         ScopedNativeFileDialogBlock& operator=(const ScopedNativeFileDialogBlock&) = delete;
     };
+
+    LFS_VIS_API bool nativeFileDialogActive() noexcept;
+    LFS_VIS_API uint64_t nativeFileDialogEpoch() noexcept;
 
     LFS_VIS_API bool nativeFileDialogsBlocked() noexcept;
     LFS_VIS_API bool nativeFileDialogAttempted() noexcept;
@@ -51,14 +60,15 @@ namespace lfs::vis::gui {
     LFS_VIS_API std::filesystem::path SaveLazFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath,
+                                                           editor::DocumentKind kind);
 
     LFS_VIS_API std::filesystem::path SavePlyFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
                                                          const std::filesystem::path& defaultPath = {});
-    LFS_VIS_API std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
-                                                         const std::filesystem::path& defaultPath,
-                                                         bool* overwriteConfirmed);
+    LFS_VIS_API std::pair<std::filesystem::path, bool> SaveJsonFileDialogWithConfirmation(
+        const std::string& defaultName, const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SavePngFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SaveJpgFileDialog(const std::string& defaultName,
@@ -84,6 +94,9 @@ namespace lfs::vis::gui {
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SavePythonFileDialog(const std::string& defaultName,
                                                            const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path SavePythonFileDialog(const std::string& defaultName,
+                                                           const std::filesystem::path& defaultPath,
+                                                           editor::DocumentKind kind);
     LFS_VIS_API std::filesystem::path SaveProjectFileDialog(const std::string& defaultName = "project.licht",
                                                             const std::filesystem::path& defaultPath = {});
 

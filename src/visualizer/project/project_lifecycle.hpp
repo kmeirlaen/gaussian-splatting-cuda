@@ -33,6 +33,7 @@ namespace lfs::training {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class CollisionProjectOpenTest;
     class PayloadRecaptureTest;
     class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
     class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
@@ -309,6 +310,9 @@ namespace lfs::vis::project {
         void updateMaintenance();
         void noteProjectFrameRendered(double render_ms);
         [[nodiscard]] bool hasDirtyProject();
+        [[nodiscard]] bool isOpenPending() const noexcept {
+            return pending_collision_open_ != nullptr;
+        }
         [[nodiscard]] lfs::Result<void>
         setReopenLastProject(bool enabled);
         [[nodiscard]] lfs::Result<void>
@@ -383,6 +387,7 @@ namespace lfs::vis::project {
             std::string* error_message = nullptr);
 
     private:
+        friend class lfs::vis::CollisionProjectOpenTest;
         friend class lfs::vis::VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
@@ -623,7 +628,29 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         openMaster(
             const std::filesystem::path& path,
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            std::move_only_function<lfs::Result<void>()> after_open = {});
+        lfs::Result<void> finishScratchRecovery();
+        struct PreparedOpen;
+        struct PendingCollisionOpen {
+            std::atomic<bool> done{false};
+            lfs::Result<void> result;
+            std::move_only_function<lfs::Result<void>()> install;
+            JobHandle job;
+            std::uint64_t epoch = 0;
+            std::uint64_t scene_serial = 0;
+            std::uint64_t parameter_serial = 0;
+            std::array<std::uint64_t, 2> shader_token{};
+            std::jthread worker;
+        };
+        std::unique_ptr<PendingCollisionOpen> pending_collision_open_;
+        void settleCollisionOpen();
+        lfs::Result<void> commitOpen(PreparedOpen&& prepared);
+        lfs::Result<void> finishRecovered(
+            const std::filesystem::path& master, const std::filesystem::path& sidecar,
+            const std::filesystem::path& temporary, lfs::io::project::RecoverySession session);
+        bool deferCollisionSwitch(std::move_only_function<lfs::Result<void>()>&& retry);
+        [[nodiscard]] bool collisionSwitchPending() const;
         [[nodiscard]] lfs::Result<void>
         openRecovered(
             const std::filesystem::path& master_path,
@@ -873,6 +900,7 @@ namespace lfs::vis::project {
         // payload_mutation_serial_ at each node's last SPLT capture.
         std::unordered_map<lfs::core::Uuid, std::uint64_t>
             captured_splat_serials_;
+        std::array<std::uint64_t, 2> captured_shader_token_{}, project_write_shader_token_{}, last_autosaved_shader_token_{};
         std::uint64_t
             project_write_dirty_epoch_ = 0;
         std::uint64_t

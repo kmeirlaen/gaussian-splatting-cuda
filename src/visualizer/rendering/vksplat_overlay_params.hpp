@@ -5,11 +5,14 @@
 #pragma once
 
 #include "core/crop_polygon.hpp"
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "rendering/rendering.hpp"
 
 #include <cstddef>
 #include <vector>
+
+struct VulkanGSRendererUniforms;
 
 namespace lfs::vis::vksplat_overlay {
 
@@ -47,11 +50,13 @@ namespace lfs::vis::vksplat_overlay {
         CropPolygonVertices = 6,
         CropPolygonParamStride = CropPolygonVertices + lfs::core::crop_polygon::kMaxVertices / 2,
         CropPolygonCount = 16,
-        ParamCount = CropPolygonBase + CropPolygonParamStride * CropPolygonCount,
+        RevealParams = CropPolygonBase + CropPolygonParamStride * CropPolygonCount,
+        RevealEffectBounds = RevealParams + 1,
+        ParamCount = RevealEffectBounds + 1,
     };
     static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewFlags);
     static_assert(CropPolygonTransform + 4 == CropPolygonVertices);
-    static_assert(CropPolygonBase + CropPolygonParamStride * CropPolygonCount == ParamCount);
+    static_assert(CropPolygonBase + CropPolygonParamStride * CropPolygonCount == RevealParams);
 
     // The table the renderer uploads for `request`; empty if staging fails.
     [[nodiscard]] LFS_VIS_API std::vector<float> buildParams(
@@ -61,5 +66,11 @@ namespace lfs::vis::vksplat_overlay {
         bool transform_indices_enabled,
         std::size_t node_mask_count,
         bool node_visibility_cull);
+
+    // The custom effect tail (custom_effect_layout.inc) that follows that table
+    // in a custom effect draw, with `camera` the draw's projection camera.
+    [[nodiscard]] LFS_VIS_API lfs::Result<std::vector<float>> buildCustomEffectTail(
+        const lfs::rendering::ViewportRenderRequest& request,
+        const VulkanGSRendererUniforms& camera);
 
 } // namespace lfs::vis::vksplat_overlay
