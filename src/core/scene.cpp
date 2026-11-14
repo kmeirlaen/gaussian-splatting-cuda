@@ -4641,7 +4641,7 @@ namespace lfs::core {
             LOG_WARN("Cannot add crop polygon '{}': parent is not a splat or point cloud", name);
             return NULL_NODE;
         }
-        if (const NodeId existing = getCropForRole(parent_id, CropRole::Primary, NodeType::CROP_POLYGON); existing != NULL_NODE) {
+        if (const NodeId existing = getCropForRole(parent_id, data.role, NodeType::CROP_POLYGON); existing != NULL_NODE) {
             return existing;
         }
         if (!crop_polygon::isValidOutline(data.vertices) || !crop_polygon::isValidHalfDepth(data.half_depth)) {

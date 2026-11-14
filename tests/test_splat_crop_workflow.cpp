@@ -185,6 +185,31 @@ namespace {
         }
     }
 
+    TEST_F(SplatCropWorkflowTest, DirectPolygonCreationUsesRequestedRoleInEitherOrder) {
+        for (const auto first_role : {core::CropRole::Primary, core::CropRole::Secondary}) {
+            SCOPED_TRACE(static_cast<int>(first_role));
+            auto& scene = sm->getScene();
+            core::Scene::RestoreNodeDesc owner_desc;
+            owner_desc.uuid = core::generate_uuid_v4();
+            owner_desc.name = first_role == core::CropRole::Primary ? "Polygon ROI first" : "Polygon Crop first";
+            owner_desc.type = core::NodeType::POINTCLOUD;
+            const auto cloud = scene.restoreNodeWithUuid(std::move(owner_desc));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            core::CropPolygonData data;
+            data.vertices = {{-1, -1}, {1, -1}, {0, 1}};
+            data.role = first_role;
+            const auto first = scene.addCropPolygon("First polygon", cloud, data);
+            ASSERT_NE(first, core::NULL_NODE);
+            data.role = first_role == core::CropRole::Primary ? core::CropRole::Secondary : core::CropRole::Primary;
+            const auto second = scene.addCropPolygon("Second polygon", cloud, data);
+            ASSERT_NE(second, core::NULL_NODE);
+            ASSERT_NE(first, second);
+            EXPECT_EQ(scene.getNodeById(first)->cropRole(), first_role);
+            EXPECT_EQ(scene.getNodeById(second)->cropRole(), data.role);
+            EXPECT_EQ(scene.addCropPolygon("Same role", cloud, data), second);
+        }
+    }
+
     TEST_F(SplatCropWorkflowTest, CropRoleLookupIsIndependentOfCreationOrder) {
         for (const auto first_role : {core::CropRole::Primary, core::CropRole::Secondary}) {
             auto& scene = sm->getScene();

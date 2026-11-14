@@ -10,6 +10,8 @@ import tempfile
 import time
 
 import pytest
+
+pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 from test_render_on_demand_idle import _call, _initialize, _tool
 
 
@@ -155,6 +157,67 @@ def test_role_discovery_activation_and_independent_manipulation(order):
             assert restored["uuid"] == volumes[role]["uuid"] and restored["shape"] == shape, restored
     finally:
         app.terminate()
+        try:
+            app.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            app.kill()
+            app.wait(timeout=15)
+
+
+@pytest.mark.parametrize("order", [("roi", "crop"), ("crop", "roi")])
+@pytest.mark.parametrize("roi_shape", ["box", "polygon"])
+@pytest.mark.parametrize("target_shape", ["box", "ellipsoid"])
+def test_legacy_shape_command_changes_only_active_crop(order, roi_shape, target_shape):
+    dataset = os.environ.get("LFS_REAL_CROP_DATASET")
+    if not dataset:
+        pytest.skip("Set LFS_REAL_CROP_DATASET to an existing COLMAP dataset")
+    root = Path(__file__).resolve().parents[2]
+    executable = Path(os.environ.get("LFS_EXECUTABLE", root / "build-tests-release" / "LichtFeld-Studio.exe"))
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    endpoint = f"http://127.0.0.1:{port}/mcp"
+    output = Path(tempfile.mkdtemp(prefix="lfs-legacy-role-")).resolve()
+    app = subprocess.Popen([str(executable), "--no-download", "--mcp-port", str(port)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    try:
+        deadline = time.monotonic() + 90
+        while True:
+            assert app.poll() is None
+            try:
+                _initialize(endpoint)
+                break
+            except OSError:
+                assert time.monotonic() < deadline
+                time.sleep(.1)
+        assert _tool(endpoint, "scene_load_dataset", {"path": dataset, "output_path": str(output), "min_track_length": 0})["success"]
+        assert _tool(endpoint, "runtime_job_wait", {"job_id": "import.dataset", "until": "inactive", "timeout_ms": 90000})["success"]
+        assert _tool(endpoint, "scene_select_node", {"name": "PointCloud"})["success"]
+        for role in order:
+            assert _tool(endpoint, "ui_tool_invoke", {"tool_id": "builtin." + role})["success"]
+        if roi_shape == "polygon":
+            assert _tool(endpoint, "crop_volume_set", {"owner": "PointCloud", "role": "roi", "shape": "polygon"})["success"]
+        if target_shape == "box":
+            assert _tool(endpoint, "crop_volume_set", {"owner": "PointCloud", "role": "crop", "shape": "polygon"})["success"]
+        roi = _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "roi"})["volume"]
+        crop = _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "crop"})["volume"]
+        assert _tool(endpoint, "ui_tool_invoke", {"tool_id": "builtin.crop"})["success"]
+        command = "add_cropbox" if target_shape == "box" else "add_ellipsoid"
+        result = _tool(endpoint, "editor_run", {"code": f"import lichtfeld as lf\nlf.ui.{command}('PointCloud')",
+                       "wait_for_completion": True, "show_console": False, "timeout_ms": 30000})
+        assert result["success"], result
+        after_roi = _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "roi"})["volume"]
+        after_crop = _tool(endpoint, "crop_volume_get", {"owner": "PointCloud", "role": "crop"})["volume"]
+        assert after_roi["uuid"] == roi["uuid"] and after_roi["shape"] == roi_shape
+        for field in (("min", "max") if roi_shape == "box" else ("vertices", "half_depth")):
+            assert after_roi[field] == roi[field]
+        assert after_crop["uuid"] == crop["uuid"] and after_crop["shape"] == target_shape
+        ui = _call(endpoint, "resources/read", {"uri": "lichtfeld://ui/state"})
+        assert json.loads(ui["contents"][0]["text"])["registry_active_tool_id"] == "builtin.crop"
+    finally:
+        if app.poll() is None:
+            app.terminate()
         try:
             app.wait(timeout=15)
         except subprocess.TimeoutExpired:

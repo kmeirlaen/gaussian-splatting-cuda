@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+
 from test_render_on_demand_idle import _call, _initialize, _tool
 
 

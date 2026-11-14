@@ -10,6 +10,8 @@ import tempfile
 import time
 
 import pytest
+
+pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 from test_render_on_demand_idle import _call, _initialize, _tool
 
 
@@ -65,6 +67,16 @@ def test_roi_identity_survives_start_and_pause(shape):
         running_nodes = _tool(endpoint, "scene_list_nodes")["nodes"]
         running_roi = [node for node in running_nodes if node["uuid"] == before["uuid"]]
         assert len(running_roi) == 1 and running_roi[0].get("crop_role") == "roi", running_roi
+        attempts = []
+        if shape == "polygon":
+            def attempt_outline():
+                result = _tool(endpoint, "editor_run", {"code": "import json,lichtfeld as lf\n"
+                    f"print(json.dumps(lf.ui.set_crop_polygon_outline({before['uuid']!r}, [[-2,-1],[2,-1],[0,3]])))",
+                    "wait_for_completion": True, "show_console": False, "timeout_ms": 30000})
+                return json.loads(result["output"]["text"])
+            running_before = _tool(endpoint, "crop_volume_get", {"owner": "Model", "role": "roi"})["volume"]
+            attempts.append(attempt_outline())
+            running_after = _tool(endpoint, "crop_volume_get", {"owner": "Model", "role": "roi"})["volume"]
         assert _tool(endpoint, "runtime_job_control", {"job_id": "training.main", "action": "pause"})["success"]
         deadline = time.monotonic() + 60
         while True:
@@ -80,6 +92,12 @@ def test_roi_identity_survives_start_and_pause(shape):
         assert restored[0]["type"] == ("crop_box" if shape == "box" else "crop_polygon")
         assert restored[0]["visible"] == before["visible"]
         info = _tool(endpoint, "crop_volume_get", {"owner": "Model", "role": "roi"})["volume"]
+        if shape == "polygon":
+            attempts.append(attempt_outline())
+            paused_after = _tool(endpoint, "crop_volume_get", {"owner": "Model", "role": "roi"})["volume"]
+            assert attempts == [False, False], attempts
+            assert running_after["vertices"] == running_before["vertices"]
+            assert paused_after["vertices"] == info["vertices"]
         assert info["uuid"] == before["uuid"] and info["shape"] == shape
         for field in ("translation", "rotation", "scale"):
             assert info[field] == pytest.approx(before[field])

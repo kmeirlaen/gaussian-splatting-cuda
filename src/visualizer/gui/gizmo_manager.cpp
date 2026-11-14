@@ -1705,14 +1705,11 @@ namespace lfs::vis::gui {
                 if (sm)
                     for (const auto* volume : sm->getScene().getNodes())
                         if (isCropVolumeType(volume->type) && !preserveTrainingRoiVisibility(viewer_, sm->getScene(), *volume)) {
-                            const auto* owner = selected_crop_volume ? sm->getScene().getNodeById(selected_node->parent_id) : nullptr;
-                            const bool paired_pointcloud = owner && owner->type == core::NodeType::POINTCLOUD &&
-                                std::any_of(owner->children.begin(), owner->children.end(), [&](const auto id) {
-                                    const auto* child = sm->getScene().getNodeById(id);
-                                    return child && child->cropRole() == core::CropRole::Secondary;
-                                });
-                            const bool show = selected_crop_volume && (volume->id == selected_node->id ||
-                                (paired_pointcloud && volume->parent_id == owner->id));
+                            const auto* owner = sm->getScene().getNodeById(volume->parent_id);
+                            if (owner && owner->type == core::NodeType::POINTCLOUD &&
+                                (!selected_crop_volume || volume->id != selected_node->id))
+                                continue;
+                            const bool show = selected_crop_volume && volume->id == selected_node->id;
                             if (static_cast<bool>(volume->visible) != show)
                                 sm->setNodeVisibilityTransient(volume->id, show);
                         }
@@ -1730,8 +1727,11 @@ namespace lfs::vis::gui {
             python::cancel_active_operator();
             if (auto* sm = viewer_ ? viewer_->getSceneManager() : nullptr)
                 for (const auto* node : sm->getScene().getNodes())
-                    if (isCropVolumeType(node->type) && node->visible && !preserveTrainingRoiVisibility(viewer_, sm->getScene(), *node))
-                        sm->setNodeVisibilityTransient(node->id, false);
+                    if (isCropVolumeType(node->type) && node->visible && !preserveTrainingRoiVisibility(viewer_, sm->getScene(), *node)) {
+                        const auto* owner = sm->getScene().getNodeById(node->parent_id);
+                        if (!owner || owner->type != core::NodeType::POINTCLOUD)
+                            sm->setNodeVisibilityTransient(node->id, false);
+                    }
             setPointPickToolsEnabled(viewer_->getAlignTool(), viewer_->getScaleDistanceTool());
             node_bounds_cache_valid_ = false;
             node_selection_bounds_cache_valid_ = false;

@@ -104,6 +104,45 @@ namespace lfs::vis {
                 gui->gizmo().setCropToolShape(shape);
             }
         }
+        // Legacy add commands must address the active role on point clouds.
+        bool handlePointCloudRoleShape(SceneManager& manager, const core::NodeId owner_id,
+                                       const core::NodeType target_type) {
+            auto& scene = manager.getScene();
+            const auto* owner = scene.getNodeById(owner_id);
+            const std::string tool = UnifiedToolRegistry::instance().getActiveTool();
+            if (!owner || owner->type != core::NodeType::POINTCLOUD ||
+                (tool != "builtin.roi" && tool != "builtin.crop"))
+                return false;
+            const auto role = tool == "builtin.crop" ? core::CropRole::Secondary : core::CropRole::Primary;
+            if (role == core::CropRole::Primary && target_type == core::NodeType::ELLIPSOID)
+                return true;
+            core::NodeId existing = core::NULL_NODE;
+            for (const auto type : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+                existing = scene.getCropForRole(owner_id, role, type);
+                if (existing != core::NULL_NODE)
+                    break;
+            }
+            auto result = existing == core::NULL_NODE
+                              ? cap::createSplatCrop(manager, services().renderingOrNull(), owner->uuid, target_type, role)
+                              : cap::convertSplatCrop(manager, services().renderingOrNull(), scene.getNodeById(existing)->uuid, target_type);
+            if (!result) {
+                LOG_WARN("Failed to change point-cloud crop shape: {}", result.error().user_message());
+                return true;
+            }
+            const auto* volume = scene.getNodeById(*result);
+            if (!volume)
+                return true;
+            const auto uuid = volume->uuid;
+            if (auto* gui = services().guiOrNull()) {
+                gui->gizmo().editCropTool(uuid, true);
+            } else {
+                manager.selectNode(*result);
+                if (auto* editor = services().editorOrNull())
+                    editor->setActiveOperator(tool, "translate");
+                UnifiedToolRegistry::instance().setActiveTool(tool);
+            }
+            return true;
+        }
         [[nodiscard]] op::SceneGraphCaptureOptions sceneGraphCaptureOptions(
             const bool include_selected_nodes = true,
             const bool include_scene_context = false) {
@@ -5653,6 +5692,8 @@ namespace lfs::vis {
                 ? target->parent_id
                 : node_id;
 
+        if (handlePointCloudRoleShape(*this, parent_id, core::NodeType::CROPBOX))
+            return;
         auto cropbox_id = cap::ensureCropBox(*this, services().renderingOrNull(), parent_id);
         if (!cropbox_id) {
             const auto* parent = scene_.getNodeById(parent_id);
@@ -5694,11 +5735,8 @@ namespace lfs::vis {
                 ? target->parent_id
                 : node_id;
 
-        const auto* parent_node = scene_.getNodeById(parent_id);
-        if (parent_node && parent_node->type == core::NodeType::POINTCLOUD &&
-            UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi")
+        if (handlePointCloudRoleShape(*this, parent_id, core::NodeType::ELLIPSOID))
             return;
-
         auto ellipsoid_id = cap::ensureEllipsoid(*this, services().renderingOrNull(), parent_id);
         if (!ellipsoid_id) {
             const auto* parent = scene_.getNodeById(parent_id);

@@ -4671,6 +4671,10 @@ namespace lfs::python {
                     auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
                     if (!node || !node->crop_polygon)
                         return false;
+                    const auto* editor = vis::services().editorOrNull();
+                    if (manager->getScene().isNodeEffectivelyLocked(node->id) ||
+                        (editor && editor->isToolsDisabled()) || vis::op::operators().hasModalOperator())
+                        return false;
                     std::vector<glm::vec2> vertices;
                     vertices.reserve(points.size());
                     for (const auto& p : points)

@@ -46,6 +46,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/editor/python_editor.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
@@ -2540,6 +2541,9 @@ namespace lfs::app {
             const auto* node = scene.getNodeById(id);
             if (!node)
                 return lfs::Status::failure(crop_role_error(lfs::ErrorCode::NotFound, "Crop volume not found"));
+            const auto* editor = vis::services().editorOrNull();
+            if (scene.isNodeEffectivelyLocked(id) || (editor && editor->isToolsDisabled()) || vis::op::operators().hasModalOperator())
+                return lfs::Status::failure(crop_role_error(lfs::ErrorCode::PermissionDenied, "Crop volume editing is unavailable"));
             if (!args.contains("shape") && !args.contains("min") && !args.contains("max") &&
                 !args.contains("radii") && !args.contains("translation") && !args.contains("rotation") &&
                 !args.contains("scale") && !args.contains("vertices") && !args.contains("half_depth") &&
@@ -2578,6 +2582,13 @@ namespace lfs::app {
                     return lfs::Status::failure(converted.error());
             }
             if (target == core::NodeType::CROPBOX) {
+                const auto* box = scene.getCropBoxData(id);
+                if (!box)
+                    return lfs::Status::failure(crop_role_error(lfs::ErrorCode::Internal, "Crop box not found after conversion"));
+                const auto proposed_min = minimum->value_or(box->min);
+                const auto proposed_max = maximum->value_or(box->max);
+                if (glm::any(glm::lessThanEqual(proposed_max, proposed_min)))
+                    return lfs::Status::failure(crop_role_error(lfs::ErrorCode::InvalidArgument, "Each crop box minimum must be smaller than its maximum"));
                 vis::cap::CropBoxUpdate update;
                 update.min_bounds = *minimum;
                 update.max_bounds = *maximum;
